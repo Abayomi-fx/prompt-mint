@@ -1,11 +1,30 @@
 import { createHmac, randomUUID } from "crypto";
 import WebhookSubscription from "../models/WebhookSubscription";
+import { WEBHOOK_SCHEMA_VERSION } from "../../../src/lib/api/payloadVersion";
 
 const MAX_RETRIES = 3;
 const RETRY_DELAYS_MS = [2_000, 10_000, 30_000];
 const MAX_FAILURES_BEFORE_DISABLE = 10;
 
+/**
+ * Shape of every outbound webhook POST body.
+ *
+ * `schemaVersion` is a stable date-string (matching WEBHOOK_SCHEMA_VERSION)
+ * that receiver implementations can use to branch on payload shape without
+ * relying on field-presence checks.  It is separate from the REST API version
+ * because webhook deliveries are push-based and not subject to Accept-Version
+ * negotiation — receivers must handle the version they subscribed under.
+ *
+ * Current version: 2025-01-01
+ *   - event        — event type name (e.g. "PromptPurchased")
+ *   - deliveryId   — UUID, unique per delivery attempt
+ *   - timestamp    — ISO-8601 string, UTC
+ *   - schemaVersion — WEBHOOK_SCHEMA_VERSION constant
+ *   - data         — event-specific payload (see docs/payload-versioning.md)
+ */
 export interface WebhookPayload {
+  /** Stable date-string identifying the webhook payload schema. */
+  schemaVersion: typeof WEBHOOK_SCHEMA_VERSION;
   event: string;
   deliveryId: string;
   timestamp: string;
@@ -27,6 +46,7 @@ async function deliverOnce(url: string, secret: string, payload: WebhookPayload)
       "X-PromptHash-Signature": signature,
       "X-PromptHash-Delivery": payload.deliveryId,
       "X-PromptHash-Event": payload.event,
+      "X-PromptHash-Schema-Version": payload.schemaVersion,
     },
     body,
     signal: AbortSignal.timeout(10_000),
@@ -81,6 +101,7 @@ export async function dispatchEvent(
   });
 
   const payload: WebhookPayload = {
+    schemaVersion: WEBHOOK_SCHEMA_VERSION,
     event,
     deliveryId: randomUUID(),
     timestamp: new Date().toISOString(),
