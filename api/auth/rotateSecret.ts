@@ -8,6 +8,7 @@
 
 import { randomBytes } from "crypto";
 import { isPlaceholder } from "../../src/lib/validation/envValidator";
+import { isValidAdminToken } from "../../src/lib/auth/adminToken";
 
 interface SecretRotationConfig {
   currentSecret: string;
@@ -147,10 +148,7 @@ export default async function handler(req: any, res: any) {
   }
 
   // Authentication check - only allow authorized operators
-  const authHeader = req.headers.authorization;
-  const adminToken = process.env.ADMIN_ROTATION_TOKEN;
-  
-  if (!adminToken || authHeader !== `Bearer ${adminToken}`) {
+  if (!isValidAdminToken(req.headers.authorization, process.env.ADMIN_ROTATION_TOKEN)) {
     res.status(401).json({ error: "Unauthorized" });
     return;
   }

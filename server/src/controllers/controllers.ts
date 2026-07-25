@@ -10,6 +10,7 @@ import {
 } from "../services/listingValidation";
 import { cacheGet, cacheSet, cacheDel, cacheDelPattern, CACHE_KEYS } from "../services/cacheService";
 import { getCircuitBreaker, CircuitBreakerOpenError } from "../services/circuitBreaker";
+import { isValidAdminToken } from "../services/adminAuth";
 
 const API_BASE_URL = "https://secret-ai-gateway.onrender.com";
 
@@ -398,11 +399,9 @@ export const GetPromptReports = async (
   try {
     await connectDb();
 
-    // Check admin authentication (placeholder)
-    const adminToken = req.headers.authorization?.split(" ")[1];
-    if (!adminToken) {
+    if (!isValidAdminToken(req.headers.authorization, process.env.ADMIN_API_TOKEN)) {
       return res.status(401).json({
-        error: "Unauthorized: Admin token required",
+        error: "Unauthorized: a valid admin token is required",
       });
     }
 

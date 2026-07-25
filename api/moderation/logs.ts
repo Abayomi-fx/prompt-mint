@@ -1,4 +1,4 @@
-import { getModerationLogs, isAuthorizedModerator } from "./data";
+import { getModerationLogs, verifyModeratorAuth } from "./data";
 export type { ModerationLogEntry } from "./data";
 
 export default async function handler(req: any, res: any) {
@@ -8,16 +8,19 @@ export default async function handler(req: any, res: any) {
   }
 
   const moderatorAddress = (req.query.moderatorAddress as string) ?? "";
+  const moderatorTimestamp = req.query.moderatorTimestamp
+    ? parseInt(req.query.moderatorTimestamp as string, 10)
+    : undefined;
+  const moderatorSignature = (req.query.moderatorSignature as string) ?? undefined;
 
-  if (!moderatorAddress) {
-    res.status(401).json({ error: "Moderator address is required" });
-    return;
-  }
-
-  if (!isAuthorizedModerator(moderatorAddress)) {
-    res.status(403).json({
-      error: "Unauthorized: Only authorized moderators can view audit logs",
-    });
+  const auth = verifyModeratorAuth({
+    address: moderatorAddress,
+    timestamp: moderatorTimestamp,
+    signature: moderatorSignature,
+    purpose: "moderation-logs",
+  });
+  if (!auth.ok) {
+    res.status(auth.status).json({ error: auth.error });
     return;
   }
 
