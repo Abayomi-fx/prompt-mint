@@ -3001,3 +3001,313 @@ fn test_classification_with_all_valid_categories() {
         );
     }
 }
+
+// ─── Encryption Rotation Tests ────────────────────────────────────────────────
+
+fn create_rotation_test_prompt(
+    env: &Env,
+    client: &PromptHashContractClient,
+    creator: &Address,
+    asset: &Address,
+) -> u128 {
+    create_prompt(env, client, creator, "Rotation Test Prompt", 10_000, asset)
+}
+
+fn generate_test_payload(env: &Env, version: u8) -> (String, String, String, BytesN<32>) {
+    (
+        String::from_str(env, &format!("encrypted-v{version}")),
+        String::from_str(env, &format!("iv-v{version}")),
+        String::from_str(env, &format!("wrapped-key-v{version}")),
+        hash(env, version),
+    )
+}
+
+#[test]
+fn test_rotate_encryption_creates_new_version_and_archives_old() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    // Initial prompt should be at version 1
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(prompt.encryption_version, 1);
+
+    let (new_enc, new_iv, new_key, new_hash) = generate_test_payload(&env, 2);
+
+    let new_version = client.rotate_encryption(
+        &creator,
+        &prompt_id,
+        &new_enc,
+        &new_iv,
+        &new_key,
+        &new_hash,
+    );
+    assert_eq!(new_version, 2);
+
+    // Prompt now has v2 payload
+    let updated = client.get_prompt(&prompt_id);
+    assert_eq!(updated.encryption_version, 2);
+    assert_eq!(updated.encrypted_prompt, String::from_str(&env, "encrypted-v2"));
+    assert_eq!(updated.encryption_iv, String::from_str(&env, "iv-v2"));
+    assert_eq!(updated.wrapped_key, String::from_str(&env, "wrapped-key-v2"));
+    assert_eq!(updated.content_hash, hash(&env, 2));
+
+    // Archived v1 payload is retrievable
+    let archived = client.get_prompt_encryption_version(&prompt_id, &1);
+    assert_eq!(archived.version, 1);
+    assert_eq!(archived.encrypted_prompt, String::from_str(&env, "ciphertext"));
+    assert_eq!(archived.encryption_iv, String::from_str(&env, "iv"));
+    assert_eq!(archived.wrapped_key, String::from_str(&env, "wrapped-key"));
+    assert_eq!(archived.content_hash, hash(&env, 7));
+    assert!(archived.created_at > 0);
+}
+
+#[test]
+fn test_rotate_encryption_preserves_prior_versions_on_failure_scenario() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    // Rotate to v2
+    let (v2_enc, v2_iv, v2_key, v2_hash) = generate_test_payload(&env, 2);
+    client.rotate_encryption(&creator, &prompt_id, &v2_enc, &v2_iv, &v2_key, &v2_hash);
+
+    // Rotate to v3
+    let (v3_enc, v3_iv, v3_key, v3_hash) = generate_test_payload(&env, 3);
+    client.rotate_encryption(&creator, &prompt_id, &v3_enc, &v3_iv, &v3_key, &v3_hash);
+
+    // v1 archived and accessible
+    let v1 = client.get_prompt_encryption_version(&prompt_id, &1);
+    assert_eq!(v1.version, 1);
+
+    // v2 archived and accessible
+    let v2 = client.get_prompt_encryption_version(&prompt_id, &2);
+    assert_eq!(v2.version, 2);
+    assert_eq!(v2.encrypted_prompt, String::from_str(&env, "encrypted-v2"));
+
+    // v3 is the current version
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(prompt.encryption_version, 3);
+
+    // Non-existent version returns error
+    let result = client.try_get_prompt_encryption_version(&prompt_id, &99);
+    match result {
+        Err(Ok(Error::EncryptionVersionNotFound)) => {}
+        other => panic!("expected EncryptionVersionNotFound, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_existing_buyer_can_unlock_after_encryption_rotation() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+
+    // Buyer purchases at v1
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
+    let purchase = client.get_purchase_details(&prompt_id, &buyer);
+    assert_eq!(purchase.encryption_version, 1);
+
+    // Creator rotates encryption to v2
+    let (v2_enc, v2_iv, v2_key, v2_hash) = generate_test_payload(&env, 2);
+    client.rotate_encryption(&creator, &prompt_id, &v2_enc, &v2_iv, &v2_key, &v2_hash);
+
+    // Buyer still has access
+    assert!(client.has_access(&buyer, &prompt_id));
+
+    // Buyer can retrieve v1 payload (their purchase version)
+    let v1 = client.get_prompt_encryption_version(&prompt_id, &1);
+    assert_eq!(v1.encrypted_prompt, String::from_str(&env, "ciphertext"));
+
+    // New buyer at v2 gets v2 payload
+    let buyer2 = Address::generate(&env);
+    fund_buyer(&xlm_client, &buyer2, &context.contract, 100_000);
+    client.buy_prompt(&buyer2, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
+    let purchase2 = client.get_purchase_details(&prompt_id, &buyer2);
+    assert_eq!(purchase2.encryption_version, 2);
+}
+
+#[test]
+fn test_concurrent_buyers_at_different_encryption_versions() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer_v1 = Address::generate(&env);
+    let buyer_v2 = Address::generate(&env);
+    let buyer_v3 = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer_v1, &context.contract, 100_000);
+    fund_buyer(&xlm_client, &buyer_v2, &context.contract, 100_000);
+    fund_buyer(&xlm_client, &buyer_v3, &context.contract, 100_000);
+
+    // Buyer 1 purchases at v1
+    client.buy_prompt(&buyer_v1, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
+    assert_eq!(
+        client.get_purchase_details(&prompt_id, &buyer_v1).encryption_version,
+        1
+    );
+
+    // Rotate to v2
+    let (v2_enc, v2_iv, v2_key, v2_hash) = generate_test_payload(&env, 2);
+    client.rotate_encryption(&creator, &prompt_id, &v2_enc, &v2_iv, &v2_key, &v2_hash);
+
+    // Buyer 2 purchases at v2
+    client.buy_prompt(&buyer_v2, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
+    assert_eq!(
+        client.get_purchase_details(&prompt_id, &buyer_v2).encryption_version,
+        2
+    );
+
+    // Rotate to v3
+    let (v3_enc, v3_iv, v3_key, v3_hash) = generate_test_payload(&env, 3);
+    client.rotate_encryption(&creator, &prompt_id, &v3_enc, &v3_iv, &v3_key, &v3_hash);
+
+    // Buyer 3 purchases at v3
+    client.buy_prompt(&buyer_v3, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
+    assert_eq!(
+        client.get_purchase_details(&prompt_id, &buyer_v3).encryption_version,
+        3
+    );
+
+    // All buyers have access
+    assert!(client.has_access(&buyer_v1, &prompt_id));
+    assert!(client.has_access(&buyer_v2, &prompt_id));
+    assert!(client.has_access(&buyer_v3, &prompt_id));
+
+    // Each buyer can retrieve their version's payload
+    let v1 = client.get_prompt_encryption_version(&prompt_id, &1);
+    assert_eq!(v1.encrypted_prompt, String::from_str(&env, "ciphertext"));
+    let v2 = client.get_prompt_encryption_version(&prompt_id, &2);
+    assert_eq!(v2.encrypted_prompt, String::from_str(&env, "encrypted-v2"));
+    // v3 is current: accessible both via get_prompt and get_prompt_encryption_version
+    let v3 = client.get_prompt_encryption_version(&prompt_id, &3);
+    assert_eq!(v3.encrypted_prompt, String::from_str(&env, "encrypted-v3"));
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(prompt.encrypted_prompt, String::from_str(&env, "encrypted-v3"));
+}
+
+#[test]
+fn test_rotate_encryption_rejects_unauthorized_callers() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    let (enc, iv, key, hash_val) = generate_test_payload(&env, 2);
+
+    // Non-creator cannot rotate
+    let result = client.try_rotate_encryption(
+        &attacker,
+        &prompt_id,
+        &enc,
+        &iv,
+        &key,
+        &hash_val,
+    );
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized, got {:?}", other),
+    }
+
+    // Creator can still rotate
+    let version = client.rotate_encryption(&creator, &prompt_id, &enc, &iv, &key, &hash_val);
+    assert_eq!(version, 2);
+
+    // Prompt is paused -> rotation blocked
+    client.set_pause_status(&context.admin, &true);
+    let (enc3, iv3, key3, hash3) = generate_test_payload(&env, 3);
+    let result = client.try_rotate_encryption(
+        &creator,
+        &prompt_id,
+        &enc3,
+        &iv3,
+        &key3,
+        &hash3,
+    );
+    match result {
+        Err(Ok(Error::ContractIsPaused)) => {}
+        other => panic!("expected ContractIsPaused, got {:?}", other),
+    }
+    client.set_pause_status(&context.admin, &false);
+}
+
+#[test]
+fn test_rotate_encryption_validates_field_lengths() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    let valid_hash = hash(&env, 9);
+
+    // Empty encrypted prompt
+    let result = client.try_rotate_encryption(
+        &creator,
+        &prompt_id,
+        &String::from_str(&env, ""),
+        &String::from_str(&env, "valid-iv"),
+        &String::from_str(&env, "valid-key"),
+        &valid_hash,
+    );
+    match result {
+        Err(Ok(Error::InvalidEncryptedPromptLength)) => {}
+        other => panic!("expected InvalidEncryptedPromptLength, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_license_transfer_preserves_encryption_version() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    fund_buyer(&xlm_client, &seller, &context.contract, 100_000);
+
+    // Seller purchases at v1
+    client.buy_prompt(&seller, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
+    assert_eq!(
+        client.get_purchase_details(&prompt_id, &seller).encryption_version,
+        1
+    );
+
+    // Rotate to v2
+    let (v2_enc, v2_iv, v2_key, v2_hash) = generate_test_payload(&env, 2);
+    client.rotate_encryption(&creator, &prompt_id, &v2_enc, &v2_iv, &v2_key, &v2_hash);
+
+    // Transfer license to buyer
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.transfer_license(&seller, &prompt_id, &buyer, &15_000);
+
+    // New owner retains v1 encryption version (their license is at v1)
+    let transferred = client.get_purchase_details(&prompt_id, &buyer);
+    assert_eq!(transferred.encryption_version, 1);
+    assert!(client.has_access(&buyer, &prompt_id));
+}

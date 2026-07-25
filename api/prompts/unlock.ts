@@ -11,6 +11,8 @@ import {
 } from "../../src/lib/crypto/promptCrypto";
 import {
   getPrompt,
+  getPromptEncryptionVersion,
+  getPurchaseDetails,
   hasAccess,
   type PromptHashConfig,
 } from "../../src/lib/stellar/promptHashClient";
@@ -252,18 +254,60 @@ async function handler(req: any, res: any) {
     }
 
     const prompt = await getPrompt(config, id);
+
+    // Determine the correct encryption version for this buyer.
+    // If the caller is the creator they always get the current version;
+    // otherwise we resolve the version that was locked in at purchase time.
+    const currentVersion = prompt.encryptionVersion ?? 1;
+    let targetVersion = currentVersion;
+    if (prompt.creator?.toLowerCase() !== String(address).toLowerCase()) {
+      const purchase = await getPurchaseDetails(config, id, String(address));
+      // If no purchase record exists (legacy buyer), fall back to current version.
+      targetVersion = purchase?.encryptionVersion ?? currentVersion;
+    }
+
+    // Fetch the encrypted payload for the resolved version.
+    let encryptedPayload: {
+      encryptedPrompt: string;
+      encryptionIv: string;
+      wrappedKey: string;
+      contentHash: string;
+    };
+    if (targetVersion === currentVersion) {
+      // Current version – use the prompt's live fields.
+      encryptedPayload = {
+        encryptedPrompt: prompt.encryptedPrompt!,
+        encryptionIv: prompt.encryptionIv!,
+        wrappedKey: prompt.wrappedKey!,
+        contentHash: prompt.contentHash,
+      };
+    } else {
+      // Archived version – fetch from versioned storage.
+      const archived = await getPromptEncryptionVersion(
+        config,
+        id,
+        targetVersion,
+      );
+      encryptedPayload = {
+        encryptedPrompt: archived.encryptedPrompt,
+        encryptionIv: archived.encryptionIv,
+        wrappedKey: archived.wrappedKey,
+        contentHash: archived.contentHash,
+      };
+    }
+
     const keyBytes = await unwrapPromptKey(
-      prompt.wrappedKey,
+      encryptedPayload.wrappedKey,
       unlockPublicKey,
       unlockPrivateKey,
     );
     const plaintext = await decryptPromptCiphertext(
-      prompt.encryptedPrompt,
-      prompt.encryptionIv,
+      encryptedPayload.encryptedPrompt,
+      encryptedPayload.encryptionIv,
       keyBytes,
     );
     const contentHash = await hashPromptPlaintext(plaintext);
-    const storedHash = normalizeContentHash(prompt.contentHash);
+    const storedHash = normalizeContentHash(encryptedPayload.contentHash);
     if (contentHash !== storedHash) {
       req.logger.error({ address, promptId }, "Prompt integrity check failed");
       metrics.trackUnlockFailure(String(address), String(promptId), "integrity_failure");

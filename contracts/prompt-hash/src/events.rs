@@ -346,6 +346,17 @@ struct ClassificationOverridden {
     pub reason: String,
 }
 
+// ─── Encryption Rotation Events ──────────────────────────────────────────
+
+#[contractevent]
+struct EncryptionRotated {
+    #[topic]
+    pub prompt_id: u128,
+    pub previous_version: u32,
+    pub new_version: u32,
+    pub rotated_at: u64,
+}
+
 // ─── Promotional Pricing Events ──────────────────────────────────────────
 
 #[contractevent]
@@ -431,6 +442,24 @@ impl Events {
             buyer,
             effective_price,
             original_price,
+        }
+        .publish(env);
+    }
+
+    // ─── Encryption Rotation ──────────────────────────────────────────────
+
+    pub fn emit_encryption_rotated(
+        env: &Env,
+        prompt_id: u128,
+        previous_version: u32,
+        new_version: u32,
+        rotated_at: u64,
+    ) {
+        EncryptionRotated {
+            prompt_id,
+            previous_version,
+            new_version,
+            rotated_at,
         }
         .publish(env);
     }
