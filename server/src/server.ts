@@ -1,5 +1,7 @@
 import "dotenv/config";
 import express from "express";
+import type { NextFunction, Request, Response } from "express";
+import cors from "cors";
 import { TestPromptProxy } from "./controllers/controllers";
 import { proxyrouter } from "./routes/proxyRoutes";
 import { promptRouter } from "./routes/promptRoutes";
@@ -14,17 +16,34 @@ import { runRestoreDrill } from "./services/restoreService";
 import { IndexerState } from "./models/IndexerState";
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
+import { buildCorsOptions } from "./config/cors";
 // import { startIndexer } from "./services/indexerService"; // TODO: Update path when ready
 
 const app = express();
 
 const port = 5000;
 
+// Apply CORS before all routes
+app.use(cors(buildCorsOptions()));
+
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
 // Body-parser throws a 413 "entity.too.large" error before any route runs;
 // surface it as a clean JSON response instead of an HTML stack trace.
 app.use(jsonBodyTooLargeHandler);
+
+// Handle CORS errors explicitly
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  if (err.message.startsWith("CORS:")) {
+    res.status(403).json({
+      error: "Forbidden",
+      message: "Origin not allowed",
+      // Do NOT echo the blocked origin to avoid info leak
+    });
+    return;
+  }
+  next(err);
+});
 
 app.use("/api/improve-proxy", proxyrouter);
 
