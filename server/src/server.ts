@@ -9,12 +9,15 @@ import { webhookRouter } from "./routes/webhookRoutes";
 import { versioningRouter } from "./routes/versioningRoutes";
 import { governanceRouter } from "./routes/governanceRoutes"; // Issue #113
 import { appealRouter } from "./routes/appealRoutes";
+import { robotsRouter } from "./routes/robotsRoutes";
+import { licenseTermsRouter } from "./routes/licenseTermsRoutes";
 import { runBackup, getBackupHealth } from "./services/backupService";
 import { runRestoreDrill } from "./services/restoreService";
 import { IndexerState } from "./models/IndexerState";
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
 import { securityHeaders } from "./middleware/securityHeaders";
+import { errorHandler } from "./middleware/errorHandler";
 // import { startIndexer } from "./services/indexerService"; // TODO: Update path when ready
 
 const app = express();
@@ -41,6 +44,8 @@ app.use("/api/webhooks", webhookRouter);
 app.use("/api/versions", versioningRouter);
 app.use("/api/governance", governanceRouter); // Issue #113
 app.use("/api/appeals", appealRouter);
+app.use(robotsRouter);
+app.use("/api/license-terms", licenseTermsRouter);
 
 app.post("/api/test-prompt", TestPromptProxy);
 
@@ -58,6 +63,8 @@ app.get("/health", async (req, res) => {
     backup: backupHealth,
   });
 });
+
+app.use(errorHandler);
 
 app.listen(port, () => {
   console.log(`Listening on port ${port}`);

@@ -4,12 +4,31 @@ import { hashPromptPlaintext } from "@/lib/crypto/promptCrypto";
 // eslint-disable-next-line no-unused-vars
 type SignMessageFn = (_message: string) => Promise<{ signedMessage?: string } | string>;
 
+/**
+ * Cryptographic provenance metadata returned by the unlock API and
+ * re-verified client-side.
+ *
+ * status values:
+ *   "verified"   — SHA-256 of decrypted plaintext matches the on-chain stored hash.
+ *   "failed"     — Hash mismatch; content is withheld and a diagnostic event is emitted.
+ *   "unavailable"— The listing was created before content hashes were stored on-chain.
+ */
+export interface IntegrityMetadata {
+  status: "verified" | "failed" | "unavailable";
+  /** SHA-256 hex digest recomputed from the decrypted plaintext. */
+  computedHash: string;
+  /** Hex digest committed by the creator at listing time, or null if absent. */
+  storedHash: string | null;
+}
+
 export interface UnlockResult {
   promptId: string;
   title: string;
   contentHash: string;
   plaintext: string;
   decryptedContent: string;
+  /** Provenance metadata for buyer-facing verification UI. */
+  integrity: IntegrityMetadata;
 }
 
 async function parseApiError(response: Response): Promise<string> {
@@ -82,6 +101,7 @@ async function requestUnlock(params: {
     title: string;
     contentHash: string;
     plaintext: string;
+    integrity?: IntegrityMetadata;
   }>;
 }
 
@@ -115,14 +135,42 @@ export async function unlockPromptContent(
     signedMessage,
   });
 
+  // If the server explicitly reports an integrity failure, surface a safe error.
+  // Content is withheld server-side; no plaintext is present to display.
+  if (unlocked?.integrity?.status === "failed") {
+    throw new Error(ERROR_MESSAGES.INTEGRITY_FAILURE);
+  }
+
+  // When the server marks the stored hash unavailable, skip client-side re-verification
+  // and propagate the unavailable status so the UI can render the correct badge state.
+  if (unlocked?.integrity?.status === "unavailable") {
+    return {
+      ...unlocked,
+      decryptedContent: unlocked.plaintext,
+      integrity: unlocked.integrity,
+    };
+  }
+
+  // Client-side re-verification: recompute SHA-256 from the decrypted plaintext and
+  // compare against the hash the server returned. This is an independent second check
+  // that catches any transport or serialization corruption after the server's own check.
   const recomputedHash = await hashPromptPlaintext(unlocked.plaintext);
   if (unlocked.contentHash && recomputedHash !== unlocked.contentHash.toLowerCase()) {
     throw new Error(ERROR_MESSAGES.INTEGRITY_FAILURE);
   }
 
+  // Build a canonical IntegrityMetadata object. If the server already sent one (verified
+  // path), prefer it; otherwise construct one from the client-side check.
+  const integrity: IntegrityMetadata = unlocked.integrity ?? {
+    status: "verified",
+    computedHash: recomputedHash,
+    storedHash: unlocked.contentHash ?? null,
+  };
+
   return {
     ...unlocked,
     decryptedContent: unlocked.plaintext,
+    integrity,
   };
 }
 
