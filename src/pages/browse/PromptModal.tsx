@@ -48,6 +48,7 @@ import {
   buildCreatorSharePath,
   buildPromptShareUrl,
 } from "@/lib/marketplace/shareUrls";
+import { translateError } from "../../lib/i18n-errors";
 
 export type BuyerStatus =
   | "IDLE"
@@ -569,7 +570,7 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                   {status === "ERROR" && purchaseError && (
                     <StatusBanner
                       status="error"
-                      message={purchaseError.message}
+                      message={translateError(purchaseError.message)}
                     />
                   )}
 
@@ -675,7 +676,7 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                   {unlockError && (
                     <StatusBanner
                       status="error"
-                      message={unlockError.message}
+                      message={translateError(unlockError.message)}
                     />
                   )}
 
