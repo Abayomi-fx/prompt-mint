@@ -1,5 +1,6 @@
 import { Appeal } from "../models/Appeal";
 import { ModerationDecision } from "../models/ModerationDecision";
+import { AppError } from "../lib/AppError";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -33,13 +34,13 @@ export interface WithdrawAppealParams {
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 
-export class AppealError extends Error {
+export class AppealError extends AppError {
   constructor(
     message: string,
     public readonly code: string,
     public readonly httpStatus: number = 400,
   ) {
-    super(message);
+    super(message, httpStatus, code);
     this.name = "AppealError";
   }
 }

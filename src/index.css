@@ -74,3 +74,35 @@
     color: hsl(var(--foreground));
   }
 }
+
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .safe-area-inset {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+@media screen and (max-width: 639px) {
+  #root > div > div:last-child {
+    padding-bottom: 4rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-marquee,
+  .animate-marquee-reverse {
+    animation: none !important;
+  }
+
+  .notification {
+    transition: none !important;
+  }
+}

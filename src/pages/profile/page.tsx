@@ -29,6 +29,7 @@ import {
 import { Footer } from "@/components/footer";
 import { Navigation } from "@/components/navigation";
 import { TipButton } from "@/components/TipButton";
+import { ShareLinkButton } from "@/components/ShareLinkButton";
 import { UnlockExplainer, type UnlockState } from "@/components/UnlockExplainer";
 import { WebhookSettings } from "@/components/WebhookSettings";
 import { NotificationPreferences } from "@/components/NotificationPreferences";
@@ -64,6 +65,11 @@ import {
 import { shortenAddress } from "@/lib/utils";
 import { stellarNetwork } from "@/lib/env";
 import { connectWallet } from "@/util/wallet";
+import {
+  buildCreatorShareUrl,
+  buildPromptSharePath,
+  parseCreatorAddressParam,
+} from "@/lib/marketplace/shareUrls";
 
 const promptImageFallback = "/images/codeguru.png";
 
@@ -719,10 +725,60 @@ function SavedPromptCard({
   );
 }
 
+function PublicCreatorListingCard({ prompt }: { prompt: PromptRecord }) {
+  return (
+    <article className="overflow-hidden rounded-xl border border-white/10 bg-[#0f1419] transition-colors hover:border-white/[0.18]">
+      <div className="grid md:grid-cols-[10rem_1fr]">
+        <img
+          src={prompt.imageUrl || promptImageFallback}
+          alt={prompt.title}
+          className="h-48 w-full object-cover md:h-full"
+        />
+        <div className="min-w-0 p-5 md:p-6">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge className="border-emerald-300/30 bg-emerald-300/10 text-emerald-100">
+              <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+              Active listing
+            </Badge>
+            <Badge className="border-white/10 bg-white/[0.04] text-slate-300">
+              {prompt.category}
+            </Badge>
+          </div>
+          <h3 className="mt-4 text-xl font-semibold text-white">{prompt.title}</h3>
+          <p className="mt-2 line-clamp-2 text-sm leading-7 text-slate-400">
+            {prompt.previewText}
+          </p>
+          <div className="mt-5 flex flex-wrap items-center gap-3">
+            <p className="text-lg font-semibold text-white">
+              {formatPriceLabel(prompt.priceStroops)} XLM
+            </p>
+            <Button
+              asChild
+              className="h-10 bg-cyan-200 px-5 text-slate-950 hover:bg-cyan-100"
+            >
+              <Link to={buildPromptSharePath(prompt.id)}>
+                <ShoppingBag className="h-4 w-4" />
+                View listing
+              </Link>
+            </Button>
+          </div>
+        </div>
+      </div>
+    </article>
+  );
+}
+
 export default function ProfilePage() {
   const queryClient = useQueryClient();
   const [searchParams] = useSearchParams();
-  const viewAddress = searchParams.get("address");
+  const rawViewAddress = searchParams.get("address");
+  const parsedViewAddress = parseCreatorAddressParam(rawViewAddress);
+  const viewAddress = parsedViewAddress.ok ? parsedViewAddress.address : null;
+  const invalidViewAddress =
+    rawViewAddress != null && rawViewAddress.trim() !== "" && !parsedViewAddress.ok
+      ? parsedViewAddress.error
+      : null;
+
   const { address, network, signMessage, signTransaction } = useWallet();
   const { xlm, isLoading: isBalanceLoading } = useWalletBalance();
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -733,29 +789,34 @@ export default function ProfilePage() {
   const [unlockStates, setUnlockStates] = useState<Record<string, UnlockState>>({});
 
   const isPublicView = Boolean(viewAddress) && viewAddress !== address;
-  const profileAddress = viewAddress ?? address;
+  const profileAddress = viewAddress ?? address ?? null;
+  const creatorShareUrl =
+    profileAddress != null ? buildCreatorShareUrl(profileAddress) : null;
 
   const createdQuery = useQuery({
-    queryKey: ["created-prompts", address],
+    queryKey: ["created-prompts", profileAddress],
     queryFn: async () =>
-      address ? getPromptsByCreator(browserStellarConfig, address) : [],
-    enabled: Boolean(address),
+      profileAddress
+        ? getPromptsByCreator(browserStellarConfig, profileAddress)
+        : [],
+    enabled: Boolean(profileAddress),
   });
 
   const purchasedQuery = useQuery({
     queryKey: ["purchased-prompts", address],
     queryFn: async () =>
       address ? getPromptsByBuyer(browserStellarConfig, address) : [],
-    enabled: Boolean(address),
+    enabled: Boolean(address) && !isPublicView,
   });
 
   const savedQuery = useQuery({
     queryKey: ["saved-prompts", address],
     queryFn: async () => (address ? fetchSavedPrompts(address) : []),
-    enabled: Boolean(address),
+    enabled: Boolean(address) && !isPublicView,
   });
 
   const createdPrompts = createdQuery.data ?? [];
+  const publicListings = createdPrompts.filter((prompt) => prompt.active);
   const purchasedPrompts = purchasedQuery.data ?? [];
   const savedPrompts = savedQuery.data ?? [];
   const activeListingCount = createdPrompts.filter((p) => p.active).length;
@@ -889,6 +950,28 @@ export default function ProfilePage() {
     }
   };
 
+  if (invalidViewAddress) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white">
+        <Navigation />
+        <main className="mx-auto flex max-w-2xl flex-col items-center px-4 py-20 text-center">
+          <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-500/10 text-rose-300">
+            <CircleOff className="h-7 w-7" />
+          </div>
+          <h1 className="text-2xl font-semibold">Invalid creator link</h1>
+          <p className="mt-3 text-sm text-slate-400">{invalidViewAddress}</p>
+          <Button asChild className="mt-8 bg-cyan-200 text-slate-950 hover:bg-cyan-100">
+            <Link to="/browse">
+              <ShoppingBag className="h-4 w-4" />
+              Browse marketplace
+            </Link>
+          </Button>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[radial-gradient(ellipse_60%_40%_at_0%_0%,rgba(34,211,238,0.1),transparent),radial-gradient(ellipse_50%_30%_at_100%_5%,rgba(251,191,36,0.07),transparent),linear-gradient(180deg,#080b0f_0%,#0d1117_50%,#080b0f_100%)] text-white">
       <Navigation />
@@ -907,6 +990,14 @@ export default function ProfilePage() {
                 ? "View this creator's public prompt listings and send a tip to support their work."
                 : "Manage listings you created and reopen prompts you purchased. This page reads directly from the Stellar contract and uses the unlock API only when you request the decrypted plaintext."}
             </p>
+            {creatorShareUrl && (isPublicView || address) && (
+              <ShareLinkButton
+                url={creatorShareUrl}
+                label="Copy profile link"
+                shareTitle="Prompt Mint creator"
+                shareText={`Browse this creator on Prompt Mint: ${shortenAddress(profileAddress!)}`}
+              />
+            )}
           </div>
 
           {address && !isPublicView && (
@@ -952,7 +1043,47 @@ export default function ProfilePage() {
         </section>
 
         <div>
-          {!address ? (
+          {isPublicView && profileAddress ? (
+            <section className="space-y-6">
+              <div className="rounded-2xl border border-white/10 bg-[#0d1117] p-6">
+                <p className="text-xs uppercase tracking-[0.2em] text-slate-500">
+                  Creator address
+                </p>
+                <p className="mt-2 font-mono text-sm text-slate-200 break-all">
+                  {profileAddress}
+                </p>
+                <p className="mt-3 text-sm text-slate-400">
+                  {activeListingCount} active listing
+                  {activeListingCount === 1 ? "" : "s"}
+                </p>
+              </div>
+
+              {createdQuery.isLoading ? (
+                <LoadingState label="Loading creator listings..." />
+              ) : publicListings.length === 0 ? (
+                <EmptyState
+                  icon={Boxes}
+                  title="No public listings"
+                  body="This creator does not currently have any active marketplace listings."
+                  action={{
+                    label: "Browse marketplace",
+                    to: "/browse",
+                    icon: ShoppingBag,
+                  }}
+                  accent="cyan"
+                />
+              ) : (
+                <div className="space-y-4">
+                  {publicListings.map((prompt) => (
+                    <PublicCreatorListingCard
+                      key={prompt.id.toString()}
+                      prompt={prompt}
+                    />
+                  ))}
+                </div>
+              )}
+            </section>
+          ) : !address ? (
             <DisconnectedProfile />
           ) : (
             <>
