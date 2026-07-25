@@ -43,6 +43,7 @@ import { useAddToCart } from "@/hooks/useAddToCart";
 import { GiftPrompt } from "../../components/GiftPrompt";
 import { trackEventWithWallet } from "../../lib/analytics/track";
 import { useTrackPromptView } from "@/hooks/useRecentlyViewed";
+import { SEOHead } from "../../components/seo/SEOHead";
 import {
   buildCreatorSharePath,
   buildPromptShareUrl,
@@ -477,7 +478,9 @@ export const PromptModal: React.FC<PromptModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-md sm:p-4">
+    <>
+      <SEOHead promptId={itemId} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-md sm:p-4">
       <div
         ref={modalRef}
         className="relative max-h-[94vh] w-full max-w-lg overflow-y-auto rounded-[28px] border border-white/10 bg-slate-900 shadow-2xl sm:rounded-[32px]"
@@ -867,5 +870,6 @@ export const PromptModal: React.FC<PromptModalProps> = ({
         </div>
       )}
     </div>
+    </>
   );
 };

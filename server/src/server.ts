@@ -9,6 +9,7 @@ import { webhookRouter } from "./routes/webhookRoutes";
 import { versioningRouter } from "./routes/versioningRoutes";
 import { governanceRouter } from "./routes/governanceRoutes"; // Issue #113
 import { appealRouter } from "./routes/appealRoutes";
+import { robotsRouter } from "./routes/robotsRoutes";
 import { licenseTermsRouter } from "./routes/licenseTermsRoutes";
 import { runBackup, getBackupHealth } from "./services/backupService";
 import { runRestoreDrill } from "./services/restoreService";
@@ -39,6 +40,7 @@ app.use("/api/webhooks", webhookRouter);
 app.use("/api/versions", versioningRouter);
 app.use("/api/governance", governanceRouter); // Issue #113
 app.use("/api/appeals", appealRouter);
+app.use(robotsRouter);
 app.use("/api/license-terms", licenseTermsRouter);
 
 app.post("/api/test-prompt", TestPromptProxy);
