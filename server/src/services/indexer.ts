@@ -6,7 +6,7 @@ import { IndexerState } from "../models/IndexerState";
 import { scanForSimilarity } from "./similarityDetection";
 
 const CONTRACT_ID = process.env.PUBLIC_PROMPT_HASH_CONTRACT_ID;
-const rpc = new Server(process.env.PUBLIC_STELLAR_RPC_URL!);
+const rpc = new Server(process.env.PUBLIC_STELLAR_RPC_URL!, { timeout: 15_000 });
 
 /**
  * Main entry point to start the background indexing process.

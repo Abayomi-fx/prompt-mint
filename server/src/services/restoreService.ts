@@ -96,6 +96,7 @@ async function alertOnFailure(message: string) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: `[PromptHash] ⚠️ Restore FAILED: ${message}`, timestamp: new Date().toISOString() }),
+      signal: AbortSignal.timeout(10_000),
     });
   } catch {
     console.error("[restore] Failed to send failure alert to webhook");

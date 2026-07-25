@@ -23,7 +23,11 @@ export interface StellarNetworkConfig {
   networkPassphrase: string;
   allowHttp?: boolean;
   simulationAccount?: string;
+  /** Per-request timeout for calls to the RPC server, in ms. Defaults to 15s. */
+  timeoutMs?: number;
 }
+
+const DEFAULT_RPC_TIMEOUT_MS = 15_000;
 
 export interface WalletTransactionSigner {
   /* eslint-disable no-unused-vars */
@@ -43,6 +47,7 @@ export interface PreparedContractCall {
 export function getRpcServer(config: StellarNetworkConfig) {
   return new Server(config.rpcUrl, {
     allowHttp: config.allowHttp ?? new URL(config.rpcUrl).hostname === "localhost",
+    timeout: config.timeoutMs ?? DEFAULT_RPC_TIMEOUT_MS,
   });
 }
 
