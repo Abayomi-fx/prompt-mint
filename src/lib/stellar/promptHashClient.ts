@@ -40,6 +40,7 @@ export interface PromptRecord {
   encryptedPrompt?: string;
   encryptionIv?: string;
   wrappedKey?: string;
+  encryptionVersion?: number;
   // #131 – content classification and safety disclosures
   classification?: string;
   safetyFlags?: string[];
@@ -47,6 +48,29 @@ export interface PromptRecord {
   activePromotion?: Promotion;
   effectivePrice?: bigint;
   isPromotional?: boolean;
+}
+
+/** Archived encryption payload for a prompt at a specific version. */
+export interface PromptEncryptedPayload {
+  promptId: bigint;
+  version: number;
+  encryptedPrompt: string;
+  encryptionIv: string;
+  wrappedKey: string;
+  contentHash: string;
+  createdAt: number;
+}
+
+export interface PurchaseDetails {
+  promptId: bigint;
+  originalCreator: string;
+  owner: string;
+  originalPrice: bigint;
+  lastTransferPrice: bigint;
+  transferCount: number;
+  lastTransferredAt: number;
+  expiresAt: number;
+  encryptionVersion: number;
 }
 
 export interface Promotion {
@@ -313,6 +337,30 @@ export class PromptHashClient {
     warnMockUse();
     return { price: 0n, asset: "", isPromotional: false };
   }
+
+  /**
+   * Gets the purchase details for a buyer on a specific prompt.
+   */
+  static async getPurchaseDetails(
+    _config: PromptHashConfig,
+    _promptId: bigint,
+    _buyer: string,
+  ): Promise<PurchaseDetails | null> {
+    warnMockUse();
+    return null;
+  }
+
+  /**
+   * Retrieves an archived encrypted payload for a specific version.
+   */
+  static async getPromptEncryptionVersion(
+    _config: PromptHashConfig,
+    _promptId: bigint,
+    _version: number,
+  ): Promise<PromptEncryptedPayload> {
+    warnMockUse();
+    throw new Error("Encryption version not found (mock)");
+  }
 }
 
 // --- Standalone exports to satisfy existing UI component imports ---
@@ -372,3 +420,13 @@ export const updatePromptPrice = async (
     promptId,
     newPrice,
   );
+export const getPurchaseDetails = async (
+  config: PromptHashConfig,
+  promptId: bigint,
+  buyer: string,
+) => PromptHashClient.getPurchaseDetails(config, promptId, buyer);
+export const getPromptEncryptionVersion = async (
+  config: PromptHashConfig,
+  promptId: bigint,
+  version: number,
+) => PromptHashClient.getPromptEncryptionVersion(config, promptId, version);

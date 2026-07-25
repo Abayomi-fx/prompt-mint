@@ -59,6 +59,10 @@ pub enum Error {
     PromotionOverlap = 44,
     PromotionNotFound = 45,
     UnauthorizedPromotion = 46,
+    // Encryption rotation
+    EncryptionVersionNotFound = 47,
+    InvalidRotation = 48,
+    VersionMismatch = 49,
 }
 
 #[contracttype]
@@ -87,6 +91,9 @@ pub enum DataKey {
     // Promotional pricing
     ActivePromotion(u128),
     PromotionHistory(u128),
+    // Encryption rotation – versioned payloads & version counter per prompt
+    PromptEncryptedPayload(u128, u32),
+    PromptEncryptionVersion(u128),
 }
 
 /// A moderator-overridden classification that takes precedence
@@ -161,6 +168,9 @@ pub struct Purchase {
     pub last_transferred_at: u64,
     pub expires_at: u64,
     pub settlement: Settlement,
+    /// Encryption version at time of purchase. The buyer is entitled to
+    /// this version's encrypted payload on unlock.
+    pub encryption_version: u32,
 }
 
 #[contracttype]
@@ -254,6 +264,23 @@ pub struct Prompt {
     pub classification: String,
     /// #131 – safety disclosure flags attested by the creator
     pub safety_flags: Vec<String>,
+    /// Encryption version counter. Starts at 1 and increments on each rotation.
+    pub encryption_version: u32,
+}
+
+/// Archived encryption payload for a prompt at a specific version.
+/// Created when `rotate_encryption` stores the previous version before
+/// updating to a new encryption key.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PromptEncryptedPayload {
+    pub prompt_id: u128,
+    pub version: u32,
+    pub encrypted_prompt: String,
+    pub encryption_iv: String,
+    pub wrapped_key: String,
+    pub content_hash: BytesN<32>,
+    pub created_at: u64,
 }
 
 pub trait PromptHashTrait {
@@ -460,4 +487,21 @@ pub trait PromptHashTrait {
     fn get_promotion_history(env: Env, prompt_id: u128) -> Result<Vec<Promotion>, Error>;
 
     fn get_effective_price(env: Env, prompt_id: u128) -> Result<(i128, Address, bool), Error>;
+
+    // Encryption rotation
+    fn rotate_encryption(
+        env: Env,
+        creator: Address,
+        prompt_id: u128,
+        encrypted_prompt: String,
+        encryption_iv: String,
+        wrapped_key: String,
+        content_hash: BytesN<32>,
+    ) -> Result<u32, Error>;
+
+    fn get_prompt_encryption_version(
+        env: Env,
+        prompt_id: u128,
+        version: u32,
+    ) -> Result<PromptEncryptedPayload, Error>;
 }

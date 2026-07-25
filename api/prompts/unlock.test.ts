@@ -11,6 +11,8 @@ import { ErrorCode } from "../../src/lib/api/errorCodes";
 
 const hasAccessMock = vi.fn();
 const getPromptMock = vi.fn();
+const getPurchaseDetailsMock = vi.fn();
+const getPromptEncryptionVersionMock = vi.fn();
 const unwrapPromptKeyMock = vi.fn();
 const decryptPromptCiphertextMock = vi.fn();
 const hashPromptPlaintextMock = vi.fn();
@@ -18,6 +20,8 @@ const hashPromptPlaintextMock = vi.fn();
 vi.mock("../../src/lib/stellar/promptHashClient", () => ({
   hasAccess: (...args: unknown[]) => hasAccessMock(...args),
   getPrompt: (...args: unknown[]) => getPromptMock(...args),
+  getPurchaseDetails: (...args: unknown[]) => getPurchaseDetailsMock(...args),
+  getPromptEncryptionVersion: (...args: unknown[]) => getPromptEncryptionVersionMock(...args),
 }));
 
 vi.mock("../../src/lib/crypto/promptCrypto", () => ({
@@ -59,6 +63,9 @@ vi.mock("../../server/src/services/webhookDispatcher", () => ({
 
 import handler from "./unlock";
 
+// Track versioned payloads for rotation tests
+const versionedPayloads = new Map<string, { encryptedPrompt: string; encryptionIv: string; wrappedKey: string; contentHash: string }>();
+
 async function setupUnlockFixture(plaintext = "Secret prompt instructions for buyers.") {
   const buyer = Keypair.random();
   const contentHash = "a".repeat(64);
@@ -90,7 +97,22 @@ async function setupUnlockFixture(plaintext = "Secret prompt instructions for bu
     encryptedPrompt: "encrypted",
     encryptionIv: "iv",
     wrappedKey: "wrapped",
+    encryptionVersion: 1,
   });
+  getPurchaseDetailsMock.mockResolvedValue({
+    promptId: 42n,
+    originalCreator: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
+    owner: buyer.publicKey(),
+    originalPrice: 100n,
+    lastTransferPrice: 0n,
+    transferCount: 0,
+    lastTransferredAt: 0,
+    expiresAt: 9999999999,
+    encryptionVersion: 1,
+  });
+  getPromptEncryptionVersionMock.mockRejectedValue(
+    new Error("Encryption version not found"),
+  );
   unwrapPromptKeyMock.mockResolvedValue(new Uint8Array(32));
   decryptPromptCiphertextMock.mockResolvedValue(plaintext);
   hashPromptPlaintextMock.mockResolvedValue(contentHash);
@@ -379,5 +401,247 @@ describe("unlock challenge message contract", () => {
     expect(buildChallengeMessage(payload)).toBe(
       "prompt-hash unlock:GBUYERACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH123456789:7:nonce-123:1700000000000",
     );
+  });
+});
+
+// ─── Encryption Rotation Integration Tests ─────────────────────────────────
+
+describe("unlock API with encryption rotation", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("returns v1 plaintext for a buyer who purchased before rotation", async () => {
+    const { buyer, promptId, challenge, signedMessage, plaintext, contentHash } =
+      await setupUnlockFixture();
+
+    // Prompt is now at v2 (rotation happened)
+    getPromptMock.mockResolvedValue({
+      id: 42n,
+      creator: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
+      title: "Test prompt",
+      contentHash: "b".repeat(64),
+      encryptedPrompt: "encrypted-v2",
+      encryptionIv: "iv-v2",
+      wrappedKey: "wrapped-v2",
+      encryptionVersion: 2,
+    });
+
+    // Buyer's purchase was recorded at v1
+    getPurchaseDetailsMock.mockResolvedValue({
+      promptId: 42n,
+      originalCreator: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
+      owner: buyer.publicKey(),
+      originalPrice: 100n,
+      lastTransferPrice: 0n,
+      transferCount: 0,
+      lastTransferredAt: 0,
+      expiresAt: 9999999999,
+      encryptionVersion: 1,
+    });
+
+    // Archived v1 payload
+    getPromptEncryptionVersionMock.mockResolvedValue({
+      promptId: 42n,
+      version: 1,
+      encryptedPrompt: "encrypted",
+      encryptionIv: "iv",
+      wrappedKey: "wrapped",
+      contentHash,
+      createdAt: 1_000_000,
+    });
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(200);
+    expect(responseData.plaintext).toBe(plaintext);
+    expect(responseData.contentHash).toBe(contentHash);
+    // Verify the archived v1 payload was used
+    expect(getPromptEncryptionVersionMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      BigInt(promptId),
+      1,
+    );
+  });
+
+  it("returns v2 plaintext for a buyer who purchased after rotation", async () => {
+    const { buyer, promptId, challenge, signedMessage } =
+      await setupUnlockFixture("New post-rotation content.");
+    const newPlaintext = "New post-rotation content.";
+    const newContentHash = "c".repeat(64);
+
+    // Prompt is at v2
+    getPromptMock.mockResolvedValue({
+      id: 42n,
+      creator: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
+      title: "Test prompt",
+      contentHash: newContentHash,
+      encryptedPrompt: "encrypted-v2",
+      encryptionIv: "iv-v2",
+      wrappedKey: "wrapped-v2",
+      encryptionVersion: 2,
+    });
+
+    decryptPromptCiphertextMock.mockResolvedValue(newPlaintext);
+    hashPromptPlaintextMock.mockResolvedValue(newContentHash);
+
+    // Buyer purchased after rotation, so their version is v2
+    getPurchaseDetailsMock.mockResolvedValue({
+      promptId: 42n,
+      originalCreator: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
+      owner: buyer.publicKey(),
+      originalPrice: 100n,
+      lastTransferPrice: 0n,
+      transferCount: 0,
+      lastTransferredAt: 0,
+      expiresAt: 9999999999,
+      encryptionVersion: 2,
+    });
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(200);
+    expect(responseData.plaintext).toBe(newPlaintext);
+    expect(responseData.contentHash).toBe(newContentHash);
+  });
+
+  it("fails with integrity mismatch when archived version hash is wrong", async () => {
+    const { buyer, promptId, challenge, signedMessage } =
+      await setupUnlockFixture();
+
+    // Prompt at v2
+    getPromptMock.mockResolvedValue({
+      id: 42n,
+      creator: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
+      title: "Test prompt",
+      contentHash: "correct-hash-v2",
+      encryptedPrompt: "encrypted-v2",
+      encryptionIv: "iv-v2",
+      wrappedKey: "wrapped-v2",
+      encryptionVersion: 2,
+    });
+
+    // Buyer at v1 with WRONG archived hash
+    getPurchaseDetailsMock.mockResolvedValue({
+      promptId: 42n,
+      originalCreator: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
+      owner: buyer.publicKey(),
+      originalPrice: 100n,
+      lastTransferPrice: 0n,
+      transferCount: 0,
+      lastTransferredAt: 0,
+      expiresAt: 9999999999,
+      encryptionVersion: 1,
+    });
+
+    getPromptEncryptionVersionMock.mockResolvedValue({
+      promptId: 42n,
+      version: 1,
+      encryptedPrompt: "encrypted",
+      encryptionIv: "iv",
+      wrappedKey: "wrapped",
+      contentHash: "corrupted-hash",      // does not match decrypted content
+      createdAt: 1_000_000,
+    });
+
+    // Decryption returns content that hashes to "a".repeat(64) (from fixture)
+    // which doesn't match "corrupted-hash"
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(500);
+    expect(responseData.code).toBe(ErrorCode.INTEGRITY_FAILURE);
+    expect(responseData.plaintext).toBeUndefined();
+  });
+
+  it("falls back to current version when no purchase record exists", async () => {
+    const { buyer, promptId, challenge, signedMessage, plaintext } =
+      await setupUnlockFixture("Legacy fallback content.");
+
+    // No purchase record (legacy buyer)
+    getPurchaseDetailsMock.mockResolvedValue(null);
+
+    // Prompt at v2 with the fallback content
+    getPromptMock.mockResolvedValue({
+      id: 42n,
+      creator: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
+      title: "Test prompt",
+      contentHash: "f".repeat(64),
+      encryptedPrompt: "encrypted-v2",
+      encryptionIv: "iv-v2",
+      wrappedKey: "wrapped-v2",
+      encryptionVersion: 2,
+    });
+
+    decryptPromptCiphertextMock.mockResolvedValue(plaintext);
+    hashPromptPlaintextMock.mockResolvedValue("f".repeat(64));
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(200);
+    expect(responseData.plaintext).toBe(plaintext);
+  });
+
+  it("recovers gracefully when archived version is missing", async () => {
+    const { buyer, promptId, challenge, signedMessage } =
+      await setupUnlockFixture();
+
+    // Prompt at v3
+    getPromptMock.mockResolvedValue({
+      id: 42n,
+      creator: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
+      title: "Test prompt",
+      contentHash: "v3-hash",
+      encryptedPrompt: "encrypted-v3",
+      encryptionIv: "iv-v3",
+      wrappedKey: "wrapped-v3",
+      encryptionVersion: 3,
+    });
+
+    // Buyer at v2, but v2 archive is missing
+    getPurchaseDetailsMock.mockResolvedValue({
+      promptId: 42n,
+      originalCreator: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
+      owner: buyer.publicKey(),
+      originalPrice: 100n,
+      lastTransferPrice: 0n,
+      transferCount: 0,
+      lastTransferredAt: 0,
+      expiresAt: 9999999999,
+      encryptionVersion: 2,
+    });
+
+    getPromptEncryptionVersionMock.mockRejectedValue(
+      new Error("EncryptionVersionNotFound"),
+    );
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(400);
+    expect(responseData.plaintext).toBeUndefined();
   });
 });
