@@ -293,6 +293,19 @@ const FetchAllPrompts = ({
     setCurrentPage(1);
   }, [priceRange, searchQuery, selectedCategory, selectedTag, sortBy]);
 
+  useEffect(() => {
+    if (!promptsQuery.data) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const promptId = params.get("promptId");
+    if (!promptId) return;
+
+    const match = promptsQuery.data.find((prompt) => prompt.id.toString() === promptId);
+    if (match) {
+      setSelectedPrompt(match);
+    }
+  }, [promptsQuery.data]);
+
   if (promptsQuery.isLoading) {
     return (
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
