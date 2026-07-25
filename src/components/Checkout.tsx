@@ -24,6 +24,7 @@ import { detectNetworkMismatch } from '@/lib/wallet/networkDetection';
 import { useWallet } from '@/hooks/useWallet';
 import { useQueryClient } from '@tanstack/react-query';
 import { fetchActiveLicenseTerms, type LicenseTerm } from '@/lib/checkout/licenseTerms';
+import { translateError } from '@/lib/i18n-errors';
 
 const promptImageFallback = '/images/codeguru.png';
 
@@ -139,7 +140,7 @@ export function Checkout({ onClose }: CheckoutProps) {
 
       setStep('complete');
     } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : 'Purchase failed');
+      setGlobalError(translateError(error instanceof Error ? error.message : 'Purchase failed'));
       setStep('error');
     } finally {
       setCheckingOut(false);

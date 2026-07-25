@@ -34,6 +34,7 @@ import {
   SAFETY_DISCLOSURE_FLAGS,
 } from "@/lib/validation/listing";
 import { useNetworkState } from "@/hooks/useNetworkState";
+import { translateError } from "@/lib/i18n-errors";
 
 const limits = {
   ...LISTING_LIMITS,
@@ -301,7 +302,7 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
       }
     } catch (error) {
       setSubmitError(
-        error instanceof Error ? error.message : "Failed to create prompt.",
+        translateError(error instanceof Error ? error.message : "Failed to create prompt.")
       );
     } finally {
       setIsSubmitting(false);
