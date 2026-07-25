@@ -23,6 +23,10 @@ import { dispatchEvent } from "../../server/src/services/webhookDispatcher";
 import { recordAuditEvent } from "../../server/src/services/auditTrail";
 import { apiError, ErrorCode } from "../../src/lib/api/errorCodes";
 import { validateUnlockSecrets } from "../../src/lib/validation/envValidator";
+import {
+  parseRequestBody,
+  UnlockRequestBody,
+} from "../../src/lib/api/requestSchemas";
 
 // Fail-fast module load validation
 try {
@@ -98,7 +102,8 @@ async function handler(req: any, res: any) {
   }
 
   const clientIp = (req.headers["x-forwarded-for"] || req.socket.remoteAddress) as string;
-  const { token, promptId, address, signedMessage } = req.body ?? {};
+  const body = req.body ?? {};
+  const { address, promptId } = body as { address?: unknown; promptId?: unknown };
 
   // Authenticated bucket: wallet address is present.
   const isAuthenticated = Boolean(address);
@@ -165,7 +170,8 @@ async function handler(req: any, res: any) {
     return;
   }
 
-  if (!token || !promptId || !address || !signedMessage) {
+  const parsed = parseRequestBody(UnlockRequestBody, req.body);
+  if (!parsed.success) {
     res.status(400).json(
       apiError(
         ErrorCode.MISSING_FIELDS,
@@ -175,31 +181,33 @@ async function handler(req: any, res: any) {
     return;
   }
 
+  const unlockRequest = parsed.data;
+
   try {
     // Support multiple active secrets during rotation grace period
     const activeSecrets = getActiveSecrets(challengeSecret);
     
     const payload = verifyChallengeToken(
       activeSecrets,
-      String(token),
-      String(address),
-      String(promptId),
+      unlockRequest.token,
+      unlockRequest.address,
+      unlockRequest.promptId,
     );
     const challengeMessage = buildChallengeMessage(payload);
     const validSignature = verifyChallengeSignature(
-      String(address),
+      unlockRequest.address,
       challengeMessage,
-      String(signedMessage),
+      unlockRequest.signedMessage,
     );
 
     if (!validSignature) {
-      req.logger.warn({ address, promptId }, "Invalid wallet signature");
-      metrics.trackUnlockFailure(String(address), String(promptId), "invalid_signature");
+      req.logger.warn({ address: unlockRequest.address, promptId: unlockRequest.promptId }, "Invalid wallet signature");
+      metrics.trackUnlockFailure(unlockRequest.address, unlockRequest.promptId, "invalid_signature");
       void recordAuditEvent({
         action: "unlock_invalid_signature",
         result: "failure",
-        promptId: String(promptId),
-        walletAddress: String(address),
+        promptId: unlockRequest.promptId,
+        walletAddress: unlockRequest.address,
         requestId: req.requestId ?? null,
         clientIp,
         reason: "invalid_signature",
@@ -209,17 +217,24 @@ async function handler(req: any, res: any) {
     }
 
     const replayCheck = await checkReplayProtection(
-      String(token),
-      String(signedMessage),
+      unlockRequest.token,
+      unlockRequest.signedMessage,
     );
     if (!replayCheck.valid) {
-      req.logger.warn({ address, promptId }, "Replay attack detected");
-      metrics.trackUnlockFailure(String(address), String(promptId), "replay_detected");
+      req.logger.warn(
+        { address: unlockRequest.address, promptId: unlockRequest.promptId },
+        "Replay attack detected",
+      );
+      metrics.trackUnlockFailure(
+        unlockRequest.address,
+        unlockRequest.promptId,
+        "replay_detected",
+      );
       void recordAuditEvent({
         action: "unlock_replay_detected",
         result: "blocked",
-        promptId: String(promptId),
-        walletAddress: String(address),
+        promptId: unlockRequest.promptId,
+        walletAddress: unlockRequest.address,
         requestId: req.requestId ?? null,
         clientIp,
         reason: "replay_attack",
@@ -231,16 +246,23 @@ async function handler(req: any, res: any) {
     }
 
     const config = getServerConfig();
-    const id = BigInt(promptId);
-    const access = await hasAccess(config, String(address), id);
+    const id = BigInt(unlockRequest.promptId);
+    const access = await hasAccess(config, unlockRequest.address, id);
     if (!access) {
-      req.logger.warn({ address, promptId }, "Prompt access denied");
-      metrics.trackUnlockFailure(String(address), String(promptId), "no_access");
+      req.logger.warn(
+        { address: unlockRequest.address, promptId: unlockRequest.promptId },
+        "Prompt access denied",
+      );
+      metrics.trackUnlockFailure(
+        unlockRequest.address,
+        unlockRequest.promptId,
+        "no_access",
+      );
       void recordAuditEvent({
         action: "unlock_no_access",
         result: "failure",
-        promptId: String(promptId),
-        walletAddress: String(address),
+        promptId: unlockRequest.promptId,
+        walletAddress: unlockRequest.address,
         requestId: req.requestId ?? null,
         clientIp,
         reason: "no_access",
@@ -265,13 +287,20 @@ async function handler(req: any, res: any) {
     const contentHash = await hashPromptPlaintext(plaintext);
     const storedHash = normalizeContentHash(prompt.contentHash);
     if (contentHash !== storedHash) {
-      req.logger.error({ address, promptId }, "Prompt integrity check failed");
-      metrics.trackUnlockFailure(String(address), String(promptId), "integrity_failure");
+      req.logger.error(
+        { address: unlockRequest.address, promptId: unlockRequest.promptId },
+        "Prompt integrity check failed",
+      );
+      metrics.trackUnlockFailure(
+        unlockRequest.address,
+        unlockRequest.promptId,
+        "integrity_failure",
+      );
       void recordAuditEvent({
         action: "unlock_integrity_failure",
         result: "failure",
-        promptId: String(promptId),
-        walletAddress: String(address),
+        promptId: unlockRequest.promptId,
+        walletAddress: unlockRequest.address,
         requestId: req.requestId ?? null,
         clientIp,
         reason: "integrity_failure",
@@ -282,13 +311,16 @@ async function handler(req: any, res: any) {
       return;
     }
 
-    metrics.trackUnlockSuccess(String(address), String(promptId));
-    req.logger.info({ address, promptId }, "Prompt unlocked successfully");
+    metrics.trackUnlockSuccess(unlockRequest.address, unlockRequest.promptId);
+    req.logger.info(
+      { address: unlockRequest.address, promptId: unlockRequest.promptId },
+      "Prompt unlocked successfully",
+    );
     void recordAuditEvent({
       action: "unlock_success",
       result: "success",
-      promptId: String(promptId),
-      walletAddress: String(address),
+      promptId: unlockRequest.promptId,
+      walletAddress: unlockRequest.address,
       requestId: req.requestId ?? null,
       clientIp,
       reason: null,
@@ -298,7 +330,7 @@ async function handler(req: any, res: any) {
     void Promise.resolve(
       dispatchEvent(prompt.creator ?? "", "PromptPurchased", {
         promptId: prompt.id.toString(),
-        buyer: String(address),
+        buyer: unlockRequest.address,
         title: prompt.title,
       }),
     ).catch(() => {});
@@ -311,16 +343,23 @@ async function handler(req: any, res: any) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to unlock prompt.";
-    req.logger.error({ address, promptId, error: message }, "Unlock attempt failed");
-    metrics.trackUnlockFailure(String(address), String(promptId), "error");
+    req.logger.error(
+      {
+        address: unlockRequest.address,
+        promptId: unlockRequest.promptId,
+        error: message,
+      },
+      "Unlock attempt failed",
+    );
+    metrics.trackUnlockFailure(unlockRequest.address, unlockRequest.promptId, "error");
 
     // Distinguish expired-challenge errors for finer-grained audit reasons and error codes.
     const isExpired = message.toLowerCase().includes("expired");
     void recordAuditEvent({
       action: isExpired ? "unlock_expired_challenge" : "unlock_error",
       result: "failure",
-      promptId: promptId ? String(promptId) : null,
-      walletAddress: address ? String(address) : null,
+      promptId: unlockRequest.promptId,
+      walletAddress: unlockRequest.address,
       requestId: req.requestId ?? null,
       clientIp,
       reason: isExpired ? "expired_challenge" : "error",

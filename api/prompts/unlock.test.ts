@@ -216,6 +216,19 @@ describe("unlock API integrity checks", () => {
     expect(String(responseData.error)).not.toContain("Secret prompt");
   });
 
+  it("rejects malformed unlock bodies before auth checks", async () => {
+    const { statusCode, responseData } = await invokeUnlock({
+      token: "t",
+      promptId: "not-numeric",
+      address: "not-a-stellar-key",
+      signedMessage: "",
+    });
+
+    expect(statusCode).toBe(400);
+    expect(responseData.code).toBe(ErrorCode.MISSING_FIELDS);
+    expect(responseData.plaintext).toBeUndefined();
+  });
+
   it("rejects unlock when wallet signature is invalid", async () => {
     const { buyer, promptId, challenge } = await setupUnlockFixture();
     const wrongSigner = Keypair.random();
