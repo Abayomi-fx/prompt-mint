@@ -3,6 +3,7 @@ import connectDb from "../db/connectDb";
 import Prompt from "../models/Prompt";
 import PromptVersion from "../models/PromptVersion";
 import Purchase from "../models/Purchase";
+import LicenseTerm from "../models/LicenseTerm";
 import User from "../models/User";
 
 export const PostPromptUpdate = async (req: Request, res: Response): Promise<Response> => {
@@ -75,11 +76,20 @@ export const RecordPurchase = async (req: Request, res: Response): Promise<Respo
       return res.status(200).json({ message: "Already purchased.", versionIndex: existing.versionIndex });
     }
 
+    const termsVersion = prompt.termsVersion ?? 1;
+    const licenseTerm = await LicenseTerm.findOne({ version: termsVersion });
+
     const purchase = await Purchase.create({
       promptId,
       buyerWallet: buyerWallet.toLowerCase(),
       versionIndex: prompt.currentVersionIndex ?? 1,
       txHash: txHash ?? "",
+      termsSnapshot: {
+        termsVersion,
+        termsTitle: licenseTerm?.title ?? "Standard License",
+        termsContent: licenseTerm?.content ?? "Standard marketplace license terms.",
+        acceptedAt: new Date(),
+      },
     });
 
     return res.status(201).json({ message: "Purchase recorded.", versionIndex: purchase.versionIndex });
