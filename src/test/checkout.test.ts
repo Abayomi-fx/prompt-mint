@@ -14,8 +14,20 @@ vi.mock('../lib/stellar/promptHashClient', () => ({
   },
 }));
 
+const mockFetchAccount = vi.fn();
+
+vi.mock('../lib/checkout/accountBalance', () => ({
+  fetchCheckoutAccountSnapshot: (...args: unknown[]) => mockFetchAccount(...args),
+}));
+
 const mockGetPrompt = vi.mocked(PromptHashClient.getPrompt);
 const mockCheckAccess = vi.mocked(PromptHashClient.checkAccess);
+
+const sufficientAccount = {
+  nativeBalanceStroops: 500_000_000n,
+  minimumReserveStroops: 10_000_000n,
+  subentryCount: 2,
+};
 
 const createCartItem = (overrides: Partial<CartItem> = {}): CartItem => ({
   promptId: '123',
@@ -30,6 +42,7 @@ const createCartItem = (overrides: Partial<CartItem> = {}): CartItem => ({
 describe('Checkout Validation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFetchAccount.mockResolvedValue(sufficientAccount);
   });
 
   describe('validateCheckoutItem', () => {
@@ -231,6 +244,51 @@ describe('Checkout Validation', () => {
 
       expect(summary.priceChanges).toHaveLength(1);
       expect(summary.priceChanges[0].promptId).toBe('2');
+    });
+
+    it('blocks checkout when XLM balance is insufficient for total and reserve', async () => {
+      mockGetPrompt.mockResolvedValue({
+        id: 123n,
+        creator: 'GCREATOR123',
+        priceStroops: 100_000_000n,
+        title: 'Test Prompt',
+        active: true,
+      } as any);
+      mockCheckAccess.mockResolvedValue(false);
+      mockFetchAccount.mockResolvedValue({
+        nativeBalanceStroops: 50_000_000n,
+        minimumReserveStroops: 10_000_000n,
+        subentryCount: 2,
+      });
+
+      const summary = await validateCheckout(
+        [createCartItem({ priceStroops: 100_000_000n })],
+        'GBUYER123',
+      );
+
+      expect(summary.allValid).toBe(false);
+      expect(summary.balanceCheck?.sufficient).toBe(false);
+      expect(summary.balanceErrors[0]?.field).toBe('balance');
+    });
+
+    it('blocks checkout when balance lookup fails', async () => {
+      mockGetPrompt.mockResolvedValue({
+        id: 123n,
+        creator: 'GCREATOR123',
+        priceStroops: 10_000_000n,
+        title: 'Test Prompt',
+        active: true,
+      } as any);
+      mockCheckAccess.mockResolvedValue(false);
+      mockFetchAccount.mockRejectedValue(new Error('not found'));
+
+      const summary = await validateCheckout(
+        [createCartItem()],
+        'GBUYER123',
+      );
+
+      expect(summary.allValid).toBe(false);
+      expect(summary.balanceErrors[0]?.message).toMatch(/unable to verify/i);
     });
   });
 

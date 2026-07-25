@@ -1,6 +1,14 @@
 import type { CartItem, BulkPurchaseItem } from '@/providers/CartProvider';
 import type { PromptRecord, PromptHashConfig } from '@/lib/stellar/promptHashClient';
 import { PromptHashClient } from '@/lib/stellar/promptHashClient';
+import {
+  fetchCheckoutAccountSnapshot,
+  type CheckoutAccountSnapshot,
+} from '@/lib/checkout/accountBalance';
+import {
+  assessCheckoutXlmSufficiency,
+  type CheckoutBalanceAssessment,
+} from '@/lib/checkout/xlmBalance';
 
 export interface CheckoutValidationError {
   promptId: string;
@@ -20,6 +28,12 @@ export interface CheckoutSummary {
   totalStroops: bigint;
   allValid: boolean;
   priceChanges: { promptId: string; oldPrice: bigint; newPrice: bigint }[];
+  balanceCheck: CheckoutBalanceAssessment | null;
+  balanceErrors: CheckoutValidationError[];
+}
+
+export interface ValidateCheckoutOptions {
+  fetchAccount?: (address: string) => Promise<CheckoutAccountSnapshot>;
 }
 
 /**
@@ -98,6 +112,7 @@ export async function validateCheckoutItem(
 export async function validateCheckout(
   cartItems: CartItem[],
   buyerAddress: string,
+  options?: ValidateCheckoutOptions,
 ): Promise<CheckoutSummary> {
   const validatedItems = await Promise.all(
     cartItems.map((item) => validateCheckoutItem(item, buyerAddress)),
@@ -119,7 +134,7 @@ export async function validateCheckout(
     })
     .filter((p): p is { promptId: string; oldPrice: bigint; newPrice: bigint } => p !== null);
 
-  const allValid = validatedItems.every((v) => v.valid);
+  const itemsValid = validatedItems.every((v) => v.valid);
   const totalStroops = cartItems
     .filter((item) => {
       const validation = validatedItems.find((v) => v.promptId === item.promptId);
@@ -127,12 +142,45 @@ export async function validateCheckout(
     })
     .reduce((sum, item) => sum + item.priceStroops, 0n);
 
+  const balanceErrors: CheckoutValidationError[] = [];
+  let balanceCheck: CheckoutBalanceAssessment | null = null;
+
+  const loadAccount = options?.fetchAccount ?? fetchCheckoutAccountSnapshot;
+
+  try {
+    const account = await loadAccount(buyerAddress);
+    balanceCheck = assessCheckoutXlmSufficiency({
+      nativeBalanceStroops: account.nativeBalanceStroops,
+      minimumReserveStroops: account.minimumReserveStroops,
+      purchaseTotalStroops: totalStroops,
+    });
+
+    if (!balanceCheck.sufficient && balanceCheck.message) {
+      balanceErrors.push({
+        promptId: '*',
+        field: 'balance',
+        message: balanceCheck.message,
+      });
+    }
+  } catch {
+    balanceErrors.push({
+      promptId: '*',
+      field: 'balance',
+      message:
+        'Unable to verify your XLM balance. Ensure your wallet is funded and try again.',
+    });
+  }
+
+  const allValid = itemsValid && balanceErrors.length === 0;
+
   return {
     items: cartItems,
     validatedItems,
     totalStroops,
     allValid,
     priceChanges,
+    balanceCheck,
+    balanceErrors,
   };
 }
 
