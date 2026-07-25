@@ -35,6 +35,8 @@ import { NetworkMismatchBanner } from "../../components/wallet/NetworkMismatchBa
 import { detectNetworkMismatch } from "../../lib/wallet/networkDetection";
 import { CurrencyPrice } from "../../components/CurrencyPrice";
 import { useNetworkState } from "@/hooks/useNetworkState";
+import { useAddToCart } from "@/hooks/useAddToCart";
+import { ShoppingCart } from "lucide-react";
 import { GiftPrompt, type GiftPromptData } from "../../components/GiftPrompt";
 import { trackEventWithWallet } from "../../lib/analytics/track";
 import { useTrackPromptView } from "@/hooks/useRecentlyViewed";
@@ -197,6 +199,7 @@ export const PromptModal: React.FC<PromptModalProps> = ({
 }) => {
   const wallet = useContext(WalletContext);
   const queryClient = useQueryClient();
+  const { addToCart, isInCart } = useAddToCart();
 
   const [status, setStatus] = useState<BuyerStatus>("IDLE");
   const [txHash, setTxHash] = useState<string>("");
@@ -504,6 +507,21 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                       <Wallet className="w-4 h-4" />
                     </button>
                     <button
+                      onClick={() => addToCart(itemId)}
+                      disabled={isInCart(itemId)}
+                      className="h-14 px-6 border-2 border-white/20 bg-white/5 hover:bg-white/10 font-bold rounded-2xl transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-white"
+                    >
+                      {isInCart(itemId) ? (
+                        <>
+                          <Check className="w-4 h-4" />
+                          In Cart
+                        </>
+                      ) : (
+                        <>
+                          <ShoppingCart className="w-4 h-4" />
+                          Add to Cart
+                        </>
+                      )}
                       onClick={() => setShowGiftModal(true)}
                       disabled={
                         !wallet?.address ||

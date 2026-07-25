@@ -60,6 +60,21 @@ export interface Promotion {
 
 export type CreatePromptInput = unknown;
 
+export interface BulkPurchaseItem {
+  promptId: string;
+  priceStroops: bigint;
+}
+
+export interface BulkPurchaseResult {
+  txHash: string;
+  results: {
+    promptId: string;
+    success: boolean;
+    txHash?: string;
+    error?: string;
+  }[];
+}
+
 export class PromptHashClient {
   /**
    * Checks if the user already has access to the prompt.
@@ -112,15 +127,14 @@ export class PromptHashClient {
   }
 
   /**
-   * Invokes the Soroban contract to gift a prompt to another address.
-   * The sender pays, but the recipient receives the license.
+   * Invokes the Soroban contract to purchase multiple prompts atomically.
+   * The entire transaction reverts if any individual purchase fails.
    */
-  static async giftPrompt(
-    _itemId: string,
-    _senderAddress: string,
-    _recipientAddress: string,
+  static async purchasePromptsBulk(
+    _items: BulkPurchaseItem[],
+    _userAddress: string,
     options?: { forceFailure?: string; delay?: number },
-  ): Promise<{ txHash: string; success: boolean; recipientAddress: string }> {
+  ): Promise<BulkPurchaseResult> {
     warnMockUse();
     return new Promise((resolve, reject) => {
       const delay = options?.delay ?? 3000;
@@ -129,9 +143,16 @@ export class PromptHashClient {
           return reject(new Error(options.forceFailure));
         }
 
-        const mockHash =
-          "tx_gift_" + Math.random().toString(16).slice(2, 14).padStart(12, "0");
-        resolve({ txHash: mockHash, success: true, recipientAddress: _recipientAddress });
+        const txHash =
+          "tx_bulk_" + Math.random().toString(16).slice(2, 14).padStart(12, "0");
+        
+        const results = _items.map((item) => ({
+          promptId: item.promptId,
+          success: true,
+          txHash,
+        }));
+
+        resolve({ txHash, results });
       }, delay);
     });
   }
