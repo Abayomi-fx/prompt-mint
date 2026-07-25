@@ -23,6 +23,7 @@ import { useNetworkState } from '@/hooks/useNetworkState';
 import { detectNetworkMismatch } from '@/lib/wallet/networkDetection';
 import { useWallet } from '@/hooks/useWallet';
 import { useQueryClient } from '@tanstack/react-query';
+import { fetchActiveLicenseTerms, type LicenseTerm } from '@/lib/checkout/licenseTerms';
 
 const promptImageFallback = '/images/codeguru.png';
 
@@ -54,6 +55,9 @@ export function Checkout({ onClose }: CheckoutProps) {
   const [summary, setSummary] = useState<CheckoutSummary | null>(null);
   const [results, setResults] = useState<CheckoutItemResult[]>([]);
   const [globalError, setGlobalError] = useState<string | null>(null);
+  const [licenseTerms, setLicenseTerms] = useState<LicenseTerm[]>([]);
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
 
   const validateItems = useCallback(async () => {
     if (!address) return;
@@ -74,6 +78,10 @@ export function Checkout({ onClose }: CheckoutProps) {
       validateItems();
     }
   }, [address, state.items.length, step, summary, validateItems]);
+
+  useEffect(() => {
+    fetchActiveLicenseTerms().then(setLicenseTerms).catch(() => {});
+  }, []);
 
   const handleConfirm = async () => {
     if (!address || !signTransaction) {
@@ -353,6 +361,49 @@ export function Checkout({ onClose }: CheckoutProps) {
         </div>
       )}
 
+      {/* License Terms */}
+      {licenseTerms.length > 0 && (
+        <div className="border-t border-white/10 pt-3">
+          <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3">
+            <div className="flex items-start gap-3">
+              <div className="flex h-5 items-center">
+                <input
+                  type="checkbox"
+                  id="accept-terms"
+                  checked={termsAccepted}
+                  onChange={(e) => setTermsAccepted(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-600 bg-slate-800 text-cyan-400 focus:ring-cyan-400"
+                />
+              </div>
+              <div className="min-w-0 flex-1">
+                <label htmlFor="accept-terms" className="text-sm text-slate-300 cursor-pointer">
+                  I agree to the{" "}
+                  <button
+                    type="button"
+                    className="text-cyan-400 underline hover:text-cyan-300"
+                    onClick={() => setShowTerms(!showTerms)}
+                  >
+                    License Terms
+                  </button>
+                </label>
+                {showTerms && (
+                  <div className="mt-2 space-y-2 max-h-48 overflow-y-auto text-xs text-slate-400">
+                    {licenseTerms.map((term) => (
+                      <div key={term.version} className="p-2 rounded border border-white/5 bg-white/[0.02]">
+                        <p className="font-semibold text-slate-300">
+                          v{term.version}: {term.title}
+                        </p>
+                        <p className="mt-1 whitespace-pre-wrap">{term.content}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Total */}
       <div className="border-t border-white/10 pt-3">
         <div className="flex items-center justify-between">
@@ -372,7 +423,8 @@ export function Checkout({ onClose }: CheckoutProps) {
             step === 'processing' ||
             !summary?.allValid ||
             !address ||
-            !networkState.canTrustConfirmation
+            !networkState.canTrustConfirmation ||
+            (licenseTerms.length > 0 && !termsAccepted)
           }
         >
           {step === 'confirming' || step === 'processing' ? (

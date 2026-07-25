@@ -6,8 +6,8 @@ import {
   withdrawAppeal,
   getAppeal,
   getAppealsForDecision,
-  AppealError,
 } from "../services/appealService";
+import { AppError } from "../lib/AppError";
 
 /**
  * Appeal routes — moderation-decision appeal workflow.
@@ -29,27 +29,16 @@ appealRouter.post(
     const { decisionId, appellantAddress, statement, evidenceRefs } = req.body;
 
     if (!decisionId || !appellantAddress || !statement) {
-      res
-        .status(400)
-        .json({ error: "decisionId, appellantAddress, and statement are required." });
-      return;
+      throw new AppError("decisionId, appellantAddress, and statement are required.", 400, "MISSING_FIELDS");
     }
 
-    try {
-      const appeal = await fileAppeal({
-        decisionId,
-        appellantAddress,
-        statement,
-        evidenceRefs,
-      });
-      res.status(201).json({ success: true, appeal });
-    } catch (err) {
-      if (err instanceof AppealError) {
-        res.status(err.httpStatus).json({ error: err.message, code: err.code });
-        return;
-      }
-      throw err;
-    }
+    const appeal = await fileAppeal({
+      decisionId,
+      appellantAddress,
+      statement,
+      evidenceRefs,
+    });
+    res.status(201).json({ success: true, appeal });
   }),
 );
 
@@ -58,16 +47,8 @@ appealRouter.post(
 appealRouter.get(
   "/:id",
   asyncHandler(async (req, res) => {
-    try {
-      const appeal = await getAppeal(req.params.id);
-      res.json(appeal);
-    } catch (err) {
-      if (err instanceof AppealError) {
-        res.status(err.httpStatus).json({ error: err.message, code: err.code });
-        return;
-      }
-      throw err;
-    }
+    const appeal = await getAppeal(req.params.id);
+    res.json(appeal);
   }),
 );
 
@@ -89,33 +70,21 @@ appealRouter.post(
     const { resolverAddress, outcome, reason, evidenceRefs } = req.body;
 
     if (!resolverAddress || !outcome || !reason) {
-      res
-        .status(400)
-        .json({ error: "resolverAddress, outcome, and reason are required." });
-      return;
+      throw new AppError("resolverAddress, outcome, and reason are required.", 400, "MISSING_FIELDS");
     }
 
     if (!["approved", "rejected"].includes(outcome)) {
-      res.status(400).json({ error: 'outcome must be "approved" or "rejected".' });
-      return;
+      throw new AppError('outcome must be "approved" or "rejected".', 400, "MISSING_FIELDS");
     }
 
-    try {
-      const appeal = await resolveAppeal({
-        appealId: req.params.id,
-        resolverAddress,
-        outcome,
-        reason,
-        evidenceRefs,
-      });
-      res.json({ success: true, appeal });
-    } catch (err) {
-      if (err instanceof AppealError) {
-        res.status(err.httpStatus).json({ error: err.message, code: err.code });
-        return;
-      }
-      throw err;
-    }
+    const appeal = await resolveAppeal({
+      appealId: req.params.id,
+      resolverAddress,
+      outcome,
+      reason,
+      evidenceRefs,
+    });
+    res.json({ success: true, appeal });
   }),
 );
 
@@ -127,23 +96,14 @@ appealRouter.post(
     const { appellantAddress, reason } = req.body;
 
     if (!appellantAddress) {
-      res.status(400).json({ error: "appellantAddress is required." });
-      return;
+      throw new AppError("appellantAddress is required.", 400, "MISSING_FIELDS");
     }
 
-    try {
-      const appeal = await withdrawAppeal({
-        appealId: req.params.id,
-        appellantAddress,
-        reason,
-      });
-      res.json({ success: true, appeal });
-    } catch (err) {
-      if (err instanceof AppealError) {
-        res.status(err.httpStatus).json({ error: err.message, code: err.code });
-        return;
-      }
-      throw err;
-    }
+    const appeal = await withdrawAppeal({
+      appealId: req.params.id,
+      appellantAddress,
+      reason,
+    });
+    res.json({ success: true, appeal });
   }),
 );

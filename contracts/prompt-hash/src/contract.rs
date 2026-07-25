@@ -1,9 +1,8 @@
 use super::events::Events;
 use super::storage::Storage;
 use super::types::{
-    DataKey, Error, ListingConfig, Prompt, PromptHashTrait, Purchase, ReferralCode, Settlement,
-    Split,
-    DataKey, Error, ListingConfig, Prompt, PromptHashTrait, Split, Subscription, SubscriptionConfig,
+    DataKey, Error, ListingConfig, Prompt, PromptEncryptedPayload, PromptHashTrait, Purchase,
+    ReferralCode, Settlement, Split, Subscription, SubscriptionConfig,
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
@@ -116,9 +115,11 @@ impl PromptHashTrait for PromptHashContract {
             splits: listing.splits,
             classification,
             safety_flags,
+            encryption_version: 1,
         };
 
         Storage::save_prompt(&env, &prompt)?;
+        Storage::set_encryption_version_counter(&env, prompt_id, 1);
         Storage::add_prompt_to_creator(&env, &creator, prompt_id);
         Events::emit_prompt_created(&env, prompt_id, creator, listing.price, listing.asset);
         Ok(prompt_id)
@@ -845,6 +846,88 @@ impl PromptHashTrait for PromptHashContract {
 
     fn get_effective_price(env: Env, prompt_id: u128) -> Result<(i128, Address, bool), Error> {
         get_effective_price_for_prompt(&env, prompt_id)
+    }
+
+    // ─── Encryption Rotation ──────────────────────────────────────────────
+
+    fn rotate_encryption(
+        env: Env,
+        creator: Address,
+        prompt_id: u128,
+        encrypted_prompt: String,
+        encryption_iv: String,
+        wrapped_key: String,
+        content_hash: BytesN<32>,
+    ) -> Result<u32, Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+
+        let mut prompt = Storage::require_prompt(&env, prompt_id)?;
+        ensure(prompt.creator == creator, Error::Unauthorized)?;
+
+        // Validate new encrypted fields
+        validate_len(
+            &encrypted_prompt,
+            MAX_ENCRYPTED_PROMPT_LEN,
+            Error::InvalidEncryptedPromptLength,
+        )?;
+        validate_len(&wrapped_key, MAX_WRAPPED_KEY_LEN, Error::InvalidWrappedKeyLength)?;
+        validate_len(&encryption_iv, MAX_IV_LEN, Error::InvalidIvLength)?;
+
+        let previous_version = prompt.encryption_version;
+
+        // Archive the current encryption payload before overwriting
+        let now = env.ledger().timestamp();
+        let archived = PromptEncryptedPayload {
+            prompt_id,
+            version: previous_version,
+            encrypted_prompt: prompt.encrypted_prompt.clone(),
+            encryption_iv: prompt.encryption_iv.clone(),
+            wrapped_key: prompt.wrapped_key.clone(),
+            content_hash: prompt.content_hash.clone(),
+            created_at: now,
+        };
+        Storage::save_encryption_version(&env, prompt_id, previous_version, &archived);
+
+        // Update prompt with new encryption material
+        let new_version = previous_version
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        prompt.encrypted_prompt = encrypted_prompt;
+        prompt.encryption_iv = encryption_iv;
+        prompt.wrapped_key = wrapped_key;
+        prompt.content_hash = content_hash;
+        prompt.encryption_version = new_version;
+        Storage::update_prompt(&env, &prompt);
+        Storage::set_encryption_version_counter(&env, prompt_id, new_version);
+
+        Events::emit_encryption_rotated(&env, prompt_id, previous_version, new_version, now);
+        Ok(new_version)
+    }
+
+    fn get_prompt_encryption_version(
+        env: Env,
+        prompt_id: u128,
+        version: u32,
+    ) -> Result<PromptEncryptedPayload, Error> {
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+
+        if version == prompt.encryption_version {
+            // Current version is always in the Prompt struct
+            return Ok(PromptEncryptedPayload {
+                prompt_id,
+                version,
+                encrypted_prompt: prompt.encrypted_prompt,
+                encryption_iv: prompt.encryption_iv,
+                wrapped_key: prompt.wrapped_key,
+                content_hash: prompt.content_hash,
+                created_at: 0, // not stored for the current version
+            });
+        }
+
+        // Archived versions
+        Storage::get_encryption_version(&env, prompt_id, version)
+            .ok_or(Error::EncryptionVersionNotFound)
     }
 }
 

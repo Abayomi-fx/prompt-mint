@@ -9,6 +9,9 @@ This reference covers the marketplace and account endpoints used by the PromptHa
 - Missing resources return `404`.
 - Auth or ownership failures return `403`.
 
+Shared Zod request contracts and edge-case behavior are documented in
+[`docs/api-request-schemas.md`](./api-request-schemas.md).
+
 ### Shared validation error shape
 
 ```json
