@@ -8,6 +8,7 @@ import { chatRouter } from "./routes/chatRoutes";
 import { webhookRouter } from "./routes/webhookRoutes";
 import { versioningRouter } from "./routes/versioningRoutes";
 import { governanceRouter } from "./routes/governanceRoutes"; // Issue #113
+import { appealRouter } from "./routes/appealRoutes";
 import { runBackup, getBackupHealth } from "./services/backupService";
 import { runRestoreDrill } from "./services/restoreService";
 import { IndexerState } from "./models/IndexerState"; 
@@ -30,6 +31,7 @@ app.use("/api/chat", chatRouter);
 app.use("/api/webhooks", webhookRouter);
 app.use("/api/versions", versioningRouter);
 app.use("/api/governance", governanceRouter); // Issue #113
+app.use("/api/appeals", appealRouter);
 
 app.post("/api/test-prompt", TestPromptProxy);
 

@@ -40,6 +40,9 @@ export interface PromptRecord {
   encryptedPrompt?: string;
   encryptionIv?: string;
   wrappedKey?: string;
+  // #131 – content classification and safety disclosures
+  classification?: string;
+  safetyFlags?: string[];
 }
 
 export type CreatePromptInput = unknown;
@@ -95,6 +98,31 @@ export class PromptHashClient {
     });
   }
 
+  /**
+   * Invokes the Soroban contract to gift a prompt to another address.
+   * The sender pays, but the recipient receives the license.
+   */
+  static async giftPrompt(
+    _itemId: string,
+    _senderAddress: string,
+    _recipientAddress: string,
+    options?: { forceFailure?: string; delay?: number },
+  ): Promise<{ txHash: string; success: boolean; recipientAddress: string }> {
+    warnMockUse();
+    return new Promise((resolve, reject) => {
+      const delay = options?.delay ?? 3000;
+      setTimeout(() => {
+        if (options?.forceFailure) {
+          return reject(new Error(options.forceFailure));
+        }
+
+        const mockHash =
+          "tx_gift_" + Math.random().toString(16).slice(2, 14).padStart(12, "0");
+        resolve({ txHash: mockHash, success: true, recipientAddress: _recipientAddress });
+      }, delay);
+    });
+  }
+
   static async getAllPrompts(
     _config: PromptHashConfig,
   ): Promise<PromptRecord[]> {
@@ -116,6 +144,8 @@ export class PromptHashClient {
         salesCount: 12,
         active: true,
         contentHash: "mock_hash_000000000001",
+        classification: "technical",
+        safetyFlags: ["ai-generated"],
       },
       {
         id: 2n,
@@ -132,6 +162,8 @@ export class PromptHashClient {
         salesCount: 45,
         active: true,
         contentHash: "mock_hash_000000000002",
+        classification: "creative",
+        safetyFlags: [],
       },
     ];
   }
