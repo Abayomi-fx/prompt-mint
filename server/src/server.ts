@@ -14,7 +14,7 @@ import { runRestoreDrill } from "./services/restoreService";
 import { IndexerState } from "./models/IndexerState";
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
-// import { startIndexer } from "./services/indexerService"; // TODO: Update path when ready
+import { startIndexer } from "./services/indexer";
 
 const app = express();
 
@@ -59,9 +59,9 @@ app.listen(port, () => {
   console.log(`Listening on port ${port}`);
 
   // STARTS THE INDEXER HERE
-  // startIndexer().catch((err: any) => {
-  //   console.error("Failed to start Soroban Indexer:", err);
-  // });
+  startIndexer().catch((err: any) => {
+    console.error("Failed to start Soroban Indexer:", err);
+  });
 
   // DAILY AUTOMATED BACKUP — runs immediately on startup then every 24 h.
   // Use BACKUP_S3_BUCKET env var to enable; silently skips if not configured.
