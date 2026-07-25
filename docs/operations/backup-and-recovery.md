@@ -47,6 +47,7 @@ GET /health  ──► backup.lastStatus, backup.ageHours, backup.healthy
 | `MONGODB_URI` | Yes | MongoDB connection string |
 | `PUBLIC_STELLAR_RPC_URL` | Yes (re-index only) | Soroban RPC endpoint |
 | `PUBLIC_PROMPT_HASH_CONTRACT_ID` | Yes (re-index only) | Contract ID |
+| `INDEXER_START_LEDGER` | No | Initial ledger for live indexer backfill (default: `0`, meaning start from the latest ledger) |
 
 ---
 
@@ -178,6 +179,16 @@ Use this when:
 - No usable S3 backup exists
 - The backup is too stale and you need a fully current state
 - You suspect data corruption that pre-dates the last backup
+
+### Live indexer backfill
+
+The live indexer supports backfilling from a configured ledger range via the
+`INDEXER_START_LEDGER` environment variable. When set to a positive value and
+`IndexerState.lastIndexedLedger` is `0` (fresh database), the indexer starts
+from that ledger instead of the chain tip. It processes events in **2000-ledger
+batches** to avoid RPC timeouts on large gaps. After a successful batch, the
+cursor advances; if an RPC call fails, the indexer logs the error and retries
+on the next poll cycle using the same `lastIndexedLedger` checkpoint.
 
 ### Step 1 — Dry run (preview only, no writes)
 

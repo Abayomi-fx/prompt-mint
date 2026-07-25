@@ -128,7 +128,9 @@ traffic. Frontend availability must not be used as evidence that unlock is safe.
 3. Keep unlock disabled until a wallet signature, live contract `has_access`,
    decrypt, and content-hash canary succeeds.
 4. Start the indexer from the durable cursor. Rewind at least one processed
-   ledger so idempotent handlers cover a partially committed batch.
+   ledger so idempotent handlers cover a partially committed batch. To force a
+   full backfill from a configured range, set `INDEXER_START_LEDGER` and restart
+   the service; the indexer processes events in 2000-ledger batches.
 5. Compare indexed record counts, cursor, and chain tip. Do not make indexer
    catch-up a prerequisite for contract-authoritative unlock.
 
