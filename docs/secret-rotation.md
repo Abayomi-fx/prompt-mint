@@ -345,6 +345,111 @@ Content-Type: application/json
    - One-click rotation via admin dashboard
    - Immediate invalidation of all existing tokens
 
+## Encryption Content Rotation
+
+The system also supports rotation of the **encrypted payload** stored on-chain for each prompt. This allows creators to re-encrypt prompt content without exposing plaintext to the server.
+
+### Architecture
+
+Each prompt has an `encryption_version` counter (starting at 1). When a buyer purchases a prompt, the current version is recorded in their `Purchase` record. Rotation archives the current encrypted payload and creates a new version:
+
+```
+Version 1 (initial)          Version 2 (after rotation)
+┌──────────────────────┐     ┌──────────────────────┐
+│ Prompt.encrypted     │ ──► │ Prompt.encrypted     │ (new)
+│ Prompt.wrapped_key   │     │ Prompt.wrapped_key   │ (new)
+│ Prompt.content_hash  │     │ Prompt.content_hash  │ (new)
+└──────────────────────┘     └──────────────────────┘
+         │                              │
+         ▼                              ▼
+  Archived as                    (new current version)
+  PromptEncryptedPayload
+  (prompt_id, version=1)
+```
+
+### On-Chain Functions
+
+#### `rotate_encryption` (creator only)
+
+Rotates the encryption material for a prompt. Called by the creator (or operator with creator authorization):
+
+```rust
+fn rotate_encryption(
+    env: Env,
+    creator: Address,
+    prompt_id: u128,
+    encrypted_prompt: String,   // new AES-256-GCM ciphertext (base64)
+    encryption_iv: String,       // new IV (base64)
+    wrapped_key: String,         // new wrapped AES key (NaCL box seal, base64)
+    content_hash: BytesN<32>,    // SHA-256 of the plaintext
+) -> Result<u32, Error>          // returns the new version number
+```
+
+**How rotation works (no plaintext on server):**
+1. Creator decrypts the prompt locally in their browser (has the plaintext)
+2. Generates a **new AES-256-GCM key**
+3. Re-encrypts the prompt with the new key → new `encrypted_prompt` + `encryption_iv`
+4. Wraps the new AES key with the unlock service's public key → new `wrapped_key`
+5. Hashes the plaintext → new `content_hash`
+6. Submits all four values on-chain via `rotate_encryption`
+7. The contract archives the previous payload and increments the version
+
+The server never touches plaintext during rotation.
+
+#### `get_prompt_encryption_version`
+
+Retrieves a specific version's encrypted payload:
+
+```rust
+fn get_prompt_encryption_version(
+    env: Env,
+    prompt_id: u128,
+    version: u32,
+) -> Result<PromptEncryptedPayload, Error>
+```
+
+Returns `EncryptionVersionNotFound` if the requested version does not exist.
+
+### Unlock Flow After Rotation
+
+1. Server verifies the buyer's on-chain entitlement via `has_access`
+2. Fetches `get_purchase_details` to read the buyer's `encryption_version`
+3. If the buyer's version matches the prompt's current version → decrypt using prompt's live fields
+4. If the buyer's version is older → fetch the archived payload via `get_prompt_encryption_version`
+5. Decrypt using the correct version's `encrypted_prompt`, `encryption_iv`, and `wrapped_key`
+6. Verify integrity by comparing the recomputed SHA-256 hash against the stored `content_hash`
+
+### Graceful Degradation
+
+- **No purchase record (legacy buyer):** Falls back to the current prompt version
+- **Archived version missing:** Returns a 400 error; the prior version is preserved by the contract so this should not occur in normal operation
+- **Integrity mismatch:** Returns a 500 error, indicating data corruption
+
+### Contract Events
+
+An `EncryptionRotated` event is emitted on each rotation:
+```
+prompt_id: u128
+previous_version: u32
+new_version: u32
+rotated_at: u64
+```
+
+### Smart Contract Storage Keys
+
+| Key | Value | Description |
+|-----|-------|-------------|
+| `PromptEncryptedPayload(prompt_id, version)` | `PromptEncryptedPayload` | Archived encrypted payload |
+| `PromptEncryptionVersion(prompt_id)` | `u32` | Current version counter |
+
+### New Error Codes
+
+| Error | Code | Description |
+|-------|------|-------------|
+| `EncryptionVersionNotFound` | 47 | Requested version does not exist |
+| `InvalidRotation` | 48 | Rotation parameters invalid |
+| `VersionMismatch` | 49 | Version inconsistency detected |
+
 ## Related Documentation
 
 - [Security Model](./security-model.md) - Overall security architecture

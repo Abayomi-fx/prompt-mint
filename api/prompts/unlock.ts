@@ -11,6 +11,8 @@ import {
 } from "../../src/lib/crypto/promptCrypto";
 import {
   getPrompt,
+  getPromptEncryptionVersion,
+  getPurchaseDetails,
   hasAccess,
   type PromptHashConfig,
 } from "../../src/lib/stellar/promptHashClient";
@@ -274,18 +276,60 @@ async function handler(req: any, res: any) {
     }
 
     const prompt = await getPrompt(config, id);
+
+    // Determine the correct encryption version for this buyer.
+    // If the caller is the creator they always get the current version;
+    // otherwise we resolve the version that was locked in at purchase time.
+    const currentVersion = prompt.encryptionVersion ?? 1;
+    let targetVersion = currentVersion;
+    if (prompt.creator?.toLowerCase() !== String(address).toLowerCase()) {
+      const purchase = await getPurchaseDetails(config, id, String(address));
+      // If no purchase record exists (legacy buyer), fall back to current version.
+      targetVersion = purchase?.encryptionVersion ?? currentVersion;
+    }
+
+    // Fetch the encrypted payload for the resolved version.
+    let encryptedPayload: {
+      encryptedPrompt: string;
+      encryptionIv: string;
+      wrappedKey: string;
+      contentHash: string;
+    };
+    if (targetVersion === currentVersion) {
+      // Current version – use the prompt's live fields.
+      encryptedPayload = {
+        encryptedPrompt: prompt.encryptedPrompt!,
+        encryptionIv: prompt.encryptionIv!,
+        wrappedKey: prompt.wrappedKey!,
+        contentHash: prompt.contentHash,
+      };
+    } else {
+      // Archived version – fetch from versioned storage.
+      const archived = await getPromptEncryptionVersion(
+        config,
+        id,
+        targetVersion,
+      );
+      encryptedPayload = {
+        encryptedPrompt: archived.encryptedPrompt,
+        encryptionIv: archived.encryptionIv,
+        wrappedKey: archived.wrappedKey,
+        contentHash: archived.contentHash,
+      };
+    }
+
     const keyBytes = await unwrapPromptKey(
-      prompt.wrappedKey,
+      encryptedPayload.wrappedKey,
       unlockPublicKey,
       unlockPrivateKey,
     );
     const plaintext = await decryptPromptCiphertext(
-      prompt.encryptedPrompt,
-      prompt.encryptionIv,
+      encryptedPayload.encryptedPrompt,
+      encryptedPayload.encryptionIv,
       keyBytes,
     );
     const contentHash = await hashPromptPlaintext(plaintext);
-    const storedHash = normalizeContentHash(prompt.contentHash);
+    const storedHash = normalizeContentHash(encryptedPayload.contentHash);
     if (contentHash !== storedHash) {
       req.logger.error(
         { address: unlockRequest.address, promptId: unlockRequest.promptId },
@@ -296,6 +340,23 @@ async function handler(req: any, res: any) {
         unlockRequest.promptId,
         "integrity_failure",
       );
+    const storedHash = normalizeContentHash(prompt.contentHash ?? "");
+
+    // Determine integrity state exposed to the buyer
+    const integrity = {
+      status: ((): "verified" | "failed" | "unavailable" => {
+        if (!prompt.contentHash) return "unavailable";
+        if (contentHash !== storedHash) return "failed";
+        return "verified";
+      })(),
+      computedHash: contentHash,
+      storedHash: prompt.contentHash ?? null,
+    };
+
+    if (integrity.status === "failed") {
+      // Integrity mismatch: redact decrypted content, emit diagnostics, and return structured metadata.
+      req.logger.error({ address, promptId }, "Prompt integrity check failed");
+      metrics.trackUnlockFailure(String(address), String(promptId), "integrity_failure");
       void recordAuditEvent({
         action: "unlock_integrity_failure",
         result: "failure",
@@ -305,9 +366,24 @@ async function handler(req: any, res: any) {
         clientIp,
         reason: "integrity_failure",
       });
-      res.status(500).json(
-        apiError(ErrorCode.INTEGRITY_FAILURE, "Prompt integrity check failed."),
-      );
+
+      // Emit a diagnostic webhook for creators/ops without disclosing plaintext.
+      void Promise.resolve(
+        dispatchEvent(prompt.creator ?? "", "PromptIntegrityViolation", {
+          promptId: prompt.id.toString(),
+          buyer: String(address),
+          computedHash: integrity.computedHash,
+          storedHash: integrity.storedHash,
+        }),
+      ).catch(() => {});
+
+      // Return structured response with redacted plaintext and integrity metadata.
+      res.status(200).json({
+        promptId: prompt.id.toString(),
+        title: prompt.title,
+        integrity,
+      });
+
       return;
     }
 
@@ -316,6 +392,9 @@ async function handler(req: any, res: any) {
       { address: unlockRequest.address, promptId: unlockRequest.promptId },
       "Prompt unlocked successfully",
     );
+    // Success or unavailable (no stored hash) — allow the buyer to receive plaintext but include integrity metadata.
+    metrics.trackUnlockSuccess(String(address), String(promptId));
+    req.logger.info({ address, promptId }, "Prompt unlocked successfully");
     void recordAuditEvent({
       action: "unlock_success",
       result: "success",
@@ -340,6 +419,8 @@ async function handler(req: any, res: any) {
       title: prompt.title,
       contentHash,
       plaintext,
+      // Always include integrity metadata so the client can display provenance state.
+      integrity,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to unlock prompt.";

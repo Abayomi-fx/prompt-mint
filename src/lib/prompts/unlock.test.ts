@@ -36,6 +36,7 @@ describe("unlockPromptContent client", () => {
             title: "Test prompt",
             contentHash: "abc123",
             plaintext: "Decrypted prompt body",
+            integrity: { status: "verified", computedHash: "abc123", storedHash: "abc123" },
           }),
           { status: 200 },
         ),
@@ -62,6 +63,96 @@ describe("unlockPromptContent client", () => {
     expect(signMessage).toHaveBeenCalledWith("prompt-hash unlock:challenge");
     expect(result.plaintext).toBe("Decrypted prompt body");
     expect(result.decryptedContent).toBe("Decrypted prompt body");
+    // Integrity metadata must be present on the result
+    expect(result.integrity).toBeDefined();
+    expect(result.integrity.status).toBe("verified");
+    expect(result.integrity.computedHash).toBe("abc123");
+    expect(result.integrity.storedHash).toBe("abc123");
+  });
+
+  it("propagates integrity metadata with status 'unavailable' for legacy listings", async () => {
+    hashPromptPlaintextMock.mockResolvedValue("abc123");
+
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              token: "token-1",
+              challenge: "prompt-hash unlock:challenge",
+              expiresAt: Date.now() + 60_000,
+              nonce: "nonce-1",
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              promptId: "7",
+              title: "Legacy prompt",
+              contentHash: "",
+              plaintext: "Legacy prompt body",
+              integrity: { status: "unavailable", computedHash: "abc123", storedHash: null },
+            }),
+            { status: 200 },
+          ),
+        ),
+    );
+
+    const result = await unlockPromptContent(
+      "GBUYERACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH123456789",
+      "7",
+      vi.fn().mockResolvedValue({ signedMessage: "signed-by-wallet" }),
+    );
+
+    expect(result.plaintext).toBe("Legacy prompt body");
+    expect(result.integrity.status).toBe("unavailable");
+    expect(result.integrity.storedHash).toBeNull();
+  });
+
+  it("throws an integrity error when the server reports a hash mismatch (stale-version scenario)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              token: "token-1",
+              challenge: "prompt-hash unlock:challenge",
+              expiresAt: Date.now() + 60_000,
+              nonce: "nonce-1",
+            }),
+            { status: 200 },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              promptId: "7",
+              title: "Updated prompt",
+              // Server returns no plaintext and a failed integrity status
+              integrity: {
+                status: "failed",
+                computedHash: "f".repeat(64),
+                storedHash: "a".repeat(64),
+              },
+            }),
+            { status: 200 },
+          ),
+        ),
+    );
+
+    await expect(
+      unlockPromptContent(
+        "GBUYERACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH123456789",
+        "7",
+        vi.fn().mockResolvedValue({ signedMessage: "signed-by-wallet" }),
+      ),
+    ).rejects.toThrow(ERROR_MESSAGES.INTEGRITY_FAILURE);
   });
 
   it("maps integrity failures to safe user-facing errors", async () => {

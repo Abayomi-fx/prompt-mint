@@ -1,5 +1,7 @@
-use super::types::{DataKey, Error, Prompt, Purchase, ReferralCode, Settlement};
-use super::types::{DataKey, Error, Prompt, Purchase, Subscription, SubscriptionConfig};
+use super::types::{
+    DataKey, Error, Prompt, PromptEncryptedPayload, Purchase, ReferralCode, Settlement,
+    Subscription, SubscriptionConfig,
+};
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
 
 pub const DAY_IN_LEDGERS: u32 = 17280;
@@ -276,10 +278,56 @@ impl Storage {
             last_transferred_at: 0,
             expires_at,
             settlement,
+            encryption_version: prompt.encryption_version,
         };
         env.storage().persistent().set(&key, &purchase);
         Self::extend_key_ttl(env, &key);
         Self::add_prompt_to_buyer(env, buyer, prompt.id);
+    }
+
+    // ─── Encryption Rotation ──────────────────────────────────────────────
+
+    /// Save an archived encrypted payload for a given version.
+    pub fn save_encryption_version(
+        env: &Env,
+        prompt_id: u128,
+        version: u32,
+        payload: &PromptEncryptedPayload,
+    ) {
+        let key = DataKey::PromptEncryptedPayload(prompt_id, version);
+        env.storage().persistent().set(&key, payload);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    /// Retrieve an archived encrypted payload for a given version.
+    pub fn get_encryption_version(
+        env: &Env,
+        prompt_id: u128,
+        version: u32,
+    ) -> Option<PromptEncryptedPayload> {
+        let key = DataKey::PromptEncryptedPayload(prompt_id, version);
+        let payload: Option<PromptEncryptedPayload> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        payload
+    }
+
+    /// Get the current encryption version counter for a prompt.
+    pub fn get_encryption_version_counter(env: &Env, prompt_id: u128) -> u32 {
+        let key = DataKey::PromptEncryptionVersion(prompt_id);
+        let counter: Option<u32> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        counter.unwrap_or(0)
+    }
+
+    /// Set (increment) the encryption version counter for a prompt.
+    pub fn set_encryption_version_counter(env: &Env, prompt_id: u128, version: u32) {
+        let key = DataKey::PromptEncryptionVersion(prompt_id);
+        env.storage().persistent().set(&key, &version);
+        Self::extend_key_ttl(env, &key);
     }
 
     pub fn set_fee_percentage(env: &Env, fee_percentage: &u32) {

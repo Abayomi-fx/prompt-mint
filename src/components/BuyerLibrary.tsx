@@ -8,7 +8,6 @@ import {
   LockKeyhole,
   PlugZap,
   RefreshCw,
-  ShieldCheck,
   ShoppingBag,
   WifiOff,
 } from "lucide-react";
@@ -17,12 +16,14 @@ import { Button } from "@/components/ui/button";
 import { useWallet } from "@/hooks/useWallet";
 import { browserStellarConfig } from "@/lib/stellar/browserConfig";
 import { getPromptsByBuyer, type PromptRecord } from "@/lib/stellar/promptHashClient";
-import { unlockPromptContent } from "@/lib/prompts/unlock";
+import { unlockPromptContent, type IntegrityMetadata } from "@/lib/prompts/unlock";
 import { UnlockExplainer, type UnlockState } from "@/components/UnlockExplainer";
+import { IntegrityBadge } from "@/components/IntegrityBadge";
 import { stellarNetwork } from "@/lib/env";
 import { CurrencyPrice } from "@/components/CurrencyPrice";
 import { FreshnessBadge } from "@/components/FreshnessBadge";
 import { useNetworkState } from "@/hooks/useNetworkState";
+import { formatPriceLabel } from "@/lib/stellar/format";
 
 const EXPECTED_NETWORK = stellarNetwork;
 
@@ -111,12 +112,14 @@ function WrongNetworkState({ network }: { network?: string }) {
 function PromptLibraryCard({
   prompt,
   plaintext,
+  integrity,
   unlockState,
   isBusy,
   onUnlock,
 }: {
   prompt: PromptRecord;
   plaintext?: string;
+  integrity?: IntegrityMetadata;
   unlockState: UnlockState;
   isBusy: boolean;
   onUnlock: () => void;
@@ -165,7 +168,6 @@ function PromptLibraryCard({
               Paid
             </p>
             <p className="mt-0.5 text-sm font-semibold text-white">
-              <CurrencyPrice stroops={prompt.priceStroops} />
               {formatPriceLabel(prompt.priceStroops)} XLM
             </p>
           </div>
@@ -185,16 +187,17 @@ function PromptLibraryCard({
           />
         )}
 
-        {/* Unlocked content */}
-        {isUnlocked && (
-          <div className="rounded-xl border border-emerald-300/20 bg-emerald-300/[0.07] p-4">
-            <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-200">
-              <ShieldCheck className="h-3.5 w-3.5" />
+        {/* Unlocked content — only rendered when plaintext is present */}
+        {isUnlocked && plaintext && (
+          <div className="rounded-xl border border-emerald-300/20 bg-emerald-300/[0.07] p-4 space-y-3">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-200">
               Decrypted content
             </div>
             <pre className="max-h-60 overflow-auto whitespace-pre-wrap text-xs leading-6 text-slate-200">
               {plaintext}
             </pre>
+            {/* Cryptographic provenance badge */}
+            {integrity && <IntegrityBadge integrity={integrity} />}
           </div>
         )}
 
@@ -202,7 +205,12 @@ function PromptLibraryCard({
         <Button
           className="h-9 bg-cyan-200 text-slate-950 hover:bg-cyan-100 disabled:opacity-50 text-xs font-bold"
           onClick={onUnlock}
-          disabled={isBusy || unlockState === "signing" || unlockState === "verifying"}
+          disabled={
+            isBusy ||
+            unlockState === "signing" ||
+            unlockState === "verifying" ||
+            unlockState === "integrity_failed"
+          }
         >
           {isBusy ? (
             <>
@@ -230,6 +238,7 @@ export function BuyerLibrary() {
   const { address, network, signMessage } = useWallet();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [unlocked, setUnlocked] = useState<Record<string, string>>({});
+  const [integrityMap, setIntegrityMap] = useState<Record<string, IntegrityMetadata>>({});
   const [unlockStates, setUnlockStates] = useState<Record<string, UnlockState>>({});
 
   const isWrongNetwork =
@@ -262,7 +271,10 @@ export function BuyerLibrary() {
 
   const cachedData = getCachedBuyerPrompts(address);
   const prompts = query.data ?? cachedData?.prompts ?? [];
-  const isUsingCache = query.isError || !networkState.isOnline || (query.isSuccess && !query.isFetchedAfterMount);
+  const isUsingCache =
+    query.isError ||
+    !networkState.isOnline ||
+    (query.isSuccess && !query.isFetchedAfterMount);
   const freshnessTimestamp = query.dataUpdatedAt || cachedData?.timestamp || null;
 
   const setUnlockState = (id: string, state: UnlockState) =>
@@ -277,12 +289,18 @@ export function BuyerLibrary() {
       const result = await unlockPromptContent(address, id, signMessage);
       setUnlockState(id, "success");
       setUnlocked((prev) => ({ ...prev, [id]: result.plaintext }));
+      setIntegrityMap((prev) => ({ ...prev, [id]: result.integrity }));
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       if (msg.toLowerCase().includes("declined") || msg.toLowerCase().includes("rejected")) {
         setUnlockState(id, "rejected");
       } else if (msg.toLowerCase().includes("expired")) {
         setUnlockState(id, "expired");
+      } else if (
+        msg.toLowerCase().includes("integrity") ||
+        msg.toLowerCase().includes("verified")
+      ) {
+        setUnlockState(id, "integrity_failed");
       } else {
         setUnlockState(id, "failed");
       }
@@ -352,6 +370,7 @@ export function BuyerLibrary() {
             key={id}
             prompt={prompt}
             plaintext={unlocked[id]}
+            integrity={integrityMap[id]}
             unlockState={unlockStates[id] ?? "idle"}
             isBusy={busyId === id}
             onUnlock={() => void handleUnlock(prompt)}
