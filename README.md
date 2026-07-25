@@ -48,6 +48,7 @@ PromptHash Stellar addresses a concrete gap between AI workflows and blockchain 
 - Unlock flow with integrity checking against a stored content hash
 - Creator dashboard for price updates and sale activation/deactivation
 - Buyer profile for reopening previously purchased prompt licenses
+- Public sitemap endpoint for indexed active listings at /api/sitemap and /sitemap.xml
 
 ## How It Works
 

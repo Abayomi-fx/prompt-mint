@@ -16,12 +16,16 @@ import { runRestoreDrill } from "./services/restoreService";
 import { IndexerState } from "./models/IndexerState";
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
+import { securityHeaders } from "./middleware/securityHeaders";
 import { errorHandler } from "./middleware/errorHandler";
 // import { startIndexer } from "./services/indexerService"; // TODO: Update path when ready
 
 const app = express();
 
 const port = 5000;
+
+// Apply security headers to all responses
+app.use(securityHeaders);
 
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 

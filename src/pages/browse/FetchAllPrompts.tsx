@@ -297,6 +297,18 @@ const FetchAllPrompts = ({
     setCurrentPage(1);
   }, [priceRange, searchQuery, selectedCategory, selectedTag, sortBy]);
 
+  useEffect(() => {
+    if (!promptsQuery.data) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const promptId = params.get("promptId");
+    if (!promptId) return;
+
+    const match = promptsQuery.data.find((prompt) => prompt.id.toString() === promptId);
+    if (match) {
+      setSelectedPrompt(match);
+    }
+  }, [promptsQuery.data]);
   // Support shareable browse deep links: /browse?prompt=<id>
   useEffect(() => {
     const promptParam = searchParams.get("prompt");
