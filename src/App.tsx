@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { Outlet, Route, Routes } from "react-router-dom";
 import { CartProvider } from "./providers/CartProvider";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import Home from "./pages/Home";
 
 const BrowsePage = lazy(() => import("./pages/browse/page.jsx"));
@@ -11,7 +12,7 @@ const StatusPage = lazy(() => import("./pages/status/page.tsx"));
 const ModerationPage = lazy(() => import("./pages/Moderation.tsx"));
 
 const AppLayout = () => (
-  <main className="min-h-screen bg-slate-950 text-white">
+  <main className="min-h-screen bg-slate-950 text-white pb-16 sm:pb-0">
     <Outlet />
   </main>
 );
@@ -19,26 +20,84 @@ const AppLayout = () => (
 function App() {
   return (
     <CartProvider>
-      <Suspense
-        fallback={
-          <div className="flex items-center justify-center min-h-screen bg-slate-950">
-            <div className="text-white text-lg">Loading...</div>
-          </div>
-        }
-      >
-        <Routes>
-          <Route element={<AppLayout />}>
-            <Route path="/" element={<Home />} />
-            <Route path="/browse" element={<BrowsePage />} />
-            <Route path="/sell" element={<SellPage />} />
-            <Route path="/chat" element={<ChatHome />} />
-            <Route path="/profile" element={<ProfilePage />} />
-            <Route path="/status" element={<StatusPage />} />
-            <Route path="/moderation" element={<ModerationPage />} />
-            <Route path="*" element={<Home />} />
-          </Route>
-        </Routes>
-      </Suspense>
+      <ErrorBoundary routeName="Application">
+        <Suspense
+          fallback={
+            <div className="flex items-center justify-center min-h-screen bg-slate-950">
+              <div className="text-white text-lg">Loading...</div>
+            </div>
+          }
+        >
+          <Routes>
+            <Route element={<AppLayout />}>
+              <Route
+                path="/"
+                element={
+                  <ErrorBoundary routeName="Home">
+                    <Home />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/browse"
+                element={
+                  <ErrorBoundary routeName="Browse">
+                    <BrowsePage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/sell"
+                element={
+                  <ErrorBoundary routeName="Sell">
+                    <SellPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/chat"
+                element={
+                  <ErrorBoundary routeName="Chat">
+                    <ChatHome />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/profile"
+                element={
+                  <ErrorBoundary routeName="Profile">
+                    <ProfilePage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/status"
+                element={
+                  <ErrorBoundary routeName="Status">
+                    <StatusPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/moderation"
+                element={
+                  <ErrorBoundary routeName="Moderation">
+                    <ModerationPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="*"
+                element={
+                  <ErrorBoundary routeName="Not Found">
+                    <Home />
+                  </ErrorBoundary>
+                }
+              />
+            </Route>
+          </Routes>
+        </Suspense>
+      </ErrorBoundary>
     </CartProvider>
   );
 }
