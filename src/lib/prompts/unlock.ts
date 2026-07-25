@@ -1,5 +1,10 @@
 import { ERROR_MESSAGES, type ApiErrorResponse } from "@/lib/api/errorCodes";
 import { hashPromptPlaintext } from "@/lib/crypto/promptCrypto";
+import {
+  ChallengeRequestBody,
+  parseRequestBody,
+  UnlockRequestBody,
+} from "@/lib/api/requestSchemas";
 
 // eslint-disable-next-line no-unused-vars
 type SignMessageFn = (_message: string) => Promise<{ signedMessage?: string } | string>;
@@ -62,10 +67,15 @@ function extractSignedMessage(
 }
 
 async function requestChallenge(address: string, promptId: string) {
+  const parsed = parseRequestBody(ChallengeRequestBody, { address, promptId });
+  if (!parsed.success) {
+    throw new Error(ERROR_MESSAGES.MISSING_FIELDS);
+  }
+
   const response = await fetch("/api/auth/challenge", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ address, promptId }),
+    body: JSON.stringify(parsed.data),
   });
 
   if (!response.ok) {
@@ -86,10 +96,15 @@ async function requestUnlock(params: {
   address: string;
   signedMessage: string;
 }) {
+  const parsed = parseRequestBody(UnlockRequestBody, params);
+  if (!parsed.success) {
+    throw new Error(ERROR_MESSAGES.MISSING_FIELDS);
+  }
+
   const response = await fetch("/api/prompts/unlock", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
+    body: JSON.stringify(parsed.data),
   });
 
   if (!response.ok) {
