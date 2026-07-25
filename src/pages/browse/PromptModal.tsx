@@ -24,7 +24,11 @@ import {
   Hash,
   AlertTriangle,
   Info,
+  Gift,
+  Link2,
+  ShoppingCart,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { ReviewForm } from "../../components/prompts/ReviewForm";
 import { ReviewList } from "../../components/prompts/ReviewList";
 import { StarRating } from "../../components/prompts/StarRating";
@@ -36,10 +40,13 @@ import { detectNetworkMismatch } from "../../lib/wallet/networkDetection";
 import { CurrencyPrice } from "../../components/CurrencyPrice";
 import { useNetworkState } from "@/hooks/useNetworkState";
 import { useAddToCart } from "@/hooks/useAddToCart";
-import { ShoppingCart } from "lucide-react";
-import { GiftPrompt, type GiftPromptData } from "../../components/GiftPrompt";
+import { GiftPrompt } from "../../components/GiftPrompt";
 import { trackEventWithWallet } from "../../lib/analytics/track";
 import { useTrackPromptView } from "@/hooks/useRecentlyViewed";
+import {
+  buildCreatorSharePath,
+  buildPromptShareUrl,
+} from "@/lib/marketplace/shareUrls";
 
 export type BuyerStatus =
   | "IDLE"
@@ -79,6 +86,12 @@ const PromptMetadataSection: React.FC<{ itemId: string; status: BuyerStatus }> =
   if (!prompt) return null;
 
   const isPurchased = status === "PURCHASED_LOCKED" || status === "SUCCESS";
+  let creatorHref: string | null = null;
+  try {
+    creatorHref = buildCreatorSharePath(prompt.creator);
+  } catch {
+    // Invalid creator addresses stay as plain text.
+  }
 
   return (
     <div className="mb-6 space-y-4">
@@ -95,9 +108,19 @@ const PromptMetadataSection: React.FC<{ itemId: string; status: BuyerStatus }> =
             <User className="h-3 w-3 text-slate-400" />
             <p className="text-xs text-slate-400">Creator</p>
           </div>
-          <p className="text-xs font-mono text-white truncate" title={prompt.creator}>
-            {prompt.creator.slice(0, 8)}...{prompt.creator.slice(-4)}
-          </p>
+          {creatorHref ? (
+            <Link
+              to={creatorHref}
+              className="text-xs font-mono text-cyan-200 truncate hover:text-cyan-100 underline-offset-2 hover:underline"
+              title={prompt.creator}
+            >
+              {prompt.creator.slice(0, 8)}...{prompt.creator.slice(-4)}
+            </Link>
+          ) : (
+            <p className="text-xs font-mono text-white truncate" title={prompt.creator}>
+              {prompt.creator.slice(0, 8)}...{prompt.creator.slice(-4)}
+            </p>
+          )}
         </div>
 
         <div className="p-3 rounded-lg bg-white/5 border border-white/5">
@@ -414,6 +437,43 @@ export const PromptModal: React.FC<PromptModalProps> = ({
     }, 3000);
   };
 
+  const handleCopyShareLink = async () => {
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current);
+    }
+
+    let shareUrl: string;
+    try {
+      shareUrl = buildPromptShareUrl(itemId);
+    } catch (error) {
+      setCopyFeedback({
+        visible: true,
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unable to build a shareable link for this listing.",
+      });
+      copyTimeoutRef.current = setTimeout(() => {
+        setCopyFeedback((prev) => ({ ...prev, visible: false }));
+      }, 3000);
+      return;
+    }
+
+    const result = await copyToClipboard(shareUrl);
+    setCopyFeedback({
+      visible: true,
+      success: result.success,
+      message: result.success
+        ? "Link copied"
+        : result.error || "Failed to copy link",
+    });
+
+    copyTimeoutRef.current = setTimeout(() => {
+      setCopyFeedback((prev) => ({ ...prev, visible: false }));
+    }, 3000);
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -440,12 +500,31 @@ export const PromptModal: React.FC<PromptModalProps> = ({
 
         <div className="p-5 sm:p-8">
           <div className="mb-6 sm:mb-8">
-            <h2 id="prompt-modal-title" className="mb-2 text-2xl font-bold text-white">
-              Acquire License
-            </h2>
-            <p id="prompt-modal-description" className="text-sm text-slate-400">
-              Unlock high-quality prompt content via Stellar smart contract.
-            </p>
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-3 pr-10">
+              <div>
+                <h2 id="prompt-modal-title" className="mb-2 text-2xl font-bold text-white">
+                  Acquire License
+                </h2>
+                <p id="prompt-modal-description" className="text-sm text-slate-400">
+                  Unlock high-quality prompt content via Stellar smart contract.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleCopyShareLink()}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/15 bg-white/[0.03] px-3 text-xs font-semibold text-white transition-colors hover:bg-white/10"
+                aria-label="Copy shareable listing link"
+              >
+                {copyFeedback.visible &&
+                copyFeedback.success &&
+                copyFeedback.message === "Link copied" ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-300" />
+                ) : (
+                  <Link2 className="h-3.5 w-3.5" />
+                )}
+                Copy link
+              </button>
+            </div>
           </div>
 
           {/* Prompt Metadata Section */}
@@ -491,7 +570,7 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                     />
                   )}
 
-                  <div className="flex gap-3">
+                  <div className="flex flex-wrap gap-3">
                     <button
                       onClick={() => runPurchase().catch(() => {})}
                       disabled={
@@ -522,6 +601,8 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                           Add to Cart
                         </>
                       )}
+                    </button>
+                    <button
                       onClick={() => setShowGiftModal(true)}
                       disabled={
                         !wallet?.address ||

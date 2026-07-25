@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   useQueries,
   useQuery,
@@ -35,6 +36,7 @@ import { stroopsToXlmString } from "@/lib/stellar/format";
 import { PromptCard } from "./PromptCard";
 import { PromptModal } from "./PromptModal";
 import { invalidateAllPromptQueries } from "@/hooks/useContractSync";
+import { parsePromptIdParam } from "@/lib/marketplace/shareUrls";
 
 const ITEMS_PER_PAGE = 9;
 const ENABLE_INFINITE_SCROLL = true;
@@ -68,9 +70,11 @@ const FetchAllPrompts = ({
   const queryClient = useQueryClient();
   const { address } = useWallet();
   const networkState = useNetworkState();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedPrompt, setSelectedPrompt] = useState<PromptRecord | null>(
     null,
   );
+  const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const [savingPromptId, setSavingPromptId] = useState<string | null>(null);
@@ -293,6 +297,56 @@ const FetchAllPrompts = ({
     setCurrentPage(1);
   }, [priceRange, searchQuery, selectedCategory, selectedTag, sortBy]);
 
+  // Support shareable browse deep links: /browse?prompt=<id>
+  useEffect(() => {
+    const promptParam = searchParams.get("prompt");
+    if (!promptParam) {
+      setDeepLinkError(null);
+      return;
+    }
+
+    const parsed = parsePromptIdParam(promptParam);
+    if (!parsed.ok) {
+      setDeepLinkError(parsed.error);
+      setSelectedPrompt(null);
+      return;
+    }
+
+    const prompts = promptsQuery.data;
+    if (!prompts) {
+      return;
+    }
+
+    const match = prompts.find((prompt) => prompt.id.toString() === parsed.promptId);
+    if (!match) {
+      setDeepLinkError(
+        `Prompt #${parsed.promptId} was not found in the current marketplace catalog.`,
+      );
+      setSelectedPrompt(null);
+      return;
+    }
+
+    setDeepLinkError(null);
+    setSelectedPrompt(match);
+  }, [promptsQuery.data, searchParams]);
+
+  const openPromptModal = (prompt: PromptRecord) => {
+    setDeepLinkError(null);
+    setSelectedPrompt(prompt);
+    const next = new URLSearchParams(searchParams);
+    next.set("prompt", prompt.id.toString());
+    setSearchParams(next, { replace: true });
+  };
+
+  const closePromptModal = () => {
+    setSelectedPrompt(null);
+    if (searchParams.has("prompt")) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("prompt");
+      setSearchParams(next, { replace: true });
+    }
+  };
+
   if (promptsQuery.isLoading) {
     return (
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
@@ -356,6 +410,15 @@ const FetchAllPrompts = ({
         </div>
       )}
 
+      {deepLinkError && (
+        <div
+          role="alert"
+          className="mb-8 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200"
+        >
+          {deepLinkError}
+        </div>
+      )}
+
       {filteredPrompts.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-center space-y-4">
           <div className="p-4 rounded-full bg-slate-900 border border-white/5">
@@ -377,7 +440,7 @@ const FetchAllPrompts = ({
                 key={prompt.id.toString()}
                 prompt={prompt}
                 hasAccess={accessMap.get(prompt.id.toString()) ?? false}
-                openModal={setSelectedPrompt}
+                openModal={openPromptModal}
                 isSaved={savedPromptIds.has(prompt.id.toString())}
                 isSaving={savingPromptId === prompt.id.toString()}
                 onToggleSave={handleToggleSave}
@@ -440,7 +503,7 @@ const FetchAllPrompts = ({
         <PromptModal
           itemId={selectedPrompt.id.toString()}
           isOpen={!!selectedPrompt}
-          onClose={() => setSelectedPrompt(null)}
+          onClose={closePromptModal}
           onRefresh={() => invalidateAllPromptQueries(queryClient)}
         />
       )}
