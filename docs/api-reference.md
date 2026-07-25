@@ -123,7 +123,42 @@ Marks a prompt as archived and removes it from active workflow views.
 
 Returns prompts tied to purchases for the buyer wallet.
 
+### Buyer transaction history
+
+`GET /api/prompts/buyer/:walletAddress/transactions`
+
+Returns indexed and legacy purchase rows for the buyer wallet. Invalid addresses
+return `400` with `INVALID_WALLET`. See [transaction-history.md](./transaction-history.md).
+
+### Creator transaction history
+
+`GET /api/prompts/creator/:walletAddress/transactions`
+
+Returns sales where the wallet is the listing creator.
+
 Example response:
+
+```json
+{
+  "walletAddress": "g...",
+  "role": "buyer",
+  "transactions": [
+    {
+      "id": "66a1...",
+      "kind": "purchase",
+      "promptOnChainId": "42",
+      "promptTitle": "Launch Strategy Pack",
+      "buyerWallet": "g...",
+      "creatorWallet": "g...",
+      "priceStroops": 25000000,
+      "txHash": "tx_123",
+      "occurredAt": "2026-05-28T10:15:30.000Z"
+    }
+  ]
+}
+```
+
+### Get owned prompts (example response)
 
 ```json
 {

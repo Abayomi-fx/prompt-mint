@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { CreatorDashboard } from "@/components/sell/CreatorDashboard";
+import { TransactionHistoryPanel } from "@/components/dashboard/TransactionHistoryPanel";
 import { useWallet } from "@/hooks/useWallet";
 import { browserStellarConfig } from "@/lib/stellar/browserConfig";
 import {
@@ -237,6 +238,16 @@ const MyPrompts = ({ onCreateNew: _onCreateNew }: MyPromptsProps) => {
         isError={createdQuery.isError}
         onRefresh={refreshPromptLists}
       />
+
+      {address ? (
+        <TransactionHistoryPanel
+          walletAddress={address}
+          role="creator"
+          title="Sales history"
+          description="Recent purchases of your listings, sourced from indexed on-chain events and recorded license claims."
+          emptyMessage="No sales recorded yet. When buyers purchase your prompts, transactions appear here."
+        />
+      ) : null}
 
       {statusMessage ? (
         <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">

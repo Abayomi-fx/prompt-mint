@@ -6,6 +6,7 @@ import LicenseTerm from "../models/LicenseTerm";
 import User from "../models/User";
 import { AppError } from "../lib/AppError";
 import { asyncRoute } from "../lib/asyncRoute";
+import { recordMarketplaceTransaction } from "../services/transactionHistoryService";
 
 export const PostPromptUpdate = asyncRoute(async (req, res) => {
   await connectDb();
@@ -56,7 +57,7 @@ export const RecordPurchase = asyncRoute(async (req, res) => {
     throw new AppError("promptId and buyerWallet are required.", 400, "MISSING_FIELDS");
   }
 
-  const prompt = await Prompt.findById(promptId);
+  const prompt = await Prompt.findById(promptId).populate("owner", "walletAddress");
   if (!prompt) throw new AppError("Prompt not found.", 404, "NOT_FOUND");
 
   const existing = await Purchase.findOne({
@@ -68,55 +69,40 @@ export const RecordPurchase = asyncRoute(async (req, res) => {
     res.status(200).json({ message: "Already purchased.", versionIndex: existing.versionIndex });
     return;
   }
-};
 
-export const RecordPurchase = async (req: Request, res: Response): Promise<Response> => {
-  try {
-    await connectDb();
-    const { promptId, buyerWallet, txHash } = req.body;
-
-    if (!promptId || !buyerWallet) {
-      return res.status(400).json({ error: "promptId and buyerWallet are required." });
-    }
-
-    const prompt = await Prompt.findById(promptId);
-    if (!prompt) return res.status(404).json({ error: "Prompt not found." });
-
-    const existing = await Purchase.findOne({
-      promptId,
-      buyerWallet: buyerWallet.toLowerCase(),
-    });
-
-    if (existing) {
-      return res.status(200).json({ message: "Already purchased.", versionIndex: existing.versionIndex });
-    }
-
-    const termsVersion = prompt.termsVersion ?? 1;
-    const licenseTerm = await LicenseTerm.findOne({ version: termsVersion });
-
-    const purchase = await Purchase.create({
-      promptId,
-      buyerWallet: buyerWallet.toLowerCase(),
-      versionIndex: prompt.currentVersionIndex ?? 1,
-      txHash: txHash ?? "",
-      termsSnapshot: {
-        termsVersion,
-        termsTitle: licenseTerm?.title ?? "Standard License",
-        termsContent: licenseTerm?.content ?? "Standard marketplace license terms.",
-        acceptedAt: new Date(),
-      },
-    });
-
-    return res.status(201).json({ message: "Purchase recorded.", versionIndex: purchase.versionIndex });
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  const termsVersion = prompt.termsVersion ?? 1;
+  const licenseTerm = await LicenseTerm.findOne({ version: termsVersion });
 
   const purchase = await Purchase.create({
     promptId,
     buyerWallet: buyerWallet.toLowerCase(),
     versionIndex: prompt.currentVersionIndex ?? 1,
     txHash: txHash ?? "",
+    termsSnapshot: {
+      termsVersion,
+      termsTitle: licenseTerm?.title ?? "Standard License",
+      termsContent: licenseTerm?.content ?? "Standard marketplace license terms.",
+      acceptedAt: new Date(),
+    },
   });
+
+  const ownerWallet =
+    prompt.owner && typeof prompt.owner === "object" && "walletAddress" in prompt.owner
+      ? String((prompt.owner as { walletAddress?: string }).walletAddress ?? "")
+      : "";
+
+  if (ownerWallet) {
+    await recordMarketplaceTransaction({
+      promptOnChainId: prompt.onChainId ?? String(prompt._id),
+      promptMongoId: String(prompt._id),
+      promptTitle: prompt.title,
+      buyerWallet: buyerWallet.toLowerCase(),
+      creatorWallet: ownerWallet,
+      priceStroops: Math.round(Number(prompt.price) * 10_000_000),
+      txHash: txHash ?? "",
+      occurredAt: purchase.createdAt ?? new Date(),
+    });
+  }
 
   res.status(201).json({ message: "Purchase recorded.", versionIndex: purchase.versionIndex });
 });

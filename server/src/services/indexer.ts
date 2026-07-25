@@ -4,6 +4,7 @@ import Prompt from "../models/Prompt";
 import User from "../models/User";
 import { IndexerState } from "../models/IndexerState";
 import { scanForSimilarity } from "./similarityDetection";
+import { recordMarketplaceTransaction } from "./transactionHistoryService";
 
 const CONTRACT_ID = process.env.PUBLIC_PROMPT_HASH_CONTRACT_ID;
 const rpc = new Server(process.env.PUBLIC_STELLAR_RPC_URL!, { timeout: 15_000 });
@@ -99,11 +100,32 @@ async function processEvent(event: any) {
     }
 
     case "PromptPurchased": {
-      const { prompt_id } = data;
+      const {
+        prompt_id,
+        buyer,
+        creator,
+        price_stroops,
+      } = data;
       await Prompt.findOneAndUpdate(
         { onChainId: prompt_id.toString() },
         { $inc: { salesCount: 1 } },
       );
+
+      const promptDoc = await Prompt.findOne({ onChainId: prompt_id.toString() })
+        .select("_id title")
+        .lean();
+
+      await recordMarketplaceTransaction({
+        promptOnChainId: prompt_id.toString(),
+        promptMongoId: promptDoc?._id ? String(promptDoc._id) : "",
+        promptTitle: promptDoc?.title ?? "Prompt",
+        buyerWallet: String(buyer),
+        creatorWallet: String(creator),
+        priceStroops: Number(price_stroops),
+        txHash: event.txHash ?? "",
+        ledger: event.ledger,
+        occurredAt: new Date(),
+      });
       break;
     }
 

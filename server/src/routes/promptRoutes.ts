@@ -10,6 +10,10 @@ import {
   PublishPrompt,
   ArchivePrompt,
 } from "../controllers/controllers";
+import {
+  GetBuyerTransactionHistory,
+  GetCreatorTransactionHistory,
+} from "../controllers/transactionHistoryController";
 
 export const promptRouter = express.Router();
 
@@ -18,7 +22,9 @@ promptRouter.route("/").post(CreatePrompt);
 promptRouter.route("/").get(GetPrompts);
 
 promptRouter.get("/buyer/:walletAddress/owned", GetOwnedPrompts);
+promptRouter.get("/buyer/:walletAddress/transactions", GetBuyerTransactionHistory);
 promptRouter.get("/buyer/:walletAddress/saved", GetSavedPrompts);
+promptRouter.get("/creator/:walletAddress/transactions", GetCreatorTransactionHistory);
 promptRouter.post("/buyer/save", SavePrompt);
 promptRouter.post("/buyer/unsave", UnsavePrompt);
 promptRouter.get("/creator/:walletAddress/drafts", GetDraftPrompts);
