@@ -11,6 +11,12 @@ import {
   Server,
   assembleTransaction,
 } from "@stellar/stellar-sdk/rpc";
+import { getCircuitBreaker } from "../observability/circuitBreaker";
+
+const stellarRpcBreaker = getCircuitBreaker("stellar-rpc", {
+  failureThreshold: 5,
+  resetTimeoutMs: 20_000,
+});
 
 export interface StellarNetworkConfig {
   rpcUrl: string;
@@ -60,7 +66,7 @@ export async function simulateContractCall(
   args: xdr.ScVal[] = [],
 ) {
   const server = getRpcServer(config);
-  const account = await server.getAccount(source);
+  const account = await stellarRpcBreaker.execute(() => server.getAccount(source));
   const transaction = new TransactionBuilder(account, {
     fee: BASE_FEE,
     networkPassphrase: config.networkPassphrase,
@@ -69,7 +75,7 @@ export async function simulateContractCall(
     .setTimeout(30)
     .build();
 
-  const simulation = await server.simulateTransaction(transaction);
+  const simulation = await stellarRpcBreaker.execute(() => server.simulateTransaction(transaction));
   if (Api.isSimulationError(simulation)) {
     throw new Error(simulation.error);
   }
@@ -149,7 +155,9 @@ export async function submitPreparedTransaction(
     config.networkPassphrase,
   );
 
-  const response = await prepared.server.sendTransaction(signedTransaction);
+  const response = await stellarRpcBreaker.execute(() =>
+    prepared.server.sendTransaction(signedTransaction),
+  );
   if (response.status === "TRY_AGAIN_LATER") {
     throw new Error("The Stellar RPC asked the client to retry later.");
   }
@@ -161,10 +169,12 @@ export async function submitPreparedTransaction(
     );
   }
 
-  const result = await prepared.server.pollTransaction(response.hash, {
-    attempts: 20,
-    sleepStrategy: () => 1_000,
-  });
+  const result = await stellarRpcBreaker.execute(() =>
+    prepared.server.pollTransaction(response.hash, {
+      attempts: 20,
+      sleepStrategy: () => 1_000,
+    }),
+  );
 
   if (result.status === Api.GetTransactionStatus.SUCCESS) {
     return result;

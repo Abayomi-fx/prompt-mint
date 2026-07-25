@@ -9,8 +9,14 @@ import {
   validateListingMetadata,
 } from "../services/listingValidation";
 import { cacheGet, cacheSet, cacheDel, cacheDelPattern, CACHE_KEYS } from "../services/cacheService";
+import { getCircuitBreaker, CircuitBreakerOpenError } from "../services/circuitBreaker";
 
 const API_BASE_URL = "https://secret-ai-gateway.onrender.com";
+
+const improveProxyBreaker = getCircuitBreaker("ai-improve-gateway", {
+  failureThreshold: 5,
+  resetTimeoutMs: 30_000,
+});
 
 /* IMPROVE PROXY CONTROLLERS */
 
@@ -23,14 +29,17 @@ export const ImproveProxy = async (
 
     console.log("Improve prompt request: ", promptText);
 
-    const response = await fetch(`${API_BASE_URL}/api/improve-prompt`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "text/plain",
-        Accept: "application/json",
-      },
-      body: promptText,
-    });
+    const response = await improveProxyBreaker.execute(() =>
+      fetch(`${API_BASE_URL}/api/improve-prompt`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain",
+          Accept: "application/json",
+        },
+        body: promptText,
+        signal: AbortSignal.timeout(10_000),
+      }),
+    );
 
     // Get the response data
     const responseData = await response.json().catch(() => {});
@@ -50,12 +59,20 @@ export const ImproveProxy = async (
 
     return res.json(responseData);
   } catch (err) {
+    if (err instanceof CircuitBreakerOpenError) {
+      console.error("Improve-proxy circuit breaker is open:", err.message);
+      return res.status(503).json({
+        error: "Service Unavailable",
+        message: "The prompt improvement service is currently degraded. Please try again shortly.",
+      });
+    }
+
+    const isAbort = err instanceof Error && err.name === "AbortError";
     console.error("Error in improve-proxy:", err);
-    return res.status(500).json({
-      error: "Internal Server Error",
+    return res.status(isAbort ? 504 : 500).json({
+      error: isAbort ? "Gateway Timeout" : "Internal Server Error",
       message: err instanceof Error ? err.message : String(err),
     });
-    // { status: 500 }
   }
 };
 
