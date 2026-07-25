@@ -245,13 +245,13 @@ export const PromptModal: React.FC<PromptModalProps> = ({
   const modalRef = useRef<HTMLDivElement>(null);
   const lastActiveElementRef = useRef<HTMLElement | null>(null);
 
-  // Fetch prompt data for gift modal
+  // Fetch prompt data for gift modal and OG metadata generation
   const { data: promptData } = useQuery({
     queryKey: ["prompt-detail", itemId],
     queryFn: async () => {
       return await PromptHashClient.getPrompt(browserStellarConfig, BigInt(itemId));
     },
-    enabled: isOpen && showGiftModal,
+    enabled: isOpen,
   });
   // Track this prompt view in recently viewed (privacy-controlled)
   useTrackPromptView(wallet?.address ?? null, itemId, isOpen);
@@ -477,9 +477,21 @@ export const PromptModal: React.FC<PromptModalProps> = ({
 
   if (!isOpen) return null;
 
+  // Prepare listing metadata for OG tags: only public fields (not gated content)
+  const listingMetadata =
+    promptData && promptData.active
+      ? {
+          title: promptData.title,
+          description: promptData.previewText, // public teaser, not gated prompt body
+          imageUrl: promptData.imageUrl,
+          creator: promptData.creator,
+          category: promptData.category,
+        }
+      : null;
+
   return (
     <>
-      <SEOHead promptId={itemId} />
+      <SEOHead promptId={itemId} listingMetadata={listingMetadata} />
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-md sm:p-4">
       <div
         ref={modalRef}

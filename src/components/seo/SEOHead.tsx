@@ -5,16 +5,68 @@ import {
   resolveCanonicalUrl,
 } from "../../lib/seo/robotsCanonical";
 
+/**
+ * Represents public listing metadata suitable for Open Graph and Twitter Card tags.
+ * This interface strictly contains only fields intended for public discovery—
+ * no gated/paid content fields.
+ */
+export interface PublicListingMetadata {
+  title: string;
+  description?: string; // public teaser/preview, NOT the full/gated prompt body
+  imageUrl?: string; // listing thumbnail/cover image
+  creator?: string; // creator wallet address (already public in marketplace)
+  category?: string;
+}
+
 export interface SEOHeadProps {
   promptId?: string | number;
   config?: Partial<SEOConfig> | null;
   origin?: string;
+  /** Optional public listing metadata for dynamic OG tags. If not provided, fallback to generic tags. */
+  listingMetadata?: PublicListingMetadata | null;
+}
+
+/**
+ * Creates a meta tag element and appends it to the document head if it doesn't exist.
+ */
+function getOrCreateMetaTag(
+  property: string,
+  attribute: "property" | "name" = "property"
+): HTMLMetaElement {
+  const selector =
+    attribute === "property"
+      ? `meta[property='${property}']`
+      : `meta[name='${property}']`;
+  let meta = document.querySelector<HTMLMetaElement>(selector);
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.setAttribute(attribute, property);
+    document.head.appendChild(meta);
+  }
+  return meta;
+}
+
+/**
+ * Updates or creates an Open Graph meta tag.
+ */
+function updateOGTag(property: string, content: string): void {
+  const meta = getOrCreateMetaTag(property);
+  meta.setAttribute("content", content);
+}
+
+/**
+ * Updates or creates a Twitter Card meta tag.
+ */
+function updateTwitterTag(name: string, content: string): void {
+  const meta = getOrCreateMetaTag(name, "name");
+  meta.setAttribute("content", content);
 }
 
 export const SEOHead: React.FC<SEOHeadProps> = ({
   promptId,
   config,
   origin,
+  listingMetadata,
 }) => {
   const robotsContent = formatRobotsMeta(config);
 
@@ -27,6 +79,19 @@ export const SEOHead: React.FC<SEOHeadProps> = ({
     : config?.canonicalUrl
     ? resolveCanonicalUrl("", config.canonicalUrl, effectiveOrigin)
     : effectiveOrigin;
+
+  // Default OG tags when no listing metadata is provided
+  const defaultOGTitle = "Prompt Mint";
+  const defaultOGDescription = "Discover and buy AI prompts on the Stellar blockchain";
+  const defaultOGImage = ""; // Site-wide default if any; can be empty
+  const defaultOGType = "website";
+
+  // Determine effective metadata: use listing metadata if available, otherwise fallback to defaults
+  const ogTitle = listingMetadata?.title || defaultOGTitle;
+  const ogDescription =
+    listingMetadata?.description || defaultOGDescription;
+  const ogImage = listingMetadata?.imageUrl || defaultOGImage;
+  const ogType = "product"; // Listings are products
 
   useEffect(() => {
     if (typeof document === "undefined") return;
@@ -58,15 +123,27 @@ export const SEOHead: React.FC<SEOHeadProps> = ({
     }
     canonicalLink.setAttribute("href", canonicalUrl);
 
-    // Update <meta property="og:url">
-    let ogUrlMeta = document.querySelector<HTMLMetaElement>("meta[property='og:url']");
-    if (!ogUrlMeta) {
-      ogUrlMeta = document.createElement("meta");
-      ogUrlMeta.setAttribute("property", "og:url");
-      document.head.appendChild(ogUrlMeta);
+    // Update Open Graph tags
+    updateOGTag("og:url", canonicalUrl);
+    updateOGTag("og:title", ogTitle);
+    updateOGTag("og:description", ogDescription);
+    updateOGTag("og:type", ogType);
+    
+    // Update og:image only if one is provided to avoid invalid/empty image meta tags
+    if (ogImage) {
+      updateOGTag("og:image", ogImage);
     }
-    ogUrlMeta.setAttribute("content", canonicalUrl);
-  }, [robotsContent, canonicalUrl]);
+
+    // Update Twitter Card tags
+    updateTwitterTag("twitter:card", "summary_large_image");
+    updateTwitterTag("twitter:title", ogTitle);
+    updateTwitterTag("twitter:description", ogDescription);
+    
+    // Update twitter:image only if one is provided
+    if (ogImage) {
+      updateTwitterTag("twitter:image", ogImage);
+    }
+  }, [robotsContent, canonicalUrl, ogTitle, ogDescription, ogImage, ogType]);
 
   return null;
 };

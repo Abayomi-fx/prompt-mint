@@ -12,6 +12,7 @@ import {
   buildPromptShareUrl,
   parsePromptIdParam,
 } from "@/lib/marketplace/shareUrls";
+import { SEOHead } from "@/components/seo/SEOHead";
 
 export default function PromptDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -33,9 +34,22 @@ export default function PromptDetailPage() {
     retry: false,
   });
 
+  // Prepare listing metadata for OG tags: only public fields (not gated content)
+  const listingMetadata =
+    promptQuery.data && promptQuery.data.active
+      ? {
+          title: promptQuery.data.title,
+          description: promptQuery.data.previewText, // public teaser, not gated prompt body
+          imageUrl: promptQuery.data.imageUrl,
+          creator: promptQuery.data.creator,
+          category: promptQuery.data.category,
+        }
+      : null;
+
   if (!parsed.ok) {
     return (
       <div className="min-h-screen bg-slate-950 text-white">
+        <SEOHead />
         <Navigation />
         <main className="mx-auto flex max-w-2xl flex-col items-center px-4 py-20 text-center">
           <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-500/10 text-rose-300">
@@ -58,6 +72,7 @@ export default function PromptDetailPage() {
   if (promptQuery.isLoading) {
     return (
       <div className="min-h-screen bg-slate-950 text-white">
+        <SEOHead promptId={parsed.promptId} />
         <Navigation />
         <main className="flex min-h-[50vh] items-center justify-center">
           <div className="flex items-center gap-3 text-slate-300">
@@ -78,6 +93,7 @@ export default function PromptDetailPage() {
 
     return (
       <div className="min-h-screen bg-slate-950 text-white">
+        <SEOHead promptId={parsed.promptId} />
         <Navigation />
         <main className="mx-auto flex max-w-2xl flex-col items-center px-4 py-20 text-center">
           <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-200">
@@ -105,6 +121,7 @@ export default function PromptDetailPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
+      <SEOHead promptId={parsed.promptId} listingMetadata={listingMetadata} />
       <Navigation />
       <main className="mx-auto max-w-3xl space-y-4 px-4 py-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
