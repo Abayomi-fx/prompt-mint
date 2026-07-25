@@ -13,6 +13,7 @@ const rpc = new Server(process.env.PUBLIC_STELLAR_RPC_URL!, { timeout: 15_000 })
  * Main entry point to start the background indexing process.
  */
 export async function startIndexer() {
+  const INDEXER_START_LEDGER = parseInt(process.env.INDEXER_START_LEDGER || "0", 10);
   const state = await IndexerState.findOneAndUpdate(
     { key: "prompt_hash_contract" },
     { $setOnInsert: { lastIndexedLedger: 0 } },
@@ -23,26 +24,34 @@ export async function startIndexer() {
   setInterval(async () => {
     try {
       const latestLedger = await rpc.getLatestLedger();
-      const startLedger = (state.lastIndexedLedger || 0) + 1;
+      const startLedger = state.lastIndexedLedger
+        ? state.lastIndexedLedger + 1
+        : Math.max(1, INDEXER_START_LEDGER);
 
-      // Only fetch if there are new ledgers to process
       if (startLedger > latestLedger.sequence) return;
 
-      const response = await rpc.getEvents({
-        startLedger,
-        filters: [
-          {
-            type: "contract",
-            contractIds: [CONTRACT_ID!],
-          },
-        ],
-      });
+      const BATCH_SIZE = 2000;
+      let currentLedger = startLedger;
 
-      for (const event of response.events) {
-        await processEvent(event);
+      while (currentLedger <= latestLedger.sequence) {
+        const batchEnd = Math.min(currentLedger + BATCH_SIZE - 1, latestLedger.sequence);
+        const response = await rpc.getEvents({
+          startLedger: currentLedger,
+          filters: [
+            {
+              type: "contract",
+              contractIds: [CONTRACT_ID!],
+            },
+          ],
+        });
+
+        for (const event of response.events) {
+          await processEvent(event);
+        }
+
+        currentLedger = batchEnd + 1;
       }
 
-      // Update the cursor to the last processed ledger
       state.lastIndexedLedger = latestLedger.sequence;
       await state.save();
     } catch (err) {
