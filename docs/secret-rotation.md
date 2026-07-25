@@ -453,5 +453,6 @@ rotated_at: u64
 ## Related Documentation
 
 - [Security Model](./security-model.md) - Overall security architecture
+- [Unlock key recovery](./operations/unlock-key-recovery.md) - Unlock private key backup and recovery
 - [API Reference](./api-reference.md) - Challenge-response protocol
 - [Operations Runbook](./operations/runbook.md) - Operational procedures
