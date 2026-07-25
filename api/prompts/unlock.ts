@@ -15,6 +15,7 @@ import {
   type PromptHashConfig,
 } from "../../src/lib/stellar/promptHashClient";
 import { withObservability } from "../../src/lib/observability/wrapper";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 import { checkRateLimit } from "../../src/lib/observability/rateLimiter";
 import { checkReplayProtection } from "../../src/lib/observability/replayProtection";
 import { metrics } from "../../src/lib/observability/metrics";
@@ -337,4 +338,4 @@ async function handler(req: any, res: any) {
   }
 }
 
-export default withObservability(handler, "prompts/unlock");
+export default withObservability(withBodySizeLimit(handler), "prompts/unlock");

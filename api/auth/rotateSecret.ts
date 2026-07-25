@@ -9,6 +9,7 @@
 import { randomBytes } from "crypto";
 import { isPlaceholder } from "../../src/lib/validation/envValidator";
 import { isValidAdminToken } from "../../src/lib/auth/adminToken";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 
 interface SecretRotationConfig {
   currentSecret: string;
@@ -141,7 +142,7 @@ export function cleanupExpiredSecrets(): void {
 }
 
 // HTTP endpoint handler for manual rotation
-export default async function handler(req: any, res: any) {
+async function handler(req: any, res: any) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
@@ -168,3 +169,5 @@ export default async function handler(req: any, res: any) {
     res.status(500).json({ error: message });
   }
 }
+
+export default withBodySizeLimit(handler, 4 * 1024);

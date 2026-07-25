@@ -1,4 +1,5 @@
 import { withObservability } from "../../src/lib/observability/wrapper";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 import connectDb from "../../server/src/db/connectDb";
 import Prompt from "../../server/src/models/Prompt";
 import PromptVersion from "../../server/src/models/PromptVersion";
@@ -76,4 +77,7 @@ async function handler(req: any, res: any) {
   res.status(405).json({ error: "Method not allowed." });
 }
 
-export default withObservability(handler, "prompts/version");
+// A version's `content` field can legitimately hold a full prompt body (up
+// to LISTING_LIMITS.content, ~50k characters), so this endpoint gets a
+// larger cap than the default.
+export default withObservability(withBodySizeLimit(handler, 200 * 1024), "prompts/version");

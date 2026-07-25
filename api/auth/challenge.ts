@@ -1,5 +1,6 @@
 import { createChallengeToken } from "../../src/lib/auth/challenge";
 import { withObservability } from "../../src/lib/observability/wrapper";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 import { checkRateLimit } from "../../src/lib/observability/rateLimiter";
 import { metrics } from "../../src/lib/observability/metrics";
 import { recordAuditEvent } from "../../server/src/services/auditTrail";
@@ -79,4 +80,4 @@ async function handler(req: any, res: any) {
   res.status(200).json(challenge);
 }
 
-export default withObservability(handler, "auth/challenge");
+export default withObservability(withBodySizeLimit(handler), "auth/challenge");

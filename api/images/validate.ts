@@ -1,4 +1,5 @@
 import { withObservability } from "../../src/lib/observability/wrapper";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 import { apiError, ErrorCode } from "../../src/lib/api/errorCodes";
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB
@@ -48,4 +49,4 @@ async function handler(req: any, res: any) {
   }
 }
 
-export default withObservability(handler, "image_validate");
+export default withObservability(withBodySizeLimit(handler, 8 * 1024), "image_validate");

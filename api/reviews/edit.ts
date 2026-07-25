@@ -1,4 +1,5 @@
 import { hasAccess, type PromptHashConfig } from "../../src/lib/stellar/promptHashClient";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 import { findReview, updateReview } from "./data";
 
 interface EditReviewRequest {
@@ -21,7 +22,7 @@ function getServerConfig(): PromptHashConfig {
   };
 }
 
-export default async function handler(req: any, res: any) {
+async function handler(req: any, res: any) {
   if (req.method !== "PUT") return res.status(405).json({ error: "Method not allowed" });
   const { promptId, reviewId, userAddress, rating, text }: EditReviewRequest = req.body ?? {};
   if (!promptId || !reviewId || !userAddress || !Number.isInteger(rating) || !text) {
@@ -53,3 +54,5 @@ export default async function handler(req: any, res: any) {
     return res.status(500).json({ error: message });
   }
 }
+
+export default withBodySizeLimit(handler);
