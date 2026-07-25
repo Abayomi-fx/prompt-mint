@@ -155,6 +155,26 @@ describe("unlock API integrity checks", () => {
     expect(responseData.contentHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("includes integrity metadata with status 'verified' on a successful unlock", async () => {
+    const { buyer, promptId, challenge, signedMessage, contentHash } =
+      await setupUnlockFixture();
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(200);
+    expect(responseData.integrity).toBeDefined();
+    expect(responseData.integrity.status).toBe("verified");
+    // computedHash must match the hash returned in contentHash
+    expect(responseData.integrity.computedHash).toBe(contentHash);
+    // storedHash must be the on-chain value provided by getPrompt
+    expect(responseData.integrity.storedHash).toBe(contentHash);
+  });
+
   it("fails safely when the recomputed hash does not match", async () => {
     const { buyer, promptId, challenge, signedMessage } =
       await setupUnlockFixture("Matching plaintext body.");
@@ -168,10 +188,81 @@ describe("unlock API integrity checks", () => {
       signedMessage,
     });
 
-    expect(statusCode).toBe(500);
-    expect(responseData.code).toBe(ErrorCode.INTEGRITY_FAILURE);
+    expect(statusCode).toBe(200);
     expect(responseData.plaintext).toBeUndefined();
-    expect(responseData.error).toBe("Prompt integrity check failed.");
+    expect(responseData.integrity).toBeDefined();
+    expect(responseData.integrity.status).toBe("failed");
+    // Diagnostic webhook should be emitted for integrity failures
+    const { dispatchEvent } = await import("../../server/src/services/webhookDispatcher");
+    expect(dispatchEvent).toHaveBeenCalled();
+  });
+
+  it("redacts plaintext and emits a non-sensitive diagnostic payload on hash mismatch", async () => {
+    const { buyer, promptId, challenge, signedMessage } =
+      await setupUnlockFixture("Tampered prompt body.");
+
+    const storedHash = "a".repeat(64);
+    const recomputedHash = "c".repeat(64);
+    hashPromptPlaintextMock.mockResolvedValue(recomputedHash);
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(200);
+    // Plaintext must never appear in the response when integrity fails
+    expect(responseData.plaintext).toBeUndefined();
+    // The diagnostic should include hashes but not the decrypted content
+    expect(responseData.integrity.computedHash).toBe(recomputedHash);
+    expect(responseData.integrity.storedHash).toBe(storedHash);
+
+    const { dispatchEvent } = await import("../../server/src/services/webhookDispatcher");
+    const [, , dispatchedPayload] = (dispatchEvent as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(dispatchedPayload.computedHash).toBe(recomputedHash);
+    expect(dispatchedPayload.storedHash).toBe(storedHash);
+    // The raw plaintext must not appear anywhere in the dispatched payload
+    expect(JSON.stringify(dispatchedPayload)).not.toContain("Tampered prompt body.");
+  });
+
+  it("marks integrity as 'failed' when content was modified after the buyer's version was committed (stale-version scenario)", async () => {
+    // Simulates a creator pushing a new version whose hash differs from the one
+    // stored at purchase time. The decrypted plaintext no longer matches the
+    // on-chain hash the buyer originally paid for.
+    const originalBuyerContent = "Original prompt — v1 content the buyer purchased.";
+    const { buyer, promptId, challenge, signedMessage } =
+      await setupUnlockFixture(originalBuyerContent);
+
+    const onChainHashAtPurchase = "a".repeat(64); // stored on-chain at listing time
+    const hashOfCurrentDecryptedContent = "f".repeat(64); // hash of whatever was decrypted now
+    // Mismatch: what decrypts now != what was committed on-chain
+    hashPromptPlaintextMock.mockResolvedValue(hashOfCurrentDecryptedContent);
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(200);
+    expect(responseData.plaintext).toBeUndefined();
+    expect(responseData.integrity.status).toBe("failed");
+    expect(responseData.integrity.computedHash).toBe(hashOfCurrentDecryptedContent);
+    expect(responseData.integrity.storedHash).toBe(onChainHashAtPurchase);
+
+    const { dispatchEvent } = await import("../../server/src/services/webhookDispatcher");
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      expect.any(String),
+      "PromptIntegrityViolation",
+      expect.objectContaining({
+        promptId: promptId,
+        computedHash: hashOfCurrentDecryptedContent,
+        storedHash: onChainHashAtPurchase,
+      }),
+    );
   });
 
   it("does not expose decrypted content in generic error responses", async () => {
@@ -191,6 +282,46 @@ describe("unlock API integrity checks", () => {
     expect(responseData.code).toBe(ErrorCode.TEMPORARY_FAILURE);
     expect(responseData.plaintext).toBeUndefined();
     expect(String(responseData.error)).not.toContain("Secret prompt");
+  });
+
+  it("returns plaintext and marks integrity unavailable when no stored hash is present", async () => {
+    const { buyer, promptId, challenge, signedMessage, plaintext } =
+      await setupUnlockFixture();
+
+    // Simulate a prompt record without a stored contentHash (legacy listing)
+    const { getPrompt } = await import("../../src/lib/stellar/promptHashClient");
+    getPrompt.mockResolvedValueOnce({
+      id: 42n,
+      creator: "GCREATORACCOUNT123",
+      title: "Test prompt",
+      encryptedPrompt: "encrypted",
+      encryptionIv: "iv",
+      wrappedKey: "wrapped",
+      // contentHash deliberately absent
+    });
+
+    const { statusCode, responseData } = await invokeUnlock({
+      token: challenge.token,
+      promptId,
+      address: buyer.publicKey(),
+      signedMessage,
+    });
+
+    expect(statusCode).toBe(200);
+    expect(responseData.plaintext).toBe(plaintext);
+    expect(responseData.integrity).toBeDefined();
+    expect(responseData.integrity.status).toBe("unavailable");
+    // storedHash must be null when no hash was committed on-chain
+    expect(responseData.integrity.storedHash).toBeNull();
+    // computedHash is still populated so the buyer can see what was decrypted
+    expect(responseData.integrity.computedHash).toMatch(/^[0-9a-f]+$/);
+    // No diagnostic webhook should fire for the unavailable case
+    const { dispatchEvent } = await import("../../server/src/services/webhookDispatcher");
+    expect(dispatchEvent).not.toHaveBeenCalledWith(
+      expect.anything(),
+      "PromptIntegrityViolation",
+      expect.anything(),
+    );
   });
 
   it("rejects unlock when wallet signature is invalid", async () => {
