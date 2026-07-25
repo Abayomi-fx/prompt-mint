@@ -14,6 +14,7 @@ import { runRestoreDrill } from "./services/restoreService";
 import { IndexerState } from "./models/IndexerState";
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
+import { errorHandler } from "./middleware/errorHandler";
 // import { startIndexer } from "./services/indexerService"; // TODO: Update path when ready
 
 const app = express();
@@ -54,6 +55,8 @@ app.get("/health", async (req, res) => {
     backup: backupHealth,
   });
 });
+
+app.use(errorHandler);
 
 app.listen(port, () => {
   console.log(`Listening on port ${port}`);
