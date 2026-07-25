@@ -8,6 +8,8 @@ const BrowsePage = lazy(() => import("./pages/browse/page.jsx"));
 const SellPage = lazy(() => import("./pages/sell/page.tsx"));
 const ChatHome = lazy(() => import("./pages/chat/page.tsx"));
 const ProfilePage = lazy(() => import("./pages/profile/page.tsx"));
+const PromptDetailPage = lazy(() => import("./pages/prompt/page.tsx"));
+const CreatorSharePage = lazy(() => import("./pages/creator/page.tsx"));
 const StatusPage = lazy(() => import("./pages/status/page.tsx"));
 const ModerationPage = lazy(() => import("./pages/Moderation.tsx"));
 
@@ -43,6 +45,22 @@ function App() {
                 element={
                   <ErrorBoundary routeName="Browse">
                     <BrowsePage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/prompt/:id"
+                element={
+                  <ErrorBoundary routeName="Prompt Detail">
+                    <PromptDetailPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/creator/:address"
+                element={
+                  <ErrorBoundary routeName="Creator">
+                    <CreatorSharePage />
                   </ErrorBoundary>
                 }
               />
