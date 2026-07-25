@@ -63,6 +63,7 @@ pub enum Error {
     EncryptionVersionNotFound = 47,
     InvalidRotation = 48,
     VersionMismatch = 49,
+    KeyNotFound = 50,
 }
 
 #[contracttype]
