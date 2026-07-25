@@ -1,4 +1,6 @@
 import { Request, Response } from "express";
+import { AppError } from "../lib/AppError";
+import { asyncRoute } from "../lib/asyncRoute";
 import { randomUUID, createHmac, timingSafeEqual } from "crypto";
 import { Buffer } from "buffer";
 import { Keypair } from "@stellar/stellar-sdk";
@@ -48,22 +50,22 @@ function createChallengeToken(secret: string, address: string, promptId: string)
 
 function verifyChallengeToken(secret: string, token: string, address: string, promptId: string) {
   const [encodedPayload, signature] = token.split(".");
-  if (!encodedPayload || !signature) throw new Error("Malformed challenge token.");
+  if (!encodedPayload || !signature) throw new AppError("Malformed challenge token.", 400, "CHALLENGE_MALFORMED");
   
   const expectedSignature = signPayload(secret, encodedPayload);
   const received = Buffer.from(signature, "utf8");
   const expected = Buffer.from(expectedSignature, "utf8");
   
   if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
-    throw new Error("Invalid challenge token signature.");
+    throw new AppError("Invalid challenge token signature.", 401, "CHALLENGE_INVALID_SIGNATURE");
   }
 
   const payload = JSON.parse(base64UrlDecode(encodedPayload));
   if (payload.address !== address || payload.promptId !== promptId) {
-    throw new Error("Challenge token does not match the requested prompt unlock.");
+    throw new AppError("Challenge token does not match the requested prompt unlock.", 403, "CHALLENGE_MISMATCH");
   }
   if (payload.expiresAt < Date.now()) {
-    throw new Error("Challenge token has expired.");
+    throw new AppError("Challenge token has expired.", 410, "CHALLENGE_EXPIRED");
   }
   return payload;
 }
@@ -80,97 +82,88 @@ function verifyChallengeSignature(address: string, message: string, signatureBas
 export const GenerateExportChallenge = (req: Request, res: Response): void => {
   const { address } = req.body;
   if (!address) {
-    res.status(400).json({ success: false, error: "address is required." });
+    res.status(400).json({ error: "address is required.", code: "MISSING_FIELDS" });
     return;
   }
   const secret = process.env.CHALLENGE_TOKEN_SECRET;
   if (!secret) {
-    res.status(500).json({ success: false, error: "Configuration error." });
+    res.status(500).json({ error: "Configuration error." });
     return;
   }
   const challenge = createChallengeToken(secret, String(address), "export");
   res.status(200).json(challenge);
 };
 
-export const RequestExport = async (req: Request, res: Response): Promise<void> => {
+export const RequestExport = asyncRoute(async (req: Request, res: Response) => {
   const { address, signature, token } = req.body;
   if (!address || !signature || !token) {
-    res.status(400).json({ success: false, error: "address, signature, and token are required." });
-    return;
+    throw new AppError("address, signature, and token are required.", 400, "MISSING_FIELDS");
   }
   const secret = process.env.CHALLENGE_TOKEN_SECRET;
   if (!secret) {
-    res.status(500).json({ success: false, error: "Configuration error." });
-    return;
+    throw new AppError("Configuration error.", 500);
   }
 
-  try {
-    const payload = verifyChallengeToken(secret, token, String(address), "export");
-    const message = buildChallengeMessage(payload);
-    const isValid = verifyChallengeSignature(String(address), message, String(signature));
-    
-    if (!isValid) {
-      res.status(401).json({ success: false, error: "Invalid signature." });
-      return;
+  const payload = verifyChallengeToken(secret, token, String(address), "export");
+  const message = buildChallengeMessage(payload);
+  const isValid = verifyChallengeSignature(String(address), message, String(signature));
+  
+  if (!isValid) {
+    throw new AppError("Invalid signature.", 401, "INVALID_SIGNATURE");
+  }
+
+  await connectDb();
+
+  const [user, reports, votes, purchases, webhookSubscriptions] = await Promise.all([
+    User.findOne({ walletAddress: address.toLowerCase() }).lean(),
+    Report.find({ reporterAddress: address.toLowerCase() }).lean(),
+    Vote.find({ voterWallet: address.toLowerCase() }).lean(),
+    Purchase.find({ buyerWallet: address.toLowerCase() }).lean(),
+    WebhookSubscription.find({ walletAddress: address.toLowerCase() }).lean(),
+  ]);
+
+  const exportData = {
+    inventory: {
+      included: ["profile", "preferences", "purchases", "reports", "votes", "webhookSubscriptions"],
+      excluded: ["auditLogs", "reviews"]
+    },
+    data: {
+      profile: user ? { username: user.username, rating: user.rating, createdAt: user.createdAt, updatedAt: user.updatedAt } : null,
+      preferences: user?.notificationPreferences || null,
+      purchases,
+      reports,
+      votes,
+      webhookSubscriptions
     }
+  };
 
-    await connectDb();
+  const exportId = randomUUID();
+  const redisKey = `export:${exportId}`;
+  await cacheSet(redisKey, JSON.stringify(exportData), 3600);
 
-    const [user, reports, votes, purchases, webhookSubscriptions] = await Promise.all([
-      User.findOne({ walletAddress: address.toLowerCase() }).lean(),
-      Report.find({ reporterAddress: address.toLowerCase() }).lean(),
-      Vote.find({ voterWallet: address.toLowerCase() }).lean(),
-      Purchase.find({ buyerWallet: address.toLowerCase() }).lean(),
-      WebhookSubscription.find({ walletAddress: address.toLowerCase() }).lean(),
-    ]);
+  res.status(200).json({
+    success: true,
+    exportId,
+    expiresIn: 3600,
+    downloadUrl: `/api/user/export/download/${exportId}`
+  });
+});
 
-    const exportData = {
-      inventory: {
-        included: ["profile", "preferences", "purchases", "reports", "votes", "webhookSubscriptions"],
-        excluded: ["auditLogs", "reviews"] // reviews are excluded because they are stored off-chain in a separate Vercel function's ephemeral memory
-      },
-      data: {
-        profile: user ? { username: user.username, rating: user.rating, createdAt: user.createdAt, updatedAt: user.updatedAt } : null,
-        preferences: user?.notificationPreferences || null,
-        purchases,
-        reports,
-        votes,
-        webhookSubscriptions
-      }
-    };
-
-    const exportId = randomUUID();
-    const redisKey = `export:${exportId}`;
-    await cacheSet(redisKey, JSON.stringify(exportData), 3600);
-
-    res.status(200).json({
-      success: true,
-      exportId,
-      expiresIn: 3600,
-      downloadUrl: `/api/user/export/download/${exportId}`
-    });
-  } catch (error: any) {
-    res.status(401).json({ success: false, error: error.message || "Failed to verify challenge." });
-  }
-};
-
-export const DownloadExport = async (req: Request, res: Response): Promise<void> => {
+export const DownloadExport = asyncRoute(async (req: Request, res: Response) => {
   const { exportId } = req.params;
   if (!exportId) {
-    res.status(400).json({ success: false, error: "exportId is required." });
-    return;
+    throw new AppError("exportId is required.", 400, "MISSING_FIELDS");
   }
 
   const redisKey = `export:${exportId}`;
   const data = await cacheGet(redisKey);
 
   if (!data) {
-    res.status(410).json({ success: false, error: "Export link has expired or is invalid." });
-    return;
+    throw new AppError("Export link has expired or is invalid.", 410, "EXPORT_EXPIRED");
   }
 
   await cacheDel(redisKey);
   res.setHeader("Content-Disposition", `attachment; filename="export_${exportId}.json"`);
   res.setHeader("Content-Type", "application/json");
   res.status(200).send(data);
-};
+});

@@ -9,7 +9,9 @@ export type UnlockState =
   | "success"
   | "rejected"
   | "expired"
-  | "failed";
+  | "failed"
+  /** The decrypted content did not match the hash committed on-chain. Content is withheld. */
+  | "integrity_failed";
 
 export interface UnlockExplainerProps {
   state: UnlockState;
@@ -53,6 +55,11 @@ const STATE_COPY: Partial<
     tone: "error",
     title: "Unlock verification failed",
     body: "The unlock service could not verify your signature. This may be a temporary network issue. Your purchase is recorded on-chain and is not affected. Retry to try again.",
+  },
+  integrity_failed: {
+    tone: "error",
+    title: "Content integrity check failed",
+    body: "The decrypted content does not match the hash committed by the creator on-chain. This may indicate the listing was tampered with after purchase. Content has been withheld for your protection. Please contact support and quote the prompt ID — your on-chain license is unaffected.",
   },
 };
 
