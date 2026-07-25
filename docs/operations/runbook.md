@@ -1,10 +1,11 @@
 # Runbook: Operating Unlock Services
 
-## Disaster recovery and regional failover
+## Production-like load tests
 
-Use the [disaster recovery plan](./disaster-recovery.md) for service ownership,
-dependency maps, RTO/RPO targets, regional traffic shifts, credential-compromise
-containment, and exercise outcome tracking.
+Use the [load-testing runbook](./load-testing.md) for browse, challenge, unlock,
+and indexing capacity tests. It includes mandatory non-production guards,
+fixture preparation, cleanup, component-level bottleneck attribution, and
+baseline regression comparison.
 
 ## Monitoring & Metrics
 
