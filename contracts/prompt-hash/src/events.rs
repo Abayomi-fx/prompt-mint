@@ -31,6 +31,9 @@ struct PromptPurchased {
     pub creator: Address,
     pub price_stroops: i128,
     pub referrer: Option<Address>,
+    pub creator_amount: i128,
+    pub platform_amount: i128,
+    pub referrer_amount: i128,
 }
 
 #[contractevent]
@@ -156,6 +159,9 @@ impl Events {
         creator: Address,
         price_stroops: i128,
         referrer: Option<Address>,
+        creator_amount: i128,
+        platform_amount: i128,
+        referrer_amount: i128,
     ) {
         PromptPurchased {
             prompt_id,
@@ -163,6 +169,9 @@ impl Events {
             creator,
             price_stroops,
             referrer,
+            creator_amount,
+            platform_amount,
+            referrer_amount,
         }
         .publish(env);
     }
@@ -335,4 +344,94 @@ struct ClassificationOverridden {
     pub classification: String,
     pub safety_flags: Vec<String>,
     pub reason: String,
+}
+
+// ─── Promotional Pricing Events ──────────────────────────────────────────
+
+#[contractevent]
+struct PromotionCreated {
+    #[topic]
+    pub prompt_id: u128,
+    pub promotion_id: u128,
+    pub creator: Address,
+    pub start_time: u64,
+    pub end_time: u64,
+    pub price: i128,
+    pub asset: Address,
+}
+
+#[contractevent]
+struct PromotionCancelled {
+    #[topic]
+    pub prompt_id: u128,
+    pub promotion_id: u128,
+    pub creator: Address,
+}
+
+#[contractevent]
+struct PromotionApplied {
+    #[topic]
+    pub prompt_id: u128,
+    pub promotion_id: u128,
+    pub buyer: Address,
+    pub effective_price: i128,
+    pub original_price: i128,
+}
+
+pub struct Events;
+
+impl Events {
+    pub fn emit_promotion_created(
+        env: &Env,
+        prompt_id: u128,
+        promotion_id: u128,
+        creator: Address,
+        start_time: u64,
+        end_time: u64,
+        price: i128,
+        asset: Address,
+    ) {
+        PromotionCreated {
+            prompt_id,
+            promotion_id,
+            creator,
+            start_time,
+            end_time,
+            price,
+            asset,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_promotion_cancelled(
+        env: &Env,
+        prompt_id: u128,
+        promotion_id: u128,
+        creator: Address,
+    ) {
+        PromotionCancelled {
+            prompt_id,
+            promotion_id,
+            creator,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_promotion_applied(
+        env: &Env,
+        prompt_id: u128,
+        promotion_id: u128,
+        buyer: Address,
+        effective_price: i128,
+        original_price: i128,
+    ) {
+        PromotionApplied {
+            prompt_id,
+            promotion_id,
+            buyer,
+            effective_price,
+            original_price,
+        }
+        .publish(env);
+    }
 }

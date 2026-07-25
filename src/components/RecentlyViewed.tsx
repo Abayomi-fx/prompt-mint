@@ -29,10 +29,11 @@ function RecentlyViewedCard({
   onRemove: (promptId: string) => void;
   isRemoving: boolean;
 }) {
+  // Fetch full prompt data for display
   const { data: prompt, isLoading } = useQuery({
     queryKey: ['prompt-detail', entry.promptId],
     queryFn: () => PromptHashClient.getPrompt(browserStellarConfig, BigInt(entry.promptId)),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 5 * 60 * 1000, // 5 minutes
   });
 
   const displayTitle = prompt?.title || entry.title || 'Untitled Prompt';
@@ -46,6 +47,7 @@ function RecentlyViewedCard({
   return (
     <article className="overflow-hidden rounded-xl border border-white/10 bg-[#0f1419] transition-colors hover:border-white/[0.18]">
       <div className="flex gap-4 p-4">
+        {/* Image */}
         <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-lg">
           <img
             src={displayImage}
@@ -60,6 +62,7 @@ function RecentlyViewedCard({
           </div>
         </div>
 
+        {/* Content */}
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
@@ -145,6 +148,7 @@ function PrivacyControls({
 
   return (
     <div className="space-y-4">
+      {/* Main toggle */}
       <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/[0.03] p-4">
         <div className="flex items-center gap-3">
           {config.enabled ? (
@@ -187,6 +191,7 @@ function PrivacyControls({
         </div>
       </div>
 
+      {/* Settings panel */}
       {showSettings && config.enabled && (
         <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 space-y-4">
           <h4 className="text-sm font-medium text-white">Privacy Settings</h4>
@@ -235,6 +240,7 @@ function PrivacyControls({
         </div>
       )}
 
+      {/* Privacy notice */}
       <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
         <h4 className="text-xs font-medium text-slate-400 mb-2">Privacy Information</h4>
         <ul className="space-y-1 text-xs text-slate-500">
@@ -270,6 +276,15 @@ function EmptyState() {
           </Link>
         </Button>
       </div>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="flex min-h-40 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] p-8 text-sm text-slate-300">
+      <Loader2 className="mr-2 h-4 w-4 animate-spin text-cyan-200" />
+      Loading recently viewed...
     </div>
   );
 }
@@ -334,11 +349,13 @@ export function RecentlyViewed({ walletAddress }: RecentlyViewedProps) {
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center gap-3">
         <Clock className="h-5 w-5 text-cyan-200" />
         <h3 className="text-lg font-semibold text-white">Recently Viewed</h3>
       </div>
 
+      {/* Privacy Controls */}
       <PrivacyControls
         config={config}
         isStorageOk={isStorageOk}
@@ -349,6 +366,7 @@ export function RecentlyViewed({ walletAddress }: RecentlyViewedProps) {
         entryCount={entries.length}
       />
 
+      {/* Entries list */}
       {config.enabled && (
         <div className="space-y-3">
           {entries.length === 0 ? (

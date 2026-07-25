@@ -1,8 +1,9 @@
 use super::events::Events;
 use super::storage::Storage;
 use super::types::{
-    ALL_CLASSIFICATIONS, DataKey, Error, ListingConfig, ClassificationOverride, Prompt,
-    PromptHashTrait, Split, Subscription, SubscriptionConfig, VALID_DISCLOSURE_FLAGS,
+    DataKey, Error, ListingConfig, Prompt, PromptHashTrait, Purchase, ReferralCode, Settlement,
+    Split,
+    DataKey, Error, ListingConfig, Prompt, PromptHashTrait, Split, Subscription, SubscriptionConfig,
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
@@ -178,7 +179,7 @@ impl PromptHashTrait for PromptHashContract {
         env: Env,
         buyer: Address,
         prompt_id: u128,
-        referrer: Option<Address>,
+        referral_code: Option<Bytes>,
         payment_amount_stroops: i128,
         voucher: Option<Bytes>,
     ) -> Result<(), Error> {
@@ -188,7 +189,7 @@ impl PromptHashTrait for PromptHashContract {
             &env,
             &buyer,
             prompt_id,
-            &referrer,
+            &referral_code,
             payment_amount_stroops,
             voucher,
         )
@@ -254,9 +255,33 @@ impl PromptHashTrait for PromptHashContract {
             .checked_add(lease_duration_secs)
             .ok_or(Error::ArithmeticOverflow)?;
         Storage::update_prompt(&env, &prompt);
-        Storage::grant_purchase(&env, &prompt, &buyer, lease_price, expires_at);
+        Storage::grant_purchase(
+            &env,
+            &prompt,
+            &buyer,
+            lease_price,
+            expires_at,
+            Settlement {
+                buyer_amount: lease_price,
+                creator_amount: seller_amount,
+                platform_amount: fee_amount,
+                referrer: None,
+                referrer_amount: 0,
+                split_amount: 0,
+            },
+        );
         Storage::clear_reentrancy_guard(&env);
-        Events::emit_prompt_purchased(&env, prompt_id, buyer, prompt.creator, lease_price, None);
+        Events::emit_prompt_purchased(
+            &env,
+            prompt_id,
+            buyer,
+            prompt.creator,
+            lease_price,
+            None,
+            seller_amount,
+            fee_amount,
+            0,
+        );
         Ok(())
     }
 
@@ -289,7 +314,7 @@ impl PromptHashTrait for PromptHashContract {
         buyer: Address,
         prompt_ids: Vec<u128>,
         payment_amounts: Vec<i128>,
-        referrer: Option<Address>,
+        referral_code: Option<Bytes>,
     ) -> Result<(), Error> {
         buyer.require_auth();
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
@@ -301,7 +326,14 @@ impl PromptHashTrait for PromptHashContract {
         for i in 0..prompt_ids.len() {
             let prompt_id = prompt_ids.get(i).unwrap();
             let payment_amount = payment_amounts.get(i).unwrap();
-            execute_buy(&env, &buyer, prompt_id, &referrer, payment_amount, None)?;
+            execute_buy(
+                &env,
+                &buyer,
+                prompt_id,
+                &referral_code,
+                payment_amount,
+                None,
+            )?;
         }
         Ok(())
     }
@@ -408,6 +440,8 @@ impl PromptHashTrait for PromptHashContract {
         Ok(Storage::get_prompts_by_buyer(&env, &buyer))
     }
 
+    fn get_purchase_details(env: Env, prompt_id: u128, buyer: Address) -> Result<Purchase, Error> {
+        Storage::require_purchase(&env, prompt_id, &buyer)
     fn configure_subscription_pass(
         env: Env,
         creator: Address,
@@ -546,6 +580,44 @@ impl PromptHashTrait for PromptHashContract {
         Storage::get_referral_percentage(&env)
     }
 
+    fn register_referral_code(
+        env: Env,
+        referrer: Address,
+        code_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        referrer.require_auth();
+        ensure(
+            Storage::get_referral_code(&env, &code_hash).is_none(),
+            Error::ReferralCodeAlreadyExists,
+        )?;
+        let reward_bps = Storage::get_referral_percentage(&env);
+        ensure(reward_bps <= MAX_BPS, Error::InvalidReferralPercentage)?;
+        Storage::save_referral_code(
+            &env,
+            &code_hash,
+            &ReferralCode {
+                owner: referrer,
+                reward_bps,
+                active: true,
+            },
+        );
+        Ok(())
+    }
+
+    fn revoke_referral_code(
+        env: Env,
+        referrer: Address,
+        code_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        referrer.require_auth();
+        let mut code =
+            Storage::get_referral_code(&env, &code_hash).ok_or(Error::ReferralCodeNotFound)?;
+        ensure(code.owner == referrer, Error::Unauthorized)?;
+        code.active = false;
+        Storage::save_referral_code(&env, &code_hash, &code);
+        Ok(())
+    }
+
     fn add_voucher(
         env: Env,
         creator: Address,
@@ -672,6 +744,108 @@ impl PromptHashTrait for PromptHashContract {
         Storage::set_moderator_address(&env, &moderator);
         Ok(())
     }
+
+    // ─── Promotional Pricing ──────────────────────────────────────────────
+
+    fn create_promotion(
+        env: Env,
+        creator: Address,
+        prompt_id: u128,
+        start_time: u64,
+        end_time: u64,
+        price: i128,
+        asset: Address,
+    ) -> Result<u128, Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        ensure(prompt.creator == creator, Error::Unauthorized)?;
+
+        // Validate promotion time bounds
+        validate_promotion_time(&env, start_time, end_time)?;
+
+        // Validate price
+        ensure(price > 0, Error::InvalidPrice)?;
+
+        // Validate asset implements token interface
+        let _ = token::Client::new(&env, &asset).decimals();
+
+        // Check for overlapping promotions
+        check_promotion_overlap(&env, prompt_id, start_time, end_time)?;
+
+        // Generate promotion ID
+        let promotion_id = Storage::get_prompt_counter(&env);
+
+        let promotion = super::types::Promotion {
+            prompt_id,
+            creator: creator.clone(),
+            start_time,
+            end_time,
+            price,
+            asset: asset.clone(),
+        };
+
+        // Store the promotion
+        Storage::set_active_promotion(&env, prompt_id, &promotion);
+        Storage::add_promotion_to_history(&env, prompt_id, &promotion);
+
+        // Emit event
+        Events::emit_promotion_created(
+            &env,
+            prompt_id,
+            promotion_id,
+            creator,
+            start_time,
+            end_time,
+            price,
+            asset,
+        );
+
+        Ok(promotion_id)
+    }
+
+    fn cancel_promotion(
+        env: Env,
+        creator: Address,
+        prompt_id: u128,
+    ) -> Result<(), Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        ensure(prompt.creator == creator, Error::Unauthorized)?;
+
+        let promotion = Storage::get_active_promotion(&env, prompt_id)
+            .ok_or(Error::PromotionNotFound)?;
+
+        ensure(promotion.creator == creator, Error::UnauthorizedPromotion)?;
+
+        // Clear the active promotion
+        Storage::clear_active_promotion(&env, prompt_id);
+
+        // Emit event
+        Events::emit_promotion_cancelled(
+            &env,
+            prompt_id,
+            promotion.prompt_id, // Using prompt_id as promotion_id for simplicity
+            creator,
+        );
+
+        Ok(())
+    }
+
+    fn get_active_promotion(env: Env, prompt_id: u128) -> Result<Option<super::types::Promotion>, Error> {
+        Ok(Storage::get_active_promotion(&env, prompt_id))
+    }
+
+    fn get_promotion_history(env: Env, prompt_id: u128) -> Result<Vec<super::types::Promotion>, Error> {
+        Ok(Storage::get_promotion_history(&env, prompt_id))
+    }
+
+    fn get_effective_price(env: Env, prompt_id: u128) -> Result<(i128, Address, bool), Error> {
+        get_effective_price_for_prompt(&env, prompt_id)
+    }
 }
 
 #[default_impl]
@@ -760,7 +934,7 @@ fn execute_buy(
     env: &Env,
     buyer: &Address,
     prompt_id: u128,
-    referrer: &Option<Address>,
+    referral_code: &Option<Bytes>,
     payment_amount_stroops: i128,
     voucher: Option<Bytes>,
 ) -> Result<(), Error> {
@@ -787,8 +961,12 @@ fn execute_buy(
         )?;
     }
 
+    // Check for active promotion and use promotional price if applicable
+    let (effective_price, _effective_asset, is_promotional) = 
+        get_effective_price_for_prompt(env, prompt_id)?;
+
     // Apply voucher discount if provided
-    let mut required_price = prompt.price_stroops;
+    let mut required_price = effective_price;
     if let Some(code) = voucher {
         let hashed_raw = env.crypto().sha256(&code);
         let hashed = BytesN::from_array(env, &hashed_raw.to_array());
@@ -806,17 +984,27 @@ fn execute_buy(
         }
     }
 
+    // Emit promotion applied event if a promotion was used
+    if is_promotional {
+        if let Some(promo) = Storage::get_active_promotion(env, prompt_id) {
+            Events::emit_promotion_applied(
+                env,
+                prompt_id,
+                prompt_id, // Using prompt_id as promotion_id for simplicity
+                buyer.clone(),
+                required_price,
+                prompt.price_stroops,
+            );
+        }
+    }
+
     ensure(
         payment_amount_stroops >= required_price,
         Error::InvalidPaymentAmount,
     )?;
 
-    if let Some(ref r) = referrer {
-        ensure(
-            r != buyer && r != &prompt.creator,
-            Error::ReferrerCannotBeBuyerOrCreator,
-        )?;
-    }
+    let referral = resolve_referral(env, buyer, &prompt.creator, referral_code)?;
+    let referrer = referral.as_ref().map(|code| code.owner.clone());
 
     Storage::set_reentrancy_guard(env)?;
 
@@ -831,10 +1019,9 @@ fn execute_buy(
         .ok_or(Error::ArithmeticOverflow)?
         / MAX_BPS as i128;
 
-    let referral_percentage = Storage::get_referral_percentage(env);
-    let referral_amount = if referrer.is_some() {
+    let referral_amount = if let Some(code) = &referral {
         payment_amount_stroops
-            .checked_mul(referral_percentage as i128)
+            .checked_mul(code.reward_bps as i128)
             .ok_or(Error::ArithmeticOverflow)?
             / MAX_BPS as i128
     } else {
@@ -907,6 +1094,14 @@ fn execute_buy(
         buyer,
         payment_amount_stroops,
         MAX_ACCESS_EXPIRY,
+        Settlement {
+            buyer_amount: payment_amount_stroops,
+            creator_amount,
+            platform_amount: fee_amount,
+            referrer: referrer.clone(),
+            referrer_amount: referral_amount,
+            split_amount: split_total,
+        },
     );
     Storage::clear_reentrancy_guard(env);
 
@@ -916,7 +1111,10 @@ fn execute_buy(
         buyer.clone(),
         prompt.creator,
         payment_amount_stroops,
-        referrer.clone(),
+        referrer,
+        creator_amount,
+        fee_amount,
+        referral_amount,
     );
 
     if payment_amount_stroops > required_price {
@@ -929,6 +1127,43 @@ fn execute_buy(
     }
 
     Ok(())
+}
+
+fn resolve_referral(
+    env: &Env,
+    buyer: &Address,
+    creator: &Address,
+    raw_code: &Option<Bytes>,
+) -> Result<Option<ReferralCode>, Error> {
+    let Some(raw_code) = raw_code else {
+        return Ok(None);
+    };
+    ensure(raw_code.len() >= 16, Error::ReferralCodeTooShort)?;
+    let digest = env.crypto().sha256(raw_code);
+    let code_hash = BytesN::from_array(env, &digest.to_array());
+    let code = Storage::get_referral_code(env, &code_hash)
+        .filter(|code| code.active)
+        .ok_or(Error::ReferralCodeNotFound)?;
+    ensure(
+        code.owner != *buyer && code.owner != *creator,
+        Error::ReferrerCannotBeBuyerOrCreator,
+    )?;
+
+    if let Some(existing) = Storage::get_referral_parent(env, buyer) {
+        ensure(existing == code.owner, Error::ReferralReplay)?;
+    } else {
+        let mut cursor = code.owner.clone();
+        for _ in 0..64 {
+            ensure(cursor != *buyer, Error::CircularReferral)?;
+            match Storage::get_referral_parent(env, &cursor) {
+                Some(parent) => cursor = parent,
+                None => break,
+            }
+        }
+        ensure(cursor != *buyer, Error::CircularReferral)?;
+        Storage::set_referral_parent(env, buyer, &code.owner);
+    }
+    Ok(Some(code))
 }
 
 // ─── Validation helpers ───────────────────────────────────────────────────────
@@ -1032,4 +1267,50 @@ fn validate_safety_flags(env: &Env, flags: &Vec<String>) -> Result<(), Error> {
         ensure(is_valid, Error::InvalidDisclosureFlags)?;
     }
     Ok(())
+}
+
+// ─── Promotional Pricing Functions ──────────────────────────────────────
+
+fn validate_promotion_time(env: &Env, start_time: u64, end_time: u64) -> Result<(), Error> {
+    let now = env.ledger().timestamp();
+    ensure(start_time > now, Error::InvalidPromotionTime)?;
+    ensure(end_time > start_time, Error::InvalidPromotionTime)?;
+    Ok(())
+}
+
+fn check_promotion_overlap(env: &Env, prompt_id: u128, start_time: u64, end_time: u64) -> Result<(), Error> {
+    let active = Storage::get_active_promotion(env, prompt_id);
+    if let Some(promo) = active {
+        // Check if the new promotion overlaps with the active one
+        if start_time < promo.end_time && end_time > promo.start_time {
+            return Err(Error::PromotionOverlap);
+        }
+    }
+    
+    // Also check historical promotions that haven't expired yet
+    let history = Storage::get_promotion_history(env, prompt_id);
+    for i in 0..history.len() {
+        if let Some(promo) = history.get(i) {
+            if start_time < promo.end_time && end_time > promo.start_time {
+                return Err(Error::PromotionOverlap);
+            }
+        }
+    }
+    
+    Ok(())
+}
+
+fn get_effective_price_for_prompt(env: &Env, prompt_id: u128) -> Result<(i128, Address, bool), Error> {
+    let prompt = Storage::require_prompt(env, prompt_id)?;
+    let now = env.ledger().timestamp();
+    
+    // Check if there's an active promotion
+    if let Some(promo) = Storage::get_active_promotion(env, prompt_id) {
+        if now >= promo.start_time && now < promo.end_time {
+            return Ok((promo.price, promo.asset, true));
+        }
+    }
+    
+    // No active promotion, use base price
+    Ok((prompt.price_stroops, prompt.asset, false))
 }

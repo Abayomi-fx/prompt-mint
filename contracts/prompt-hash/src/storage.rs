@@ -1,4 +1,5 @@
-use super::types::{DataKey, Error, ClassificationOverride, Prompt, Purchase, Subscription, SubscriptionConfig};
+use super::types::{DataKey, Error, Prompt, Purchase, ReferralCode, Settlement};
+use super::types::{DataKey, Error, Prompt, Purchase, Subscription, SubscriptionConfig};
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
 
 pub const DAY_IN_LEDGERS: u32 = 17280;
@@ -262,6 +263,7 @@ impl Storage {
         buyer: &Address,
         paid_price: i128,
         expires_at: u64,
+        settlement: Settlement,
     ) {
         let key = DataKey::Purchase(prompt.id, buyer.clone());
         let purchase = Purchase {
@@ -273,6 +275,7 @@ impl Storage {
             transfer_count: 0,
             last_transferred_at: 0,
             expires_at,
+            settlement,
         };
         env.storage().persistent().set(&key, &purchase);
         Self::extend_key_ttl(env, &key);
@@ -365,6 +368,36 @@ impl Storage {
         fee
     }
 
+    pub fn get_referral_code(env: &Env, code_hash: &BytesN<32>) -> Option<ReferralCode> {
+        let key = DataKey::ReferralCode(code_hash.clone());
+        let code = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        code
+    }
+
+    pub fn save_referral_code(env: &Env, code_hash: &BytesN<32>, code: &ReferralCode) {
+        let key = DataKey::ReferralCode(code_hash.clone());
+        env.storage().persistent().set(&key, code);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_referral_parent(env: &Env, buyer: &Address) -> Option<Address> {
+        let key = DataKey::ReferralParent(buyer.clone());
+        let parent = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        parent
+    }
+
+    pub fn set_referral_parent(env: &Env, buyer: &Address, referrer: &Address) {
+        let key = DataKey::ReferralParent(buyer.clone());
+        env.storage().persistent().set(&key, referrer);
+        Self::extend_key_ttl(env, &key);
+    }
+
     pub fn set_pause_status(env: &Env, is_paused: bool) {
         let key = DataKey::IsPaused;
         env.storage().persistent().set(&key, &is_paused);
@@ -430,5 +463,58 @@ impl Storage {
             Self::extend_key_ttl(env, &key);
         }
         addr
+    }
+
+    // ─── Promotional Pricing ──────────────────────────────────────────────
+
+    pub fn set_active_promotion(env: &Env, prompt_id: u128, promotion: &super::types::Promotion) {
+        let key = DataKey::ActivePromotion(prompt_id);
+        env.storage().persistent().set(&key, promotion);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_active_promotion(env: &Env, prompt_id: u128) -> Option<super::types::Promotion> {
+        let key = DataKey::ActivePromotion(prompt_id);
+        let promotion = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        promotion
+    }
+
+    pub fn clear_active_promotion(env: &Env, prompt_id: u128) {
+        let key = DataKey::ActivePromotion(prompt_id);
+        env.storage().persistent().remove(&key);
+    }
+
+    pub fn add_promotion_to_history(env: &Env, prompt_id: u128, promotion: &super::types::Promotion) {
+        let key = DataKey::PromotionHistory(prompt_id);
+        let mut history: Vec<super::types::Promotion> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        history.push_back(promotion.clone());
+        env.storage().persistent().set(&key, &history);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_promotion_history(env: &Env, prompt_id: u128) -> Vec<super::types::Promotion> {
+        let key = DataKey::PromotionHistory(prompt_id);
+        let history: Vec<super::types::Promotion> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        history
+    }
+
+    pub fn get_promotion_counter(env: &Env) -> u128 {
+        let key = DataKey::PromptCounter; // Reuse prompt counter for promotion IDs
+        let count = env.storage().persistent().get(&key).unwrap_or(0);
+        count
     }
 }

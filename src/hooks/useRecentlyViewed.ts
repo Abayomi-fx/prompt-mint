@@ -25,6 +25,9 @@ export interface UseRecentlyViewedReturn {
   refresh: () => void;
 }
 
+/**
+ * Hook for managing recently viewed listings with privacy controls
+ */
 export function useRecentlyViewed(walletAddress: string | null): UseRecentlyViewedReturn {
   const [entries, setEntries] = useState<RecentlyViewedEntry[]>([]);
   const [config, setConfig] = useState<RecentlyViewedConfig>({
@@ -34,9 +37,11 @@ export function useRecentlyViewed(walletAddress: string | null): UseRecentlyView
   });
   const [isStorageOk, setIsStorageOk] = useState(true);
   
+  // Use ref to avoid stale closures
   const walletAddressRef = useRef(walletAddress);
   walletAddressRef.current = walletAddress;
 
+  // Refresh entries and config from storage
   const refresh = useCallback(() => {
     const addr = walletAddressRef.current;
     if (!addr) {
@@ -50,10 +55,12 @@ export function useRecentlyViewed(walletAddress: string | null): UseRecentlyView
     setEntries(getRecentlyViewed(addr));
   }, []);
 
+  // Initial load and wallet changes
   useEffect(() => {
     refresh();
   }, [refresh, walletAddress]);
 
+  // Add entry
   const addEntry = useCallback((entry: Omit<RecentlyViewedEntry, 'viewedAt'>) => {
     const addr = walletAddressRef.current;
     if (!addr) return false;
@@ -65,6 +72,7 @@ export function useRecentlyViewed(walletAddress: string | null): UseRecentlyView
     return result;
   }, []);
 
+  // Remove entry
   const removeEntry = useCallback((promptId: string) => {
     const addr = walletAddressRef.current;
     if (!addr) return false;
@@ -75,6 +83,7 @@ export function useRecentlyViewed(walletAddress: string | null): UseRecentlyView
     return result;
   }, []);
 
+  // Clear all entries
   const clearAll = useCallback(() => {
     const addr = walletAddressRef.current;
     if (!addr) return false;
@@ -85,6 +94,7 @@ export function useRecentlyViewed(walletAddress: string | null): UseRecentlyView
     return result;
   }, []);
 
+  // Enable tracking
   const enable = useCallback(() => {
     const addr = walletAddressRef.current;
     if (!addr) return false;
@@ -95,6 +105,7 @@ export function useRecentlyViewed(walletAddress: string | null): UseRecentlyView
     return result;
   }, []);
 
+  // Disable tracking
   const disable = useCallback(() => {
     const addr = walletAddressRef.current;
     if (!addr) return false;
@@ -105,6 +116,7 @@ export function useRecentlyViewed(walletAddress: string | null): UseRecentlyView
     return result;
   }, []);
 
+  // Update config
   const updateConfig = useCallback((newConfig: Partial<RecentlyViewedConfig>) => {
     const addr = walletAddressRef.current;
     if (!addr) return false;
@@ -129,6 +141,9 @@ export function useRecentlyViewed(walletAddress: string | null): UseRecentlyView
   };
 }
 
+/**
+ * Hook to track when a prompt modal is viewed
+ */
 export function useTrackPromptView(
   walletAddress: string | null,
   promptId: string | null,
@@ -140,16 +155,19 @@ export function useTrackPromptView(
     category?: string;
   }
 ) {
+  const hasTrackedRef = useRef(false);
   const lastPromptRef = useRef<string | null>(null);
   const lastOpenRef = useRef(false);
 
   useEffect(() => {
     if (!isOpen || !promptId || !walletAddress) {
+      hasTrackedRef.current = false;
       lastPromptRef.current = null;
       lastOpenRef.current = false;
       return;
     }
 
+    // Only track once per modal open session for this prompt
     if (lastPromptRef.current === promptId && lastOpenRef.current === isOpen) {
       return;
     }
@@ -157,6 +175,7 @@ export function useTrackPromptView(
     lastPromptRef.current = promptId;
     lastOpenRef.current = isOpen;
 
+    // Check if tracking is enabled for this wallet
     const config = getPrivacyConfig(walletAddress);
     if (config.enabled) {
       addRecentlyViewed(walletAddress, {
