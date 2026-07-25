@@ -1,8 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Keypair } from "@stellar/stellar-sdk";
 import listReviews from "../../api/reviews/list";
 import bulkModeration from "../../api/moderation/actions";
 import editReview from "../../api/reviews/edit";
 import { ReviewClient } from "../lib/reviews/reviewClient";
+import { buildModeratorAuthMessage } from "../lib/auth/challenge";
+
+function signModeratorAction(keypair: Keypair, purpose: string, timestamp = Date.now()) {
+  const message = buildModeratorAuthMessage(keypair.publicKey(), purpose, timestamp);
+  const signature = keypair.sign(Buffer.from(message, "utf8")).toString("base64");
+  return { moderatorTimestamp: timestamp, moderatorSignature: signature };
+}
 
 function responseRecorder() {
   let statusCode = 0;
@@ -54,14 +62,134 @@ describe("review editing and bulk moderation safeguards", () => {
     expect(recorded.body.error).toContain("author");
   });
 
-  it("requires explicit confirmation before performing bulk actions", async () => {
-    const saved = process.env.MODERATOR_ADDRESSES;
-    process.env.MODERATOR_ADDRESSES = "GMODERATOR";
-    const recorded = responseRecorder();
-    await bulkModeration({ method: "POST", body: { moderatorAddress: "GMODERATOR", actions: [{ action: "review_removed", targetType: "review", targetId: "review_1", reason: "Policy violation" }] } }, recorded.response);
-    if (saved === undefined) delete process.env.MODERATOR_ADDRESSES;
-    else process.env.MODERATOR_ADDRESSES = saved;
-    expect(recorded.status).toBe(400);
-    expect(recorded.body.error).toContain("confirmed");
+  describe("bulk moderation authentication", () => {
+    let saved: string | undefined;
+    let moderator: Keypair;
+
+    beforeEach(() => {
+      saved = process.env.MODERATOR_ADDRESSES;
+      moderator = Keypair.random();
+      process.env.MODERATOR_ADDRESSES = moderator.publicKey();
+    });
+
+    afterEach(() => {
+      if (saved === undefined) delete process.env.MODERATOR_ADDRESSES;
+      else process.env.MODERATOR_ADDRESSES = saved;
+    });
+
+    it("requires explicit confirmation before performing bulk actions", async () => {
+      const recorded = responseRecorder();
+      const auth = signModeratorAction(moderator, "moderation-action");
+      await bulkModeration(
+        {
+          method: "POST",
+          body: {
+            moderatorAddress: moderator.publicKey(),
+            ...auth,
+            actions: [{ action: "review_removed", targetType: "review", targetId: "review_1", reason: "Policy violation" }],
+          },
+        },
+        recorded.response,
+      );
+      expect(recorded.status).toBe(400);
+      expect(recorded.body.error).toContain("confirmed");
+    });
+
+    it("rejects requests missing a moderator signature", async () => {
+      const recorded = responseRecorder();
+      await bulkModeration(
+        {
+          method: "POST",
+          body: {
+            moderatorAddress: moderator.publicKey(),
+            confirmed: true,
+            actions: [{ action: "review_removed", targetType: "review", targetId: "review_1", reason: "Policy violation" }],
+          },
+        },
+        recorded.response,
+      );
+      expect(recorded.status).toBe(401);
+      expect(recorded.body.error).toContain("signature");
+    });
+
+    it("rejects requests signed by a non-moderator wallet", async () => {
+      const recorded = responseRecorder();
+      const impostor = Keypair.random();
+      const auth = signModeratorAction(impostor, "moderation-action");
+      await bulkModeration(
+        {
+          method: "POST",
+          body: {
+            moderatorAddress: impostor.publicKey(),
+            ...auth,
+            confirmed: true,
+            actions: [{ action: "review_removed", targetType: "review", targetId: "review_1", reason: "Policy violation" }],
+          },
+        },
+        recorded.response,
+      );
+      expect(recorded.status).toBe(403);
+      expect(recorded.body.error).toContain("Unauthorized");
+    });
+
+    it("rejects a signature that does not match the claimed moderator address", async () => {
+      const recorded = responseRecorder();
+      const otherModerator = Keypair.random();
+      process.env.MODERATOR_ADDRESSES = `${moderator.publicKey()},${otherModerator.publicKey()}`;
+      // Sign as otherModerator but claim to be `moderator`.
+      const auth = signModeratorAction(otherModerator, "moderation-action");
+      await bulkModeration(
+        {
+          method: "POST",
+          body: {
+            moderatorAddress: moderator.publicKey(),
+            ...auth,
+            confirmed: true,
+            actions: [{ action: "review_removed", targetType: "review", targetId: "review_1", reason: "Policy violation" }],
+          },
+        },
+        recorded.response,
+      );
+      expect(recorded.status).toBe(401);
+      expect(recorded.body.error).toContain("Invalid moderator signature");
+    });
+
+    it("rejects an expired moderator signature", async () => {
+      const recorded = responseRecorder();
+      const auth = signModeratorAction(moderator, "moderation-action", Date.now() - 10 * 60 * 1000);
+      await bulkModeration(
+        {
+          method: "POST",
+          body: {
+            moderatorAddress: moderator.publicKey(),
+            ...auth,
+            confirmed: true,
+            actions: [{ action: "review_removed", targetType: "review", targetId: "review_1", reason: "Policy violation" }],
+          },
+        },
+        recorded.response,
+      );
+      expect(recorded.status).toBe(401);
+      expect(recorded.body.error).toContain("expired");
+    });
+
+    it("accepts a correctly signed, confirmed bulk action", async () => {
+      const recorded = responseRecorder();
+      const auth = signModeratorAction(moderator, "moderation-action");
+      await bulkModeration(
+        {
+          method: "POST",
+          body: {
+            moderatorAddress: moderator.publicKey(),
+            ...auth,
+            confirmed: true,
+            actions: [{ action: "review_removed", targetType: "review", targetId: "review_1", reason: "Policy violation" }],
+          },
+        },
+        recorded.response,
+      );
+      expect(recorded.status).toBe(200);
+      expect(recorded.body.success).toBe(true);
+    });
   });
 });

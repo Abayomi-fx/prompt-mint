@@ -11,15 +11,20 @@ import { governanceRouter } from "./routes/governanceRoutes"; // Issue #113
 import { appealRouter } from "./routes/appealRoutes";
 import { runBackup, getBackupHealth } from "./services/backupService";
 import { runRestoreDrill } from "./services/restoreService";
-import { IndexerState } from "./models/IndexerState"; 
+import { IndexerState } from "./models/IndexerState";
 import cron from "node-cron";
+import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
 // import { startIndexer } from "./services/indexerService"; // TODO: Update path when ready
 
 const app = express();
 
 const port = 5000;
 
-app.use(express.json());
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
+
+// Body-parser throws a 413 "entity.too.large" error before any route runs;
+// surface it as a clean JSON response instead of an HTML stack trace.
+app.use(jsonBodyTooLargeHandler);
 
 app.use("/api/improve-proxy", proxyrouter);
 

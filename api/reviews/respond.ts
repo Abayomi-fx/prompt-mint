@@ -1,4 +1,5 @@
 import { findReview, updateReview, getReviews } from "./data";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 
 interface RespondRequest {
   promptId: string;
@@ -8,7 +9,7 @@ interface RespondRequest {
   signature?: string;
 }
 
-export default async function handler(req: any, res: any) {
+async function handler(req: any, res: any) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
@@ -83,3 +84,5 @@ export default async function handler(req: any, res: any) {
     res.status(500).json({ error: message });
   }
 }
+
+export default withBodySizeLimit(handler);

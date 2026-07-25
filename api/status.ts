@@ -1,4 +1,5 @@
 import { withObservability } from "../src/lib/observability/wrapper";
+import { getCircuitBreaker, listCircuitBreakers } from "../src/lib/observability/circuitBreaker";
 
 const STELLAR_RPC_URL =
   process.env.PUBLIC_STELLAR_RPC_URL ?? "https://soroban-testnet.stellar.org";
@@ -15,12 +16,15 @@ interface ServiceCheck {
 }
 
 async function pingService(name: string, url: string, timeoutMs = 8000): Promise<ServiceCheck> {
+  const breaker = getCircuitBreaker(name.toLowerCase().replace(/\s+/g, "-"));
   const start = Date.now();
   try {
-    const res = await fetch(url, {
-      method: "GET",
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    const res = await breaker.execute(() =>
+      fetch(url, {
+        method: "GET",
+        signal: AbortSignal.timeout(timeoutMs),
+      }),
+    );
     const latencyMs = Date.now() - start;
     return {
       name,
@@ -39,14 +43,17 @@ async function pingService(name: string, url: string, timeoutMs = 8000): Promise
 }
 
 async function pingRpc(): Promise<ServiceCheck> {
+  const breaker = getCircuitBreaker("stellar-rpc");
   const start = Date.now();
   try {
-    const res = await fetch(STELLAR_RPC_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth", params: [] }),
-      signal: AbortSignal.timeout(8000),
-    });
+    const res = await breaker.execute(() =>
+      fetch(STELLAR_RPC_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth", params: [] }),
+        signal: AbortSignal.timeout(8000),
+      }),
+    );
     const latencyMs = Date.now() - start;
     if (!res.ok) return { name: "Stellar RPC", status: "degraded", latencyMs, error: `HTTP ${res.status}` };
     const json = (await res.json()) as { result?: { status?: string } };
@@ -72,11 +79,14 @@ async function pingUnlockService(): Promise<ServiceCheck> {
     ? `https://${process.env.VERCEL_URL}`
     : "http://localhost:3000";
 
+  const breaker = getCircuitBreaker("unlock-service");
   const start = Date.now();
   try {
-    const res = await fetch(`${baseUrl}/api/health`, {
-      signal: AbortSignal.timeout(6000),
-    });
+    const res = await breaker.execute(() =>
+      fetch(`${baseUrl}/api/health`, {
+        signal: AbortSignal.timeout(6000),
+      }),
+    );
     const latencyMs = Date.now() - start;
     return {
       name: "Unlock Service",
@@ -118,6 +128,7 @@ async function handler(req: any, res: any) {
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     services,
+    circuitBreakers: listCircuitBreakers(),
   });
 }
 

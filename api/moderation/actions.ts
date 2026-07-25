@@ -1,18 +1,28 @@
 import { findReviewById, updateReview } from "../reviews/data";
-import { addModerationLog, isAuthorizedModerator } from "./data";
+import { addModerationLog, verifyModeratorAuth } from "./data";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 
 type Action = "review_removed" | "review_approved" | "user_warned";
 interface BulkAction { action: Action; targetId: string; targetType: "review" | "user"; reason: string; details?: string; }
 
-export default async function handler(req: any, res: any) {
+async function handler(req: any, res: any) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
-  const { moderatorAddress, confirmed, actions } = (req.body ?? {}) as {
+  const { moderatorAddress, moderatorTimestamp, moderatorSignature, confirmed, actions } = (req.body ?? {}) as {
     moderatorAddress?: string;
+    moderatorTimestamp?: number;
+    moderatorSignature?: string;
     confirmed?: boolean;
     actions?: BulkAction[];
   };
-  if (!moderatorAddress) return res.status(401).json({ error: "Moderator address is required" });
-  if (!isAuthorizedModerator(moderatorAddress)) return res.status(403).json({ error: "Unauthorized: Only authorized moderators can perform actions" });
+
+  const auth = verifyModeratorAuth({
+    address: moderatorAddress,
+    timestamp: moderatorTimestamp,
+    signature: moderatorSignature,
+    purpose: "moderation-action",
+  });
+  if (!auth.ok) return res.status(auth.status).json({ error: auth.error });
+
   if (confirmed !== true) return res.status(400).json({ error: "Bulk actions require confirmed: true" });
   if (!Array.isArray(actions) || actions.length === 0 || actions.length > 50) return res.status(400).json({ error: "Provide between 1 and 50 actions" });
 
@@ -36,3 +46,5 @@ export default async function handler(req: any, res: any) {
   }
   return res.status(errors.length ? 207 : 200).json({ success: errors.length === 0, applied, errors });
 }
+
+export default withBodySizeLimit(handler);

@@ -6,6 +6,7 @@ import {
   validateEventProperties,
 } from "../../src/lib/analytics/taxonomy";
 import { withObservability } from "../../src/lib/observability/wrapper";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 import { checkRateLimit } from "../../src/lib/observability/rateLimiter";
 import { metrics } from "../../src/lib/observability/metrics";
 import { recordAnalyticsEvent } from "../../server/src/services/analyticsEvents";
@@ -103,4 +104,4 @@ async function handler(req: any, res: any) {
   res.status(202).json({ accepted: true });
 }
 
-export default withObservability(handler, "analytics/events");
+export default withObservability(withBodySizeLimit(handler, 20 * 1024), "analytics/events");

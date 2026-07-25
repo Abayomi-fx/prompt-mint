@@ -1,4 +1,5 @@
 import { hasAccess, type PromptHashConfig } from "../../src/lib/stellar/promptHashClient";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 import { getReviews } from "./data";
 
 function getServerConfig(): PromptHashConfig {
@@ -22,7 +23,7 @@ function getServerConfig(): PromptHashConfig {
   };
 }
 
-export default async function handler(req: any, res: any) {
+async function handler(req: any, res: any) {
   if (req.method !== "GET" && req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
@@ -83,3 +84,5 @@ export default async function handler(req: any, res: any) {
     res.status(500).json({ error: message });
   }
 }
+
+export default withBodySizeLimit(handler);

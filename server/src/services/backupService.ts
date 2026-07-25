@@ -154,6 +154,7 @@ async function alertOnFailure(message: string): Promise<void> {
         text: `[PromptHash] ⚠️ Backup FAILED: ${message}`,
         timestamp: new Date().toISOString(),
       }),
+      signal: AbortSignal.timeout(10_000),
     });
   } catch {
     console.error("[backup] Failed to send failure alert to webhook");
