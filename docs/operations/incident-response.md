@@ -44,3 +44,9 @@ This guide documents how to handle security or operational incidents related to 
 
 - Contact the backend security lead if `integrity_failure` is widespread (potential key compromise).
 - Contact the infrastructure team if Stellar RPC is consistently returning 5xx.
+
+## Unlock key compromise or loss
+
+Follow [Unlock key recovery](./unlock-key-recovery.md) for custodian escrow, operator
+approval via `POST /api/auth/approveKeyRecovery`, and audit-backed recovery drills.
+Off-chain recovery never substitutes for on-chain `has_access` during buyer unlock.

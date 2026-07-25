@@ -1,56 +1,72 @@
-import { Request, Response } from "express";
 import connectDb from "../db/connectDb";
 import Prompt from "../models/Prompt";
 import PromptVersion from "../models/PromptVersion";
 import Purchase from "../models/Purchase";
+import LicenseTerm from "../models/LicenseTerm";
 import User from "../models/User";
+import { AppError } from "../lib/AppError";
+import { asyncRoute } from "../lib/asyncRoute";
 
-export const PostPromptUpdate = async (req: Request, res: Response): Promise<Response> => {
-  try {
-    await connectDb();
-    const { promptId, walletAddress, content, changeNote } = req.body;
+export const PostPromptUpdate = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { promptId, walletAddress, content, changeNote } = req.body;
 
-    if (!promptId || !walletAddress || !content) {
-      return res.status(400).json({ error: "promptId, walletAddress, and content are required." });
-    }
-
-    const user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
-    if (!user) return res.status(404).json({ error: "User not found." });
-
-    const prompt = await Prompt.findOne({ _id: promptId, owner: user._id });
-    if (!prompt) return res.status(403).json({ error: "Prompt not found or not owned by this wallet." });
-
-    const nextVersion = (prompt.currentVersionIndex ?? 1) + 1;
-
-    await PromptVersion.create({
-      promptId: String(prompt._id),
-      versionIndex: nextVersion,
-      content,
-      changeNote: changeNote ?? "",
-      createdBy: walletAddress.toLowerCase(),
-    });
-
-    await Prompt.findByIdAndUpdate(prompt._id, { currentVersionIndex: nextVersion });
-
-    return res.status(201).json({ message: "Version posted.", versionIndex: nextVersion });
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  if (!promptId || !walletAddress || !content) {
+    throw new AppError("promptId, walletAddress, and content are required.", 400, "MISSING_FIELDS");
   }
-};
 
-export const GetPromptVersions = async (req: Request, res: Response): Promise<Response> => {
-  try {
-    await connectDb();
-    const { promptId } = req.params;
-    if (!promptId) return res.status(400).json({ error: "promptId is required." });
+  const user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
+  if (!user) throw new AppError("User not found.", 404, "NOT_FOUND");
 
-    const versions = await PromptVersion.find({ promptId })
-      .sort({ versionIndex: -1 })
-      .select("-content");
+  const prompt = await Prompt.findOne({ _id: promptId, owner: user._id });
+  if (!prompt) throw new AppError("Prompt not found or not owned by this wallet.", 403, "FORBIDDEN");
 
-    return res.json(versions);
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  const nextVersion = (prompt.currentVersionIndex ?? 1) + 1;
+
+  await PromptVersion.create({
+    promptId: String(prompt._id),
+    versionIndex: nextVersion,
+    content,
+    changeNote: changeNote ?? "",
+    createdBy: walletAddress.toLowerCase(),
+  });
+
+  await Prompt.findByIdAndUpdate(prompt._id, { currentVersionIndex: nextVersion });
+
+  res.status(201).json({ message: "Version posted.", versionIndex: nextVersion });
+});
+
+export const GetPromptVersions = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { promptId } = req.params;
+  if (!promptId) throw new AppError("promptId is required.", 400, "MISSING_FIELDS");
+
+  const versions = await PromptVersion.find({ promptId })
+    .sort({ versionIndex: -1 })
+    .select("-content");
+
+  res.json(versions);
+});
+
+export const RecordPurchase = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { promptId, buyerWallet, txHash } = req.body;
+
+  if (!promptId || !buyerWallet) {
+    throw new AppError("promptId and buyerWallet are required.", 400, "MISSING_FIELDS");
+  }
+
+  const prompt = await Prompt.findById(promptId);
+  if (!prompt) throw new AppError("Prompt not found.", 404, "NOT_FOUND");
+
+  const existing = await Purchase.findOne({
+    promptId,
+    buyerWallet: buyerWallet.toLowerCase(),
+  });
+
+  if (existing) {
+    res.status(200).json({ message: "Already purchased.", versionIndex: existing.versionIndex });
+    return;
   }
 };
 
@@ -75,51 +91,64 @@ export const RecordPurchase = async (req: Request, res: Response): Promise<Respo
       return res.status(200).json({ message: "Already purchased.", versionIndex: existing.versionIndex });
     }
 
+    const termsVersion = prompt.termsVersion ?? 1;
+    const licenseTerm = await LicenseTerm.findOne({ version: termsVersion });
+
     const purchase = await Purchase.create({
       promptId,
       buyerWallet: buyerWallet.toLowerCase(),
       versionIndex: prompt.currentVersionIndex ?? 1,
       txHash: txHash ?? "",
+      termsSnapshot: {
+        termsVersion,
+        termsTitle: licenseTerm?.title ?? "Standard License",
+        termsContent: licenseTerm?.content ?? "Standard marketplace license terms.",
+        acceptedAt: new Date(),
+      },
     });
 
     return res.status(201).json({ message: "Purchase recorded.", versionIndex: purchase.versionIndex });
   } catch (err) {
     return res.status(500).json({ error: (err as Error).message });
+
+  const purchase = await Purchase.create({
+    promptId,
+    buyerWallet: buyerWallet.toLowerCase(),
+    versionIndex: prompt.currentVersionIndex ?? 1,
+    txHash: txHash ?? "",
+  });
+
+  res.status(201).json({ message: "Purchase recorded.", versionIndex: purchase.versionIndex });
+});
+
+export const GetBuyerVersion = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { promptId, buyerWallet } = req.query;
+
+  if (!promptId || !buyerWallet) {
+    throw new AppError("promptId and buyerWallet query params are required.", 400, "MISSING_FIELDS");
   }
-};
 
-export const GetBuyerVersion = async (req: Request, res: Response): Promise<Response> => {
-  try {
-    await connectDb();
-    const { promptId, buyerWallet } = req.query;
+  const purchase = await Purchase.findOne({
+    promptId: String(promptId),
+    buyerWallet: String(buyerWallet).toLowerCase(),
+  });
 
-    if (!promptId || !buyerWallet) {
-      return res.status(400).json({ error: "promptId and buyerWallet query params are required." });
-    }
-
-    const purchase = await Purchase.findOne({
-      promptId: String(promptId),
-      buyerWallet: String(buyerWallet).toLowerCase(),
-    });
-
-    if (!purchase) {
-      return res.status(404).json({ error: "No purchase record found." });
-    }
-
-    const version = await PromptVersion.findOne({
-      promptId: String(promptId),
-      versionIndex: purchase.versionIndex,
-    });
-
-    const prompt = await Prompt.findById(promptId).lean();
-
-    return res.json({
-      versionIndex: purchase.versionIndex,
-      changeNote: version?.changeNote ?? "",
-      content: version?.content ?? (prompt as any)?.content ?? null,
-      purchasedAt: purchase.createdAt,
-    });
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  if (!purchase) {
+    throw new AppError("No purchase record found.", 404, "NOT_FOUND");
   }
-};
+
+  const version = await PromptVersion.findOne({
+    promptId: String(promptId),
+    versionIndex: purchase.versionIndex,
+  });
+
+  const prompt = await Prompt.findById(promptId).lean();
+
+  res.json({
+    versionIndex: purchase.versionIndex,
+    changeNote: version?.changeNote ?? "",
+    content: version?.content ?? (prompt as any)?.content ?? null,
+    purchasedAt: purchase.createdAt,
+  });
+});

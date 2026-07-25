@@ -234,6 +234,7 @@ verification. Security-critical gaps require another exercise before closure.
 
 - [Backup and recovery](./backup-and-recovery.md)
 - [Incident response](./incident-response.md)
+- [Unlock key recovery](./unlock-key-recovery.md)
 - [Unlock operations runbook](./runbook.md)
 - [Challenge secret rotation](../secret-rotation.md)
 - [Security model](../security-model.md)
