@@ -596,3 +596,48 @@ struct PromotionApplied {
     pub effective_price: i128,
     pub original_price: i128,
 }
+
+// ─── #273: Time-based Discount Events ─────────────────────────────────────
+
+#[contractevent]
+struct DiscountSet {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub discounted_price: i128,
+    pub start_ledger: u32,
+    pub end_ledger: u32,
+}
+
+#[contractevent]
+struct DiscountCleared {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+}
+
+impl Events {
+    // ─── #273: Time-based Discounts ────────────────────────────────────────
+
+    pub fn emit_discount_set(
+        env: &Env,
+        prompt_id: u128,
+        creator: Address,
+        discounted_price: i128,
+        start_ledger: u32,
+        end_ledger: u32,
+    ) {
+        DiscountSet {
+            prompt_id,
+            creator,
+            discounted_price,
+            start_ledger,
+            end_ledger,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_discount_cleared(env: &Env, prompt_id: u128, creator: Address) {
+        DiscountCleared { prompt_id, creator }.publish(env);
+    }
+}

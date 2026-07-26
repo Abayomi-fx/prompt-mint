@@ -97,6 +97,23 @@ pub enum DataKey {
     // Contract state schema version, bumped by `migrate` after an `upgrade`
     // that changes stored data shapes.
     SchemaVersion,
+    // #273 – time-based discount schedule per prompt
+    Discount(u128),
+}
+
+/// #273 – Time-based discount schedule for a prompt.
+/// While the current ledger sequence is within `[start_ledger, end_ledger]`
+/// (inclusive), `discounted_price` transparently overrides the base price on
+/// the purchase path. The window is expressed in ledger sequence numbers so it
+/// reverts automatically once the window closes, with no further action needed.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Discount {
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub discounted_price: i128,
+    pub start_ledger: u32,
+    pub end_ledger: u32,
 }
 
 /// A moderator-overridden classification that takes precedence
@@ -529,4 +546,22 @@ pub trait PromptHashTrait {
         prompt_id: u128,
         version: u32,
     ) -> Result<PromptEncryptedPayload, Error>;
+
+    // ─── #273: Time-based discount mechanics ──────────────────────────────────
+    /// Creator-gated. Sets (or replaces) a discount window for a prompt. While
+    /// `env.ledger().sequence()` is within `[start_ledger, end_ledger]`, the
+    /// purchase path uses `discounted_price` instead of the base price.
+    fn set_discount(
+        env: Env,
+        creator: Address,
+        prompt_id: u128,
+        discounted_price: i128,
+        start_ledger: u32,
+        end_ledger: u32,
+    ) -> Result<(), Error>;
+
+    /// Creator-gated early-cancel of an active/scheduled discount window.
+    fn clear_discount(env: Env, creator: Address, prompt_id: u128) -> Result<(), Error>;
+
+    fn get_discount(env: Env, prompt_id: u128) -> Result<Option<Discount>, Error>;
 }
