@@ -1,12 +1,12 @@
 import { useMemo, useState } from "react";
-import { Filter, Search, X } from "lucide-react";
+import { Filter, X } from "lucide-react";
 import { featuredPromptTemplates } from "@/data/featuredPrompts";
 import { Navigation } from "@/components/navigation";
 import { Footer } from "@/components/footer";
 import { FeaturedPrompts } from "@/components/featured-prompts";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { MarketplaceFilters } from "@/components/MarketplaceFilters";
+import { SearchBar } from "@/components/SearchBar";
 import FetchAllPrompts from "./FetchAllPrompts";
 import { HeroAnimation } from "./HeroAnimation";
 
@@ -115,17 +115,12 @@ export default function BrowsePage() {
           </aside>
 
           <div className="flex-1 space-y-8">
-            {/* Search bar */}
+            {/* Search bar (#276: debounced + recent-search history) */}
             <div className="flex items-stretch gap-3">
-              <div className="relative flex-1 group">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500 group-focus-within:text-emerald-400 transition-colors" />
-                <Input
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Search by title, description, or tags..."
-                  className="h-14 pl-12 pr-4 rounded-2xl border-white/5 bg-white/[0.03] text-base placeholder:text-slate-500 focus-visible:ring-emerald-500/20 transition-all"
-                />
-              </div>
+              <SearchBar
+                initialValue={searchQuery}
+                onSearch={setSearchQuery}
+              />
               <div className="relative lg:hidden">
                 <Button
                   variant="outline"

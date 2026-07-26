@@ -115,6 +115,62 @@ Example error response:
 
 Marks a prompt as archived and removes it from active workflow views.
 
+### Publish a prompt version
+
+`POST /api/prompts/:id/versions`
+
+Publishes a new encrypted prompt version for the prompt owned by the caller. The request accepts `walletAddress`, `encryptedPayload`, `encryptedPayloadRef`, and an optional `changelog`.
+
+Example response:
+
+```json
+{
+  "id": "66b2...",
+  "versionNumber": 1,
+  "contentHash": "e3b0c44298fc1c149afbf4c8996fb924...",
+  "encryptedPayloadRef": "s3://prompt/abc123/v1",
+  "changelog": "Initial encrypted prompt",
+  "createdAt": "2026-07-26T00:00:00.000Z"
+}
+```
+
+### Get prompt version history
+
+`GET /api/prompts/:id/versions?walletAddress=G...`
+
+Returns all published versions for a prompt, ordered by version number. Only the prompt creator or a buyer with an entitlement may access this history.
+
+Example response:
+
+```json
+[
+  {
+    "versionNumber": 1,
+    "changelog": "Initial encrypted prompt",
+    "createdAt": "2026-07-26T00:00:00.000Z",
+    "contentHash": "e3b0c44298fc1c149afbf4c8996fb924..."
+  }
+]
+```
+
+### Get prompt version detail
+
+`GET /api/prompts/:id/versions/:versionIndex?walletAddress=G...`
+
+Returns a single version record including `encryptedPayloadRef` for entitled buyers or the prompt creator.
+
+Example response:
+
+```json
+{
+  "versionNumber": 1,
+  "contentHash": "e3b0c44298fc1c149afbf4c8996fb924...",
+  "encryptedPayloadRef": "s3://prompt/abc123/v1",
+  "changelog": "Initial encrypted prompt",
+  "createdAt": "2026-07-26T00:00:00.000Z"
+}
+```
+
 ## Buyer Library Endpoints
 
 ### Get owned prompts
