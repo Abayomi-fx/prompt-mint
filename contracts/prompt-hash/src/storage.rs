@@ -1,6 +1,8 @@
 use super::types::{
-    ClassificationOverride, DataKey, Error, Prompt, PromptEncryptedPayload, Purchase,
-    ReferralCode, Settlement, Subscription, SubscriptionConfig,
+    Bundle, ClassificationOverride, DataKey, Discount, Error, Prompt, PromptEncryptedPayload,
+    Purchase, ReferralCode, Settlement, Subscription, SubscriptionConfig,
+    DataKey, Error, Prompt, PromptEncryptedPayload, Purchase, ReferralCode, Settlement, Stake,
+    Subscription, SubscriptionConfig,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
 
@@ -513,6 +515,38 @@ impl Storage {
         addr
     }
 
+    // ─── #272: Prompt Bundles ──────────────────────────────────────────────
+
+    pub fn get_bundle_counter(env: &Env) -> u128 {
+        let key = DataKey::BundleCounter;
+        let count = env.storage().persistent().get(&key).unwrap_or(0);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        count
+    }
+
+    pub fn save_bundle(env: &Env, bundle: &Bundle) -> Result<(), Error> {
+        let key = DataKey::Bundle(bundle.id);
+        env.storage().persistent().set(&key, bundle);
+        Self::extend_key_ttl(env, &key);
+
+        let counter_key = DataKey::BundleCounter;
+        let next_id = bundle.id.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        env.storage().persistent().set(&counter_key, &next_id);
+        Self::extend_key_ttl(env, &counter_key);
+        Ok(())
+    }
+
+    pub fn get_bundle(env: &Env, bundle_id: u128) -> Option<Bundle> {
+        let key = DataKey::Bundle(bundle_id);
+        let bundle = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        bundle
+    }
+
     // ─── Promotional Pricing ──────────────────────────────────────────────
 
     pub fn set_active_promotion(env: &Env, prompt_id: u128, promotion: &super::types::Promotion) {
@@ -566,19 +600,21 @@ impl Storage {
         count
     }
 
-    // ─── Contract State Versioning ─────────────────────────────────────────
+    // ─── #275: Creator Reputation Staking ─────────────────────────────────
 
-    /// Schema version stored on-chain. `0` means the key was never written,
-    /// which covers contract state that predates this versioning scheme.
-    pub fn get_schema_version(env: &Env) -> u32 {
-        let key = DataKey::SchemaVersion;
-        let version = env.storage().instance().get(&key).unwrap_or(0);
-        version
+    pub fn get_stake(env: &Env, prompt_id: u128) -> Option<Stake> {
+        let key = DataKey::CreatorStake(prompt_id);
+        let stake = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        stake
     }
 
-    pub fn set_schema_version(env: &Env, version: u32) {
-        let key = DataKey::SchemaVersion;
-        env.storage().instance().set(&key, &version);
+    pub fn save_stake(env: &Env, stake: &Stake) {
+        let key = DataKey::CreatorStake(stake.prompt_id);
+        env.storage().persistent().set(&key, stake);
+        Self::extend_key_ttl(env, &key);
     }
 
     // ─── #273: Time-based Discounts ────────────────────────────────────────

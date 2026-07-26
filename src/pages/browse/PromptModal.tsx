@@ -49,6 +49,8 @@ import {
   buildPromptShareUrl,
 } from "@/lib/marketplace/shareUrls";
 import { translateError } from "../../lib/i18n-errors";
+import { explorerTxUrl } from "../../lib/stellar/explorer";
+import { recordTransaction } from "../../lib/history/transactions";
 
 export type BuyerStatus =
   | "IDLE"
@@ -407,6 +409,21 @@ export const PromptModal: React.FC<PromptModalProps> = ({
         setStatus("UNLOCKING");
         onRefresh?.();
         trackEventWithWallet("prompt_purchase_completed", wallet?.address, { promptId: itemId });
+        if (wallet?.address) {
+          const hash = data.txHash || txHash;
+          recordTransaction(wallet.address, {
+            id: hash || `purchase-${itemId}-${Date.now()}`,
+            txHash: hash || undefined,
+            type: "purchase",
+            status: "success",
+            timestamp: Date.now(),
+            promptId: itemId,
+            title: promptData?.title,
+            amountStroops: promptData?.priceStroops
+              ? String(promptData.priceStroops)
+              : undefined,
+          });
+        }
         runUnlock(data.txHash || txHash).catch(() => {});
       },
       onError: () => {
@@ -653,7 +670,7 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                   />
                   {txHash && (
                     <a
-                      href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+                      href={explorerTxUrl(txHash)}
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-2 mt-6 text-xs text-slate-500 hover:text-emerald-400 font-mono transition-colors"
