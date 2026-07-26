@@ -3480,6 +3480,29 @@ fn test_license_transfer_preserves_encryption_version() {
     assert!(client.has_access(&buyer, &prompt_id));
 }
 
+#[test]
+fn test_extend_ttl_success() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Extend TTL Prompt",
+        1_000,
+        &context.xlm,
+    );
+
+    let key = crate::types::DataKey::Prompt(prompt_id);
+    let result = client.try_extend_ttl(&key);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_extend_ttl_failure_key_not_found() {
 // ─── #275: Creator Reputation Staking ────────────────────────────────────────
 
 const SECONDS_PER_WEEK: u64 = 7 * 24 * 60 * 60;
@@ -3594,6 +3617,14 @@ fn test_slash_missing_stake_is_rejected() {
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
 
+    let missing_key = crate::types::DataKey::Prompt(9999);
+    let result = client.try_extend_ttl(&missing_key);
+
+    match result {
+        Err(Ok(Error::KeyNotFound)) => {}
+        other => panic!("expected KeyNotFound, got {:?}", other),
+    }
+}
     let creator = Address::generate(&env);
     let prompt_id = create_prompt(&env, &client, &creator, "NoStake", 10_000, &context.xlm);
 

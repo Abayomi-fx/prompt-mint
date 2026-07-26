@@ -855,6 +855,9 @@ impl PromptHashTrait for PromptHashContract {
     }
 
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error> {
+        if !env.storage().persistent().has(&key) {
+            return Err(Error::KeyNotFound);
+        }
         Storage::extend_key_ttl(&env, &key);
         Ok(())
     }
