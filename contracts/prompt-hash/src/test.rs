@@ -2461,10 +2461,6 @@ fn test_buy_prompts_bulk_with_referrer() {
 
 #[test]
 fn test_referral_rules_are_snapshotted_and_settlement_is_auditable() {
-// ─── Issue #125: Creator catalog subscription passes ─────────────────────────
-
-#[test]
-fn test_subscription_scope_and_exclusive_expiry_boundary() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
@@ -2510,6 +2506,18 @@ fn test_subscription_scope_and_exclusive_expiry_boundary() {
             + purchase.settlement.platform_amount
             + purchase.settlement.referrer_amount
             + purchase.settlement.split_amount
+    );
+}
+
+// ─── Issue #125: Creator catalog subscription passes ─────────────────────────
+
+#[test]
+fn test_subscription_scope_and_exclusive_expiry_boundary() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+    let creator = Address::generate(&env);
     let subscriber = Address::generate(&env);
     let eligible = create_prompt(
         &env,
@@ -2585,7 +2593,6 @@ fn test_subscription_renewal_failure_is_atomic_and_success_preserves_time() {
 
 #[test]
 fn test_referral_code_guessing_replay_and_cycles_are_rejected() {
-fn test_catalog_changes_transfers_and_direct_purchases_are_independent() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
@@ -2627,6 +2634,15 @@ fn test_catalog_changes_transfers_and_direct_purchases_are_independent() {
     let circular =
         client.try_buy_prompt(&buyer_b, &prompt_b, &Some(code_a), &price, &None::<Bytes>);
     assert!(matches!(circular, Err(Ok(Error::CircularReferral))));
+}
+
+#[test]
+fn test_catalog_changes_transfers_and_direct_purchases_are_independent() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+    let creator = Address::generate(&env);
     let subscriber = Address::generate(&env);
     let transferee = Address::generate(&env);
     let prompt_id = create_prompt(
@@ -2651,7 +2667,7 @@ fn test_catalog_changes_transfers_and_direct_purchases_are_independent() {
     client.buy_prompt(
         &subscriber,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &20_000,
         &None::<Bytes>,
     );
@@ -3014,10 +3030,19 @@ fn create_rotation_test_prompt(
 }
 
 fn generate_test_payload(env: &Env, version: u8) -> (String, String, String, BytesN<32>) {
+    // `format!` needs `alloc` support this `#![no_std]` crate doesn't opt into,
+    // so each tested version gets its own literal suffix instead.
+    let (encrypted, iv, wrapped_key) = match version {
+        1 => ("encrypted-v1", "iv-v1", "wrapped-key-v1"),
+        2 => ("encrypted-v2", "iv-v2", "wrapped-key-v2"),
+        3 => ("encrypted-v3", "iv-v3", "wrapped-key-v3"),
+        4 => ("encrypted-v4", "iv-v4", "wrapped-key-v4"),
+        _ => panic!("generate_test_payload: add a literal case for version {version}"),
+    };
     (
-        String::from_str(env, &format!("encrypted-v{version}")),
-        String::from_str(env, &format!("iv-v{version}")),
-        String::from_str(env, &format!("wrapped-key-v{version}")),
+        String::from_str(env, encrypted),
+        String::from_str(env, iv),
+        String::from_str(env, wrapped_key),
         hash(env, version),
     )
 }
@@ -3037,6 +3062,7 @@ fn test_rotate_encryption_creates_new_version_and_archives_old() {
 
     let (new_enc, new_iv, new_key, new_hash) = generate_test_payload(&env, 2);
 
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
     let new_version = client.rotate_encryption(
         &creator,
         &prompt_id,
@@ -3234,7 +3260,7 @@ fn test_rotate_encryption_rejects_unauthorized_callers() {
     assert_eq!(version, 2);
 
     // Prompt is paused -> rotation blocked
-    client.set_pause_status(&context.admin, &true);
+    client.set_pause_status(&true);
     let (enc3, iv3, key3, hash3) = generate_test_payload(&env, 3);
     let result = client.try_rotate_encryption(
         &creator,
@@ -3248,7 +3274,7 @@ fn test_rotate_encryption_rejects_unauthorized_callers() {
         Err(Ok(Error::ContractIsPaused)) => {}
         other => panic!("expected ContractIsPaused, got {:?}", other),
     }
-    client.set_pause_status(&context.admin, &false);
+    client.set_pause_status(&false);
 }
 
 #[test]
@@ -3272,8 +3298,8 @@ fn test_rotate_encryption_validates_field_lengths() {
         &valid_hash,
     );
     match result {
-        Err(Ok(Error::InvalidEncryptedPromptLength)) => {}
-        other => panic!("expected InvalidEncryptedPromptLength, got {:?}", other),
+        Err(Ok(Error::InvalidFieldLength)) => {}
+        other => panic!("expected InvalidFieldLength, got {:?}", other),
     }
 }
 

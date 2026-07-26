@@ -76,6 +76,12 @@ struct ContractPausedStateChanged {
 }
 
 #[contractevent]
+struct SchemaMigrated {
+    pub previous_version: u32,
+    pub new_version: u32,
+}
+
+#[contractevent]
 struct FeeUpdated {
     #[topic]
     pub new_fee_percentage: u32,
@@ -231,6 +237,14 @@ impl Events {
         ContractPausedStateChanged { is_paused }.publish(env);
     }
 
+    pub fn emit_schema_migrated(env: &Env, previous_version: u32, new_version: u32) {
+        SchemaMigrated {
+            previous_version,
+            new_version,
+        }
+        .publish(env);
+    }
+
     pub fn emit_fee_updated(env: &Env, new_fee_percentage: u32) {
         FeeUpdated { new_fee_percentage }.publish(env);
     }
@@ -324,9 +338,8 @@ impl Events {
         }
         .publish(env);
     }
-}
 
-// ─── #131: Event Structs ───────────────────────────────────────────────────
+    // ─── Promotional Pricing Events ──────────────────────────────────────
 
 #[contractevent]
 struct ClassificationSet {

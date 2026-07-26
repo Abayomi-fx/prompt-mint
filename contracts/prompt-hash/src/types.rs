@@ -11,27 +11,25 @@ pub enum Error {
     AlreadyPurchased = 5,
     InvalidPrice = 6,
     InvalidFeePercentage = 7,
-    InvalidTitleLength = 8,
-    InvalidCategoryLength = 9,
-    InvalidPreviewLength = 10,
-    InvalidEncryptedPromptLength = 11,
-    InvalidWrappedKeyLength = 12,
-    InvalidImageUrlLength = 13,
-    InvalidIvLength = 14,
-    FeeWalletNotSet = 15,
-    XlmAddressNotSet = 16,
-    ArithmeticOverflow = 17,
-    ReentrancyGuard = 18,
-    ContractIsPaused = 19,
-    ReferrerCannotBeBuyerOrCreator = 20,
-    InvalidPaymentAmount = 21,
-    InvalidVoucher = 22,
-    InvalidReferralPercentage = 23,
-    InvalidDiscountPercentage = 24,
-    MaxSupplyReached = 25,
-    InvalidAsset = 26,
+    // Consolidated: title/category/preview/encrypted-prompt/wrapped-key/image-url/iv
+    // all used to be distinct discriminants. Soroban's contract spec format caps a
+    // single `#[contracterror]` enum at 50 cases, so field-length validation now
+    // shares one variant instead of one-per-field.
+    InvalidFieldLength = 8,
+    FeeWalletNotSet = 9,
+    XlmAddressNotSet = 10,
+    ArithmeticOverflow = 11,
+    ReentrancyGuard = 12,
+    ContractIsPaused = 13,
+    ReferrerCannotBeBuyerOrCreator = 14,
+    InvalidPaymentAmount = 15,
+    InvalidVoucher = 16,
+    InvalidReferralPercentage = 17,
+    InvalidDiscountPercentage = 18,
+    MaxSupplyReached = 19,
+    InvalidAsset = 20,
     // #50 – revenue splits
-    InvalidSplits = 27,
+    InvalidSplits = 21,
     // #49 – time-bound listing expiry
     ListingExpired = 28,
     LicenseNotFound = 29,
@@ -52,17 +50,17 @@ pub enum Error {
     SubscriptionNotFound = 58,
     ListingNotEligible = 36,
     // #131 – content classification
-    InvalidClassification = 37,
-    InvalidDisclosureFlags = 38,
-    InvalidContentFlagsLength = 39,
-    ClassificationAlreadyReviewed = 40,
-    NotModerator = 41,
-    InvalidSafetyFlagsLength = 42,
+    InvalidClassification = 36,
+    InvalidDisclosureFlags = 37,
+    InvalidContentFlagsLength = 38,
+    ClassificationAlreadyReviewed = 39,
+    NotModerator = 40,
+    InvalidSafetyFlagsLength = 41,
     // Promotional pricing
-    InvalidPromotionTime = 43,
-    PromotionOverlap = 44,
-    PromotionNotFound = 45,
-    UnauthorizedPromotion = 46,
+    InvalidPromotionTime = 42,
+    PromotionOverlap = 43,
+    PromotionNotFound = 44,
+    UnauthorizedPromotion = 45,
     // Encryption rotation
     EncryptionVersionNotFound = 47,
     InvalidRotation = 48,
@@ -479,8 +477,20 @@ pub trait PromptHashTrait {
         hashed_code: BytesN<32>,
     ) -> Result<(), Error>;
     fn get_xlm_sac(env: Env) -> Option<Address>;
-    fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
+    fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
+    fn confirm_upgrade(env: Env) -> Result<(), Error>;
+    fn cancel_upgrade(env: Env) -> Result<(), Error>;
+    fn get_pending_upgrade(env: Env) -> Option<BytesN<32>>;
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error>;
+
+    // ─── Contract state versioning ───────────────────────────────────────────
+    /// Current schema version applied to this contract's storage. `0` means
+    /// the contract predates this versioning scheme (never migrated).
+    fn get_schema_version(env: Env) -> u32;
+    /// Owner-only. Bumps the stored schema version after an `upgrade` that
+    /// changed the shape of on-chain data. Rejects moving backwards and
+    /// rejects jumping to a version this contract build doesn't know about.
+    fn migrate(env: Env, new_version: u32) -> Result<u32, Error>;
 
     // #131 – content classification
     fn set_classification(
@@ -500,6 +510,8 @@ pub trait PromptHashTrait {
         reason: String,
     ) -> Result<(), Error>;
     fn get_active_classification(env: Env, prompt_id: u128) -> Result<(String, Vec<String>), Error>;
+    fn get_moderator_override(env: Env, prompt_id: u128) -> Result<ClassificationOverride, Error>;
+    fn set_moderator_address(env: Env, admin: Address, moderator: Address) -> Result<(), Error>;
 
     // Promotional pricing
     fn create_promotion(
