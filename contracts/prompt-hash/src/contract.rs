@@ -605,11 +605,12 @@ impl PromptHashTrait for PromptHashContract {
             &env,
             &code_hash,
             &ReferralCode {
-                owner: referrer,
+                owner: referrer.clone(),
                 reward_bps,
                 active: true,
             },
         );
+        Events::emit_referral_code_registered(&env, referrer, code_hash, reward_bps);
         Ok(())
     }
 
@@ -1229,6 +1230,13 @@ fn execute_buy(
     if let Some(ref r) = referrer {
         if referral_amount > 0 {
             asset_client.transfer_from(&this_contract, buyer, r, &referral_amount);
+            Events::emit_referral_reward_paid(
+                env,
+                prompt_id,
+                r.clone(),
+                buyer.clone(),
+                referral_amount,
+            );
         }
     }
 

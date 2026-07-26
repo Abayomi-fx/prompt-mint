@@ -36,6 +36,24 @@ struct PromptPurchased {
     pub referrer_amount: i128,
 }
 
+// ─── #274: Referral tracking events ──────────────────────────────────────
+#[contractevent]
+struct ReferralCodeRegistered {
+    #[topic]
+    pub referrer: Address,
+    pub code_hash: soroban_sdk::BytesN<32>,
+    pub reward_bps: u32,
+}
+
+#[contractevent]
+struct ReferralRewardPaid {
+    #[topic]
+    pub prompt_id: u128,
+    pub referrer: Address,
+    pub buyer: Address,
+    pub reward_amount: i128,
+}
+
 #[contractevent]
 struct LicenseTransferred {
     #[topic]
@@ -178,6 +196,37 @@ impl Events {
             creator_amount,
             platform_amount,
             referrer_amount,
+        }
+        .publish(env);
+    }
+
+    // ─── #274: Referral tracking events ───────────────────────────────────
+    pub fn emit_referral_code_registered(
+        env: &Env,
+        referrer: Address,
+        code_hash: soroban_sdk::BytesN<32>,
+        reward_bps: u32,
+    ) {
+        ReferralCodeRegistered {
+            referrer,
+            code_hash,
+            reward_bps,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_referral_reward_paid(
+        env: &Env,
+        prompt_id: u128,
+        referrer: Address,
+        buyer: Address,
+        reward_amount: i128,
+    ) {
+        ReferralRewardPaid {
+            prompt_id,
+            referrer,
+            buyer,
+            reward_amount,
         }
         .publish(env);
     }
