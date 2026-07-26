@@ -148,6 +148,18 @@ export function validateListingForm(
   return errors;
 }
 
+/**
+ * #269 – Validate a single field for inline (on-blur) feedback.
+ * Reuses {@link validateListingForm} so field rules never drift from the
+ * submit-time rules, and returns just that field's message (or undefined).
+ */
+export function validateListingField(
+  field: keyof ListingFormInput,
+  input: ListingFormInput,
+): string | undefined {
+  return validateListingForm(input)[field];
+}
+
 export async function validateImageMetadata(url: string): Promise<string | null> {
   if (!url) return "Image URL is required.";
   

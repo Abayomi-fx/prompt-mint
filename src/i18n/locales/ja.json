@@ -1,0 +1,86 @@
+{
+  "nav": {
+    "browse": "閲覧",
+    "create": "作成",
+    "dashboard": "ダッシュボード",
+    "connect": "ウォレットを接続",
+    "disconnect": "切断"
+  },
+  "home": {
+    "hero_title": "AIプロンプトを発見・取引",
+    "hero_subtitle": "Stellarブロックチェーン上でプレミアムAIプロンプトを購入・販売・ライセンスできます。",
+    "browse_prompts": "プロンプトを閲覧",
+    "create_prompt": "プロンプトを作成"
+  },
+  "prompt": {
+    "buy": "プロンプトを購入",
+    "lease": "プロンプトをリース",
+    "price": "価格",
+    "creator": "作成者",
+    "category": "カテゴリー",
+    "sales": "販売数",
+    "purchase_success": "プロンプトを正常に購入しました！",
+    "lease_success": "プロンプトを正常にリースしました！",
+    "already_owned": "このプロンプトはすでに所有しています。",
+    "max_supply_reached": "このプロンプトの最大供給数に達しました。"
+  },
+  "create": {
+    "title": "プロンプトを作成",
+    "prompt_title": "タイトル",
+    "category": "カテゴリー",
+    "preview": "プレビューテキスト",
+    "price": "価格（ストループ）",
+    "max_supply": "最大供給数（0 = 無制限）",
+    "submit": "プロンプトを出品",
+    "success": "プロンプトを正常に出品しました！"
+  },
+  "errors": {
+    "not_found": "プロンプトが見つかりません。",
+    "unauthorized": "権限がありません。",
+    "paused": "マーケットプレイスは現在一時停止中です。",
+    "validation": {
+      "required": "この項目は必須です。",
+      "min_length": "{{min}}文字以上で入力してください。",
+      "max_length": "{{max}}文字を超えないようにしてください。",
+      "invalid_url": "http://またはhttps://で始まる有効なURLを入力してください。",
+      "invalid_rating": "評価は1から5の間で入力してください。",
+      "invalid_price": "ゼロより大きい有効な価格を入力してください。",
+      "invalid_address": "無効なウォレットアドレスです。",
+      "review_text_short": "レビューは10文字以上で入力してください。",
+      "review_text_long": "レビューは500文字を超えないようにしてください。",
+      "response_text_long": "返信は1000文字を超えないようにしてください。"
+    },
+    "transaction": {
+      "user_rejected": "トランザクションがユーザーによって拒否されました。",
+      "insufficient_funds": "このトランザクションを完了するための残高が不足しています。",
+      "insufficient_gas": "このトランザクションを完了するためのガスが不足しています。",
+      "invalid_signature": "トランザクションの署名が無効です。",
+      "network_error": "ネットワークエラーです。もう一度お試しください。",
+      "expired": "トランザクションリクエストの有効期限が切れました。",
+      "unknown": "予期しないエラーが発生しました。もう一度お試しください。",
+      "pending": "Stellarネットワークでトランザクションを処理しています..."
+    },
+    "wallet": {
+      "connect_required": "先にウォレットを接続してください。",
+      "network_mismatch": "ウォレットに設定されているネットワークが正しくありません。",
+      "disconnect_failed": "ウォレットの切断に失敗しました。"
+    },
+    "review": {
+      "self_vote": "自分自身のレビューには投票できません。",
+      "duplicate_vote": "このレビューにはすでに投票済みです。",
+      "not_eligible": "確認済みの購入者のみがレビューを投稿できます。",
+      "already_reviewed": "このプロンプトにはすでにレビューを投稿済みです。",
+      "seller_only": "確認済みの販売者のみがレビューに返信できます。",
+      "vote_success": "投票が正常に記録されました。",
+      "vote_removed": "投票が正常に削除されました。",
+      "response_submitted": "販売者の返信が正常に送信されました。"
+    },
+    "moderation": {
+      "unauthorized": "権限を持つモデレーターのみが監査ログを閲覧できます。",
+      "address_required": "モデレーターのアドレスが必要です。"
+    }
+  },
+  "language": {
+    "select": "言語"
+  }
+}
