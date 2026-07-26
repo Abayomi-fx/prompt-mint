@@ -77,6 +77,31 @@ describe("create listing integration coverage", () => {
     expect(createPromptMock).not.toHaveBeenCalled();
   });
 
+  it("persists an unsent draft when the form unmounts before submission", () => {
+    window.localStorage.clear();
+
+    const { unmount } = renderWithProviders(<CreatePromptForm />, {
+      wallet: {
+        address: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
+      },
+    });
+
+    fireEvent.change(screen.getByLabelText(/title/i), {
+      target: { value: "Draft title from session recovery" },
+    });
+    fireEvent.change(screen.getByLabelText(/preview text/i), {
+      target: { value: "Preview text that should survive a refresh" },
+    });
+
+    unmount();
+
+    const storageKey = "prompt-hash:create-draft:GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890";
+    const persisted = window.localStorage.getItem(storageKey);
+
+    expect(persisted).toContain("Draft title from session recovery");
+    expect(persisted).toContain("Preview text that should survive a refresh");
+  });
+
   it("encrypts and submits a valid listing with mocked Soroban boundaries", async () => {
     encryptPromptPlaintextMock.mockResolvedValue({
       encryptedPrompt: "encrypted-prompt",

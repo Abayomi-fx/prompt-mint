@@ -108,6 +108,26 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
 
   const checklistHasFailures = checklistItems.some((i) => i.status === "fail");
 
+  const persistDraft = (nextFormData: FormData = formData) => {
+    if (!draftStorageKey) {
+      return;
+    }
+
+    try {
+      const savedAt = new Date().toISOString();
+      window.localStorage.setItem(
+        draftStorageKey,
+        JSON.stringify({
+          savedAt,
+          formData: nextFormData,
+        }),
+      );
+      setLastSavedAt(savedAt);
+    } catch {
+      setSubmitError("Unable to save your draft locally. Your browser storage may be unavailable.");
+    }
+  };
+
   const clearDraft = () => {
     if (draftStorageKey) {
       window.localStorage.removeItem(draftStorageKey);
@@ -167,18 +187,20 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
     }
 
     const timeout = window.setTimeout(() => {
-      const savedAt = new Date().toISOString();
-      window.localStorage.setItem(
-        draftStorageKey,
-        JSON.stringify({
-          savedAt,
-          formData,
-        }),
-      );
-      setLastSavedAt(savedAt);
+      persistDraft(formData);
     }, 500);
 
     return () => window.clearTimeout(timeout);
+  }, [draftStorageKey, formData, isSubmitting]);
+
+  useEffect(() => {
+    return () => {
+      if (!draftStorageKey || isSubmitting) {
+        return;
+      }
+
+      persistDraft(formData);
+    };
   }, [draftStorageKey, formData, isSubmitting]);
 
   const handleChange = (
@@ -232,6 +254,8 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
     if (!validateForm()) {
       return;
     }
+
+    persistDraft(formData);
 
     setIsSubmitting(true);
     const imageError = await validateImageMetadata(formData.imageUrl);
