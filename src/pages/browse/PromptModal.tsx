@@ -8,6 +8,7 @@ import { StatusBanner } from "../../components/StatusBanner";
 import { UnlockExplainer } from "../../components/UnlockExplainer";
 import { copyToClipboard } from "../../lib/clipboard/secureClipboard";
 import { MarkdownPreview } from "../../components/MarkdownPreview";
+import { WatermarkedPreview } from "../../components/WatermarkedPreview";
 import { CopyButton } from "../../components/CopyButton";
 import {
   CheckCircle,
@@ -102,11 +103,11 @@ const PromptMetadataSection: React.FC<{ itemId: string; status: BuyerStatus }> =
 
   return (
     <div className="mb-6 space-y-4">
-      {/* Preview Content – rendered as markdown */}
-      <MarkdownPreview
+      {/* Preview Content – rendered as markdown, watermarked for non-owners */}
+      <WatermarkedPreview
         content={prompt.previewText}
-        label="Preview"
-        previewOnly={false}
+        hasAccess={isPurchased}
+        previewLength={200}
       />
 
       {/* Metadata Grid */}
