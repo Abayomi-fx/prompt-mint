@@ -3272,8 +3272,8 @@ fn test_rotate_encryption_validates_field_lengths() {
         &valid_hash,
     );
     match result {
-        Err(Ok(Error::InvalidEncryptedPromptLength)) => {}
-        other => panic!("expected InvalidEncryptedPromptLength, got {:?}", other),
+        Err(Ok(Error::InvalidFieldLength)) => {}
+        other => panic!("expected InvalidFieldLength, got {:?}", other),
     }
 }
 
@@ -3310,4 +3310,525 @@ fn test_license_transfer_preserves_encryption_version() {
     let transferred = client.get_purchase_details(&prompt_id, &buyer);
     assert_eq!(transferred.encryption_version, 1);
     assert!(client.has_access(&buyer, &prompt_id));
+}
+
+// ─── Issue #39: Purchase Idempotency Protection ─────────────────────────
+
+#[test]
+fn test_idempotent_buy_returns_already_purchased_error() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Idempotent Prompt", 5_000, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+
+    // First purchase succeeds
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &5_000i128, &None::<Bytes>);
+    assert!(client.has_access(&buyer, &prompt_id));
+    assert_eq!(client.get_prompt(&prompt_id).sales_count, 1);
+
+    // Exact duplicate call returns AlreadyPurchased — no double-spend
+    let result = client.try_buy_prompt(
+        &buyer,
+        &prompt_id,
+        &None::<Bytes>,
+        &5_000i128,
+        &None::<Bytes>,
+    );
+    match result {
+        Err(Ok(Error::AlreadyPurchased)) => {}
+        other => panic!("expected AlreadyPurchased for idempotent buy, got {:?}", other),
+    }
+
+    // State unchanged
+    assert_eq!(client.get_prompt(&prompt_id).sales_count, 1);
+    assert!(client.has_access(&buyer, &prompt_id));
+}
+
+#[test]
+fn test_idempotent_buy_with_voucher_does_not_double_spend() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Voucher Idempotent", 10_000, &context.xlm);
+
+    // Add voucher with 50% discount
+    let code = Bytes::from_slice(&env, b"voucher-idempotent-01");
+    let code_hash = BytesN::from_array(&env, &env.crypto().sha256(&code).to_array());
+    client.add_voucher(&creator, &prompt_id, &code_hash, &5_000);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    let balance_before = xlm_client.balance(&buyer);
+
+    // First purchase with voucher succeeds
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &5_000i128, &Some(code.clone()));
+    assert!(client.has_access(&buyer, &prompt_id));
+
+    // Second purchase with same voucher fails — voucher already consumed and license held
+    let result = client.try_buy_prompt(
+        &buyer,
+        &prompt_id,
+        &None::<Bytes>,
+        &5_000i128,
+        &Some(code),
+    );
+    match result {
+        Err(Ok(Error::AlreadyPurchased)) => {}
+        other => panic!("expected AlreadyPurchased, got {:?}", other),
+    }
+
+    // Only one deduction happened
+    assert_eq!(xlm_client.balance(&buyer), balance_before - 5_000);
+}
+
+// ─── Issue #40: Repeated-Purchase Behavior ──────────────────────────────
+
+#[test]
+fn test_cannot_buy_same_prompt_after_license_transfer() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Transfer Rebuy", 10_000, &context.xlm);
+
+    // seller buys
+    fund_buyer(&xlm_client, &seller, &context.contract, 100_000);
+    client.buy_prompt(&seller, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    assert!(client.has_access(&seller, &prompt_id));
+
+    // seller transfers to buyer
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.transfer_license(&seller, &prompt_id, &buyer, &15_000i128);
+    assert!(!client.has_access(&seller, &prompt_id));
+    assert!(client.has_access(&buyer, &prompt_id));
+
+    // seller cannot re-buy — the license now belongs to buyer
+    let result = client.try_buy_prompt(
+        &seller,
+        &prompt_id,
+        &None::<Bytes>,
+        &10_000i128,
+        &None::<Bytes>,
+    );
+    match result {
+        Err(Ok(Error::AlreadyPurchased)) => {}
+        other => panic!("expected AlreadyPurchased for seller rebuy, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_different_buyers_can_each_purchase_once() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer_a = Address::generate(&env);
+    let buyer_b = Address::generate(&env);
+    let buyer_c = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Multi Buyer", 1_000, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer_a, &context.contract, 100_000);
+    fund_buyer(&xlm_client, &buyer_b, &context.contract, 100_000);
+    fund_buyer(&xlm_client, &buyer_c, &context.contract, 100_000);
+
+    client.buy_prompt(&buyer_a, &prompt_id, &None::<Bytes>, &1_000i128, &None::<Bytes>);
+    client.buy_prompt(&buyer_b, &prompt_id, &None::<Bytes>, &1_000i128, &None::<Bytes>);
+    client.buy_prompt(&buyer_c, &prompt_id, &None::<Bytes>, &1_000i128, &None::<Bytes>);
+
+    assert_eq!(client.get_prompt(&prompt_id).sales_count, 3);
+    assert!(client.has_access(&buyer_a, &prompt_id));
+    assert!(client.has_access(&buyer_b, &prompt_id));
+    assert!(client.has_access(&buyer_c, &prompt_id));
+
+    // Each buyer is now locked out from re-buying
+    let result_a = client.try_buy_prompt(&buyer_a, &prompt_id, &None::<Bytes>, &1_000i128, &None::<Bytes>);
+    match result_a {
+        Err(Ok(Error::AlreadyPurchased)) => {}
+        other => panic!("expected AlreadyPurchased, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_bulk_purchase_rejects_duplicate_in_batch() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_a = create_prompt(&env, &client, &creator, "Bulk Dup A", 1_000, &context.xlm);
+    let prompt_b = create_prompt(&env, &client, &creator, "Bulk Dup B", 2_000, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+
+    // Bulk purchase with same prompt_id twice — atomic revert
+    let mut ids = Vec::new(&env);
+    ids.push_back(prompt_a);
+    ids.push_back(prompt_a);
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(1_000i128);
+    amounts.push_back(1_000i128);
+
+    let result = client.try_buy_prompts_bulk(&buyer, &ids, &amounts, &None::<Bytes>);
+    match result {
+        Err(Ok(Error::AlreadyPurchased)) => {}
+        other => panic!("expected AlreadyPurchased for duplicate in bulk, got {:?}", other),
+    }
+
+    // Neither purchase went through (atomic)
+    assert!(!client.has_access(&buyer, &prompt_a));
+    assert!(!client.has_access(&buyer, &prompt_b));
+    assert_eq!(client.get_prompt(&prompt_a).sales_count, 0);
+}
+
+#[test]
+fn test_lease_then_buy_rejected_if_not_expired() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Lease Then Buy", 10_000, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+
+    // Lease for 600 seconds
+    client.lease_prompt(&buyer, &prompt_id, &600);
+    assert!(client.has_access(&buyer, &prompt_id));
+
+    // Cannot buy while lease is active
+    let result = client.try_buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    match result {
+        Err(Ok(Error::AlreadyPurchased)) => {}
+        other => panic!("expected AlreadyPurchased for buy during active lease, got {:?}", other),
+    }
+
+    // After lease expires, buyer CAN buy
+    env.ledger().with_mut(|l| l.timestamp = 1_700);
+    assert!(!client.has_access(&buyer, &prompt_id));
+
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    assert!(client.has_access(&buyer, &prompt_id));
+}
+
+#[test]
+fn test_max_supply_blocks_further_purchases() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer_a = Address::generate(&env);
+    let buyer_b = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Supply Limited", 1_000, &context.xlm);
+    client.set_prompt_max_supply(&creator, &prompt_id, &1);
+
+    fund_buyer(&xlm_client, &buyer_a, &context.contract, 100_000);
+    fund_buyer(&xlm_client, &buyer_b, &context.contract, 100_000);
+
+    client.buy_prompt(&buyer_a, &prompt_id, &None::<Bytes>, &1_000i128, &None::<Bytes>);
+    assert!(client.has_access(&buyer_a, &prompt_id));
+
+    let result = client.try_buy_prompt(&buyer_b, &prompt_id, &None::<Bytes>, &1_000i128, &None::<Bytes>);
+    match result {
+        Err(Ok(Error::MaxSupplyReached)) => {}
+        other => panic!("expected MaxSupplyReached, got {:?}", other),
+    }
+}
+
+// ─── Issue #41: Maximum Platform-Fee Safeguards ─────────────────────────
+
+#[test]
+fn test_fee_percentage_cannot_exceed_20_percent() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    // 20% (2000 BPS) is the maximum allowed
+    client.set_fee_percentage(&2_000);
+    assert_eq!(client.get_fee_percentage(), 2_000);
+
+    // 21% (2100 BPS) should be rejected
+    let result = client.try_set_fee_percentage(&2_100);
+    match result {
+        Err(Ok(Error::FeeExceedsMaximum)) => {}
+        other => panic!("expected FeeExceedsMaximum for 21%, got {:?}", other),
+    }
+    assert_eq!(client.get_fee_percentage(), 2_000);
+}
+
+#[test]
+fn test_fee_at_exact_maximum_boundary() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    // Set fee to exactly 20% (2000 BPS) — should succeed
+    client.set_fee_percentage(&2_000);
+    assert_eq!(client.get_fee_percentage(), 2_000);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let price: i128 = 10_000;
+    let prompt_id = create_prompt(&env, &client, &creator, "Max Fee", price, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, price);
+
+    let creator_start = xlm_client.balance(&creator);
+    let fee_start = xlm_client.balance(&context.fee_wallet);
+
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
+
+    let expected_fee = price * 2_000 / 10_000; // 20% of 10_000 = 2_000
+    let expected_creator = price - expected_fee;
+
+    assert_eq!(xlm_client.balance(&creator), creator_start + expected_creator);
+    assert_eq!(xlm_client.balance(&context.fee_wallet), fee_start + expected_fee);
+}
+
+#[test]
+fn test_zero_fee_percentage_is_valid() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    client.set_fee_percentage(&0);
+    assert_eq!(client.get_fee_percentage(), 0);
+}
+
+#[test]
+fn test_existing_fee_below_cap_still_works() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    // Default fee is 500 BPS (5%) which is below the 2000 BPS cap
+    assert_eq!(client.get_fee_percentage(), 500);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let price: i128 = 10_000;
+    let prompt_id = create_prompt(&env, &client, &creator, "Default Fee", price, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, price);
+
+    let creator_start = xlm_client.balance(&creator);
+    let fee_start = xlm_client.balance(&context.fee_wallet);
+
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
+
+    let expected_fee = price * 500 / 10_000;
+    let expected_creator = price - expected_fee;
+
+    assert_eq!(xlm_client.balance(&creator), creator_start + expected_creator);
+    assert_eq!(xlm_client.balance(&context.fee_wallet), fee_start + expected_fee);
+}
+
+#[test]
+fn test_fee_safeguard_enforced_during_purchase() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    // Set fee to maximum (20%)
+    client.set_fee_percentage(&2_000);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let price: i128 = 100_000;
+    let prompt_id = create_prompt(&env, &client, &creator, "Safeguard Check", price, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, price);
+
+    let creator_start = xlm_client.balance(&creator);
+    let fee_start = xlm_client.balance(&context.fee_wallet);
+
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
+
+    // 20% of 100_000 = 20_000
+    let expected_fee = 20_000i128;
+    let expected_creator = price - expected_fee;
+
+    assert_eq!(xlm_client.balance(&creator), creator_start + expected_creator);
+    assert_eq!(xlm_client.balance(&context.fee_wallet), fee_start + expected_fee);
+}
+
+// ─── Issue #42: Safe Contract Upgrade Authorization ─────────────────────
+
+#[test]
+fn test_propose_upgrade_stores_hash_and_timestamp() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let wasm_hash = hash(&env, 42);
+    client.propose_upgrade(&wasm_hash);
+
+    let pending = client.get_pending_upgrade();
+    assert_eq!(pending, Some(wasm_hash));
+}
+
+#[test]
+fn test_cannot_propose_two_upgrades_concurrently() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let wasm_hash_1 = hash(&env, 42);
+    let wasm_hash_2 = hash(&env, 43);
+
+    client.propose_upgrade(&wasm_hash_1);
+
+    let result = client.try_propose_upgrade(&wasm_hash_2);
+    match result {
+        Err(Ok(Error::UpgradeAlreadyProposed)) => {}
+        other => panic!("expected UpgradeAlreadyProposed, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_confirm_upgrade_requires_cooldown() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let wasm_hash = hash(&env, 42);
+    client.propose_upgrade(&wasm_hash);
+
+    // Try to confirm immediately — should fail
+    let result = client.try_confirm_upgrade();
+    match result {
+        Err(Ok(Error::UpgradeCooldownNotElapsed)) => {}
+        other => panic!("expected UpgradeCooldownNotElapsed, got {:?}", other),
+    }
+
+    // After 24 hours (86400 seconds), confirm succeeds
+    env.ledger().with_mut(|l| l.timestamp = 1_000 + 86_400);
+    client.confirm_upgrade();
+
+    // Pending upgrade should be cleared
+    assert_eq!(client.get_pending_upgrade(), None);
+}
+
+#[test]
+fn test_confirm_upgrade_without_proposal_fails() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let result = client.try_confirm_upgrade();
+    match result {
+        Err(Ok(Error::UpgradeNotProposed)) => {}
+        other => panic!("expected UpgradeNotProposed, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_cancel_upgrade_clears_proposal() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let wasm_hash = hash(&env, 42);
+    client.propose_upgrade(&wasm_hash);
+    assert_eq!(client.get_pending_upgrade(), Some(wasm_hash));
+
+    client.cancel_upgrade();
+    assert_eq!(client.get_pending_upgrade(), None);
+
+    // Can propose again after cancel
+    let wasm_hash_2 = hash(&env, 43);
+    client.propose_upgrade(&wasm_hash_2);
+    assert_eq!(client.get_pending_upgrade(), Some(wasm_hash_2));
+}
+
+#[test]
+fn test_cancel_nonexistent_upgrade_fails() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let result = client.try_cancel_upgrade();
+    match result {
+        Err(Ok(Error::UpgradeNotProposed)) => {}
+        other => panic!("expected UpgradeNotProposed, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_proposal_allows_new_proposal_after_confirm() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    // First upgrade cycle
+    let wasm_hash_1 = hash(&env, 10);
+    client.propose_upgrade(&wasm_hash_1);
+    env.ledger().with_mut(|l| l.timestamp = 1_000 + 86_400);
+    client.confirm_upgrade();
+    assert_eq!(client.get_pending_upgrade(), None);
+
+    // Second upgrade cycle should work
+    let wasm_hash_2 = hash(&env, 20);
+    env.ledger().with_mut(|l| l.timestamp = 1_000 + 86_400 * 2);
+    client.propose_upgrade(&wasm_hash_2);
+    assert_eq!(client.get_pending_upgrade(), Some(wasm_hash_2));
+}
+
+#[test]
+fn test_propose_then_cancel_then_repropose_same_hash() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let wasm_hash = hash(&env, 99);
+    client.propose_upgrade(&wasm_hash);
+    client.cancel_upgrade();
+    client.propose_upgrade(&wasm_hash);
+    assert_eq!(client.get_pending_upgrade(), Some(wasm_hash));
+}
+
+#[test]
+fn test_get_pending_upgrade_returns_none_initially() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    assert_eq!(client.get_pending_upgrade(), None);
 }
