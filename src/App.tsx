@@ -10,6 +10,7 @@ const ChatHome = lazy(() => import("./pages/chat/page.tsx"));
 const ProfilePage = lazy(() => import("./pages/profile/page.tsx"));
 const PromptDetailPage = lazy(() => import("./pages/prompt/page.tsx"));
 const CreatorSharePage = lazy(() => import("./pages/creator/page.tsx"));
+const ComparePage = lazy(() => import("./pages/compare/page.tsx"));
 const StatusPage = lazy(() => import("./pages/status/page.tsx"));
 const ModerationPage = lazy(() => import("./pages/Moderation.tsx"));
 
@@ -61,6 +62,14 @@ function App() {
                 element={
                   <ErrorBoundary routeName="Creator">
                     <CreatorSharePage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/compare"
+                element={
+                  <ErrorBoundary routeName="Compare">
+                    <ComparePage />
                   </ErrorBoundary>
                 }
               />

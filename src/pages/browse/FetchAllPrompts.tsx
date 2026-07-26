@@ -35,6 +35,7 @@ import {
 import { stroopsToXlmString } from "@/lib/stellar/format";
 import { PromptCard } from "./PromptCard";
 import { PromptModal } from "./PromptModal";
+import { ComparisonTray } from "./ComparisonTray";
 import { invalidateAllPromptQueries } from "@/hooks/useContractSync";
 import { parsePromptIdParam } from "@/lib/marketplace/shareUrls";
 
@@ -519,6 +520,9 @@ const FetchAllPrompts = ({
           onRefresh={() => invalidateAllPromptQueries(queryClient)}
         />
       )}
+
+      {/* #277 – floating comparison tray */}
+      <ComparisonTray />
     </>
   );
 };
