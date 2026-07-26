@@ -389,8 +389,38 @@ struct PromotionApplied {
     pub original_price: i128,
 }
 
-pub struct Events;
+// ─── #275: Creator Reputation Staking Events ─────────────────────────────
 
+#[contractevent]
+struct StakeAdded {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub amount: i128,
+    pub total_staked: i128,
+}
+
+#[contractevent]
+struct StakeSlashed {
+    #[topic]
+    pub prompt_id: u128,
+    pub slashed_amount: i128,
+    pub remaining_staked: i128,
+}
+
+#[contractevent]
+struct StakeWithdrawn {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub amount: i128,
+    pub remaining_staked: i128,
+}
+
+// NB: `Events` is already declared earlier in this file; this is an additional
+// `impl Events` block (multiple impl blocks for one type are valid Rust). The
+// duplicate `pub struct Events;` that previously sat here has been removed to
+// keep the crate compiling.
 impl Events {
     pub fn emit_promotion_created(
         env: &Env,
@@ -460,6 +490,54 @@ impl Events {
             previous_version,
             new_version,
             rotated_at,
+        }
+        .publish(env);
+    }
+
+    // ─── #275: Creator Reputation Staking ─────────────────────────────────
+
+    pub fn emit_stake_added(
+        env: &Env,
+        prompt_id: u128,
+        creator: Address,
+        amount: i128,
+        total_staked: i128,
+    ) {
+        StakeAdded {
+            prompt_id,
+            creator,
+            amount,
+            total_staked,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_stake_slashed(
+        env: &Env,
+        prompt_id: u128,
+        slashed_amount: i128,
+        remaining_staked: i128,
+    ) {
+        StakeSlashed {
+            prompt_id,
+            slashed_amount,
+            remaining_staked,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_stake_withdrawn(
+        env: &Env,
+        prompt_id: u128,
+        creator: Address,
+        amount: i128,
+        remaining_staked: i128,
+    ) {
+        StakeWithdrawn {
+            prompt_id,
+            creator,
+            amount,
+            remaining_staked,
         }
         .publish(env);
     }

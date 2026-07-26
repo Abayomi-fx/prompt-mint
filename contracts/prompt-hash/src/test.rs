@@ -3311,3 +3311,214 @@ fn test_license_transfer_preserves_encryption_version() {
     assert_eq!(transferred.encryption_version, 1);
     assert!(client.has_access(&buyer, &prompt_id));
 }
+
+// ─── #275: Creator Reputation Staking ────────────────────────────────────────
+
+const SECONDS_PER_WEEK: u64 = 7 * 24 * 60 * 60;
+
+#[test]
+fn test_stake_records_balance_and_moves_tokens_into_custody() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Staked Prompt", 10_000, &context.xlm);
+
+    // Fund the creator so they can stake.
+    xlm_client.mint(&creator, &50_000);
+    let creator_start = xlm_client.balance(&creator);
+    let custody_start = xlm_client.balance(&context.contract);
+
+    let total = client.stake(&creator, &prompt_id, &30_000);
+    assert_eq!(total, 30_000);
+
+    // Recorded stake reflects the amount.
+    let stake = client.get_stake(&prompt_id);
+    assert_eq!(stake.amount, 30_000);
+    assert_eq!(stake.creator, creator);
+
+    // Tokens moved from creator into contract custody.
+    assert_eq!(xlm_client.balance(&creator), creator_start - 30_000);
+    assert_eq!(xlm_client.balance(&context.contract), custody_start + 30_000);
+
+    // Additional stake accumulates.
+    let total2 = client.stake(&creator, &prompt_id, &10_000);
+    assert_eq!(total2, 40_000);
+    assert_eq!(client.get_stake(&prompt_id).amount, 40_000);
+}
+
+#[test]
+fn test_only_prompt_creator_can_stake() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Owned Prompt", 10_000, &context.xlm);
+
+    xlm_client.mint(&stranger, &50_000);
+    let result = client.try_stake(&stranger, &prompt_id, &10_000);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for non-creator stake, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_slash_reduces_stake_and_forwards_to_fee_wallet() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Slashable", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &30_000);
+
+    let fee_start = xlm_client.balance(&context.fee_wallet);
+    let custody_start = xlm_client.balance(&context.contract);
+
+    // Owner (admin) slashes part of the stake. #[only_owner] gates this call;
+    // under mock_all_auths the owner authorization is satisfied automatically
+    // (see test_set_referral_percentage_only_owner for the same convention).
+    let slashed = client.slash(&prompt_id, &12_000);
+    assert_eq!(slashed, 12_000);
+    assert_eq!(client.get_stake(&prompt_id).amount, 18_000);
+
+    // Slashed stroops leave custody and land in the fee wallet.
+    assert_eq!(xlm_client.balance(&context.fee_wallet), fee_start + 12_000);
+    assert_eq!(xlm_client.balance(&context.contract), custody_start - 12_000);
+}
+
+#[test]
+fn test_over_slash_is_clamped_to_available_stake() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Clamp", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &20_000);
+
+    // Requesting more than staked only removes what is available.
+    let slashed = client.slash(&prompt_id, &100_000);
+    assert_eq!(slashed, 20_000);
+    assert_eq!(client.get_stake(&prompt_id).amount, 0);
+
+    // A second slash on an empty stake removes nothing (clamped to zero).
+    let slashed_again = client.slash(&prompt_id, &5_000);
+    assert_eq!(slashed_again, 0);
+    assert_eq!(client.get_stake(&prompt_id).amount, 0);
+}
+
+#[test]
+fn test_slash_missing_stake_is_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "NoStake", 10_000, &context.xlm);
+
+    let result = client.try_slash(&prompt_id, &1_000);
+    match result {
+        Err(Ok(Error::StakeNotFound)) => {}
+        other => panic!("expected StakeNotFound, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_unstake_returns_remaining_stake_after_cooldown() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Reclaimable", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &30_000);
+
+    // Admin slashes part; creator should only reclaim the non-slashed remainder.
+    client.slash(&prompt_id, &10_000);
+    assert_eq!(client.get_stake(&prompt_id).amount, 20_000);
+
+    // Advance past the cooldown window.
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + SECONDS_PER_WEEK + 1);
+
+    let creator_before = xlm_client.balance(&creator);
+    let custody_before = xlm_client.balance(&context.contract);
+
+    let withdrawn = client.unstake(&creator, &prompt_id, &100_000);
+    assert_eq!(withdrawn, 20_000, "unstake clamps to remaining stake");
+    assert_eq!(client.get_stake(&prompt_id).amount, 0);
+
+    assert_eq!(xlm_client.balance(&creator), creator_before + 20_000);
+    assert_eq!(xlm_client.balance(&context.contract), custody_before - 20_000);
+}
+
+#[test]
+fn test_unstake_before_cooldown_is_locked() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Locked", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &30_000);
+
+    // Only a little time passes — still within the cooldown.
+    env.ledger().with_mut(|l| l.timestamp = 1_000 + 100);
+
+    let result = client.try_unstake(&creator, &prompt_id, &10_000);
+    match result {
+        Err(Ok(Error::StakeLocked)) => {}
+        other => panic!("expected StakeLocked before cooldown, got {:?}", other),
+    }
+    // Stake untouched.
+    assert_eq!(client.get_stake(&prompt_id).amount, 30_000);
+}
+
+#[test]
+fn test_unstake_by_non_owner_is_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Guarded", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &30_000);
+
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + SECONDS_PER_WEEK + 1);
+
+    let result = client.try_unstake(&stranger, &prompt_id, &10_000);
+    match result {
+        Err(Ok(Error::NotStakeOwner)) => {}
+        other => panic!("expected NotStakeOwner, got {:?}", other),
+    }
+}
