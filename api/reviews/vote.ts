@@ -2,6 +2,7 @@ import { findReview, updateReview } from "./data";
 import { negotiateVersion } from "../../src/lib/api/versionGuard";
 import { withVersion } from "../../src/lib/api/payloadVersion";
 import { apiError, ErrorCode } from "../../src/lib/api/errorCodes";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 
 interface VoteRequest {
   promptId: string;
@@ -9,7 +10,7 @@ interface VoteRequest {
   userAddress: string;
 }
 
-export default async function handler(req: any, res: any) {
+async function handler(req: any, res: any) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
@@ -73,3 +74,5 @@ export default async function handler(req: any, res: any) {
     res.status(500).json(apiError(ErrorCode.TEMPORARY_FAILURE, message, undefined, version));
   }
 }
+
+export default withBodySizeLimit(handler);

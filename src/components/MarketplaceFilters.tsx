@@ -206,6 +206,7 @@ export function MarketplaceFilters({
             <SelectItem value="sales">Best Sellers</SelectItem>
             <SelectItem value="price-low">Price: Low to High</SelectItem>
             <SelectItem value="price-high">Price: High to Low</SelectItem>
+            <SelectItem value="bookmarked">Bookmarked First</SelectItem>
           </SelectContent>
         </Select>
       </div>

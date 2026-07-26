@@ -1,4 +1,5 @@
 import { hasAccess, type PromptHashConfig } from "../../src/lib/stellar/promptHashClient";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 import { addReview, getReviews, type StoredReview } from "./data";
 import { negotiateVersion } from "../../src/lib/api/versionGuard";
 import { withVersion } from "../../src/lib/api/payloadVersion";
@@ -29,7 +30,7 @@ function getServerConfig(): PromptHashConfig {
   };
 }
 
-export default async function handler(req: any, res: any) {
+async function handler(req: any, res: any) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
@@ -89,6 +90,7 @@ export default async function handler(req: any, res: any) {
       verified: true,
       helpfulVotes: 0,
       voters: [],
+      editHistory: [],
     };
 
     addReview(review);
@@ -114,3 +116,5 @@ export default async function handler(req: any, res: any) {
     res.status(500).json(apiError(ErrorCode.TEMPORARY_FAILURE, message, undefined, version));
   }
 }
+
+export default withBodySizeLimit(handler);

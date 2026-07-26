@@ -1,5 +1,6 @@
 import { createChallengeToken } from "../../src/lib/auth/challenge";
 import { withObservability } from "../../src/lib/observability/wrapper";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 import { checkRateLimit } from "../../src/lib/observability/rateLimiter";
 import { metrics } from "../../src/lib/observability/metrics";
 import { recordAuditEvent } from "../../server/src/services/auditTrail";
@@ -7,6 +8,10 @@ import { apiError, ErrorCode } from "../../src/lib/api/errorCodes";
 import { isPlaceholder } from "../../src/lib/validation/envValidator";
 import { negotiateVersion } from "../../src/lib/api/versionGuard";
 import { withVersion } from "../../src/lib/api/payloadVersion";
+import {
+  ChallengeRequestBody,
+  parseRequestBody,
+} from "../../src/lib/api/requestSchemas";
 
 async function handler(req: any, res: any) {
   if (req.method !== "POST") {
@@ -18,10 +23,12 @@ async function handler(req: any, res: any) {
   if (!version) return;
 
   const clientIp = (req.headers["x-forwarded-for"] || req.socket.remoteAddress) as string;
-  const { address, promptId } = req.body ?? {};
+  const body = req.body ?? {};
+  const rawAddress = (body as { address?: unknown }).address;
+  const rawPromptId = (body as { promptId?: unknown }).promptId;
 
   // Authenticated if wallet address is provided in the request body.
-  const isAuthenticated = Boolean(address);
+  const isAuthenticated = Boolean(rawAddress);
 
   const rateLimit = await checkRateLimit("challenge", clientIp, isAuthenticated);
 
@@ -31,8 +38,8 @@ async function handler(req: any, res: any) {
     void recordAuditEvent({
       action: "challenge_rate_limited",
       result: "blocked",
-      promptId: address && promptId ? String(promptId) : null,
-      walletAddress: address ? String(address) : null,
+      promptId: rawAddress && rawPromptId ? String(rawPromptId) : null,
+      walletAddress: rawAddress ? String(rawAddress) : null,
       requestId: req.requestId ?? null,
       clientIp,
       reason: "rate_limit_exceeded",
@@ -59,14 +66,17 @@ async function handler(req: any, res: any) {
     return;
   }
 
-  if (!address || !promptId) {
+  const parsed = parseRequestBody(ChallengeRequestBody, req.body);
+  if (!parsed.success) {
     res.status(400).json(
       apiError(ErrorCode.MISSING_FIELDS, "address and promptId are required.", undefined, version),
     );
     return;
   }
 
-  const challenge = createChallengeToken(secret, String(address), String(promptId));
+  const { address, promptId } = parsed.data;
+
+  const challenge = createChallengeToken(secret, address, promptId);
 
   metrics.trackChallengeIssued(String(address), String(promptId));
   req.logger.info({ address, promptId }, "Challenge token issued successfully");
@@ -84,4 +94,4 @@ async function handler(req: any, res: any) {
   res.status(200).json(withVersion(challenge, version));
 }
 
-export default withObservability(handler, "auth/challenge");
+export default withObservability(withBodySizeLimit(handler), "auth/challenge");

@@ -50,6 +50,8 @@ const mockLogs: ModerationLogEntry[] = [
     createdAt: Date.now() - 86400000 * 1,
   },
 ];
+import { getModerationLogs, verifyModeratorAuth } from "./data";
+export type { ModerationLogEntry } from "./data";
 
 export default async function handler(req: any, res: any) {
   if (req.method !== "GET") {
@@ -61,6 +63,10 @@ export default async function handler(req: any, res: any) {
   if (!version) return;
 
   const moderatorAddress = (req.query.moderatorAddress as string) ?? "";
+  const moderatorTimestamp = req.query.moderatorTimestamp
+    ? parseInt(req.query.moderatorTimestamp as string, 10)
+    : undefined;
+  const moderatorSignature = (req.query.moderatorSignature as string) ?? undefined;
 
   if (!moderatorAddress) {
     res.status(401).json({ apiVersion: version, error: "Moderator address is required" });
@@ -75,6 +81,14 @@ export default async function handler(req: any, res: any) {
       apiVersion: version,
       error: "Unauthorized: Only authorized moderators can view audit logs",
     });
+  const auth = verifyModeratorAuth({
+    address: moderatorAddress,
+    timestamp: moderatorTimestamp,
+    signature: moderatorSignature,
+    purpose: "moderation-logs",
+  });
+  if (!auth.ok) {
+    res.status(auth.status).json({ error: auth.error });
     return;
   }
 
@@ -85,7 +99,7 @@ export default async function handler(req: any, res: any) {
   const since = req.query.since ? parseInt(req.query.since as string) : 0;
 
   try {
-    let filtered = [...mockLogs];
+    let filtered = [...getModerationLogs()];
 
     if (action) {
       filtered = filtered.filter((l) => l.action === action);

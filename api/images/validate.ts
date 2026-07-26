@@ -1,4 +1,5 @@
 import { withObservability } from "../../src/lib/observability/wrapper";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 import { apiError, ErrorCode } from "../../src/lib/api/errorCodes";
 import { negotiateVersion } from "../../src/lib/api/versionGuard";
 import { withVersion } from "../../src/lib/api/payloadVersion";
@@ -53,4 +54,4 @@ async function handler(req: any, res: any) {
   }
 }
 
-export default withObservability(handler, "image_validate");
+export default withObservability(withBodySizeLimit(handler, 8 * 1024), "image_validate");

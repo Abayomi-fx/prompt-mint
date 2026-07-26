@@ -1,4 +1,5 @@
 import { withObservability } from "../../src/lib/observability/wrapper";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 import connectDb from "../../server/src/db/connectDb";
 import WebhookSubscription from "../../server/src/models/WebhookSubscription";
 import { randomBytes } from "crypto";
@@ -87,4 +88,4 @@ async function handler(req: any, res: any) {
   res.status(405).json(apiError(ErrorCode.METHOD_NOT_ALLOWED, "Method not allowed.", undefined, version));
 }
 
-export default withObservability(handler, "webhooks");
+export default withObservability(withBodySizeLimit(handler), "webhooks");

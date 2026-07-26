@@ -10,6 +10,8 @@ import { randomBytes } from "crypto";
 import { isPlaceholder } from "../../src/lib/validation/envValidator";
 import { negotiateVersion } from "../../src/lib/api/versionGuard";
 import { withVersion } from "../../src/lib/api/payloadVersion";
+import { isValidAdminToken } from "../../src/lib/auth/adminToken";
+import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 
 interface SecretRotationConfig {
   currentSecret: string;
@@ -142,7 +144,7 @@ export function cleanupExpiredSecrets(): void {
 }
 
 // HTTP endpoint handler for manual rotation
-export default async function handler(req: any, res: any) {
+async function handler(req: any, res: any) {
   if (req.method !== "POST") {
     res.status(405).json({ error: "Method not allowed" });
     return;
@@ -157,6 +159,8 @@ export default async function handler(req: any, res: any) {
   
   if (!adminToken || authHeader !== `Bearer ${adminToken}`) {
     res.status(401).json({ apiVersion: version, error: "Unauthorized" });
+  if (!isValidAdminToken(req.headers.authorization, process.env.ADMIN_ROTATION_TOKEN)) {
+    res.status(401).json({ error: "Unauthorized" });
     return;
   }
 
@@ -180,3 +184,5 @@ export default async function handler(req: any, res: any) {
     res.status(500).json({ apiVersion: version, error: message });
   }
 }
+
+export default withBodySizeLimit(handler, 4 * 1024);
