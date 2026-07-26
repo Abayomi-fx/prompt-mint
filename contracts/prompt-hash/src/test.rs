@@ -632,6 +632,80 @@ fn test_duplicate_purchase_returns_typed_error() {
     }
 }
 
+// ─── #272: Prompt Bundling ──────────────────────────────────────────────────
+
+#[test]
+fn test_create_bundle_rejects_unowned_prompts() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let other = Address::generate(&env);
+    let owned = create_prompt(&env, &client, &creator, "Owned", 10_000, &context.xlm);
+    let foreign = create_prompt(&env, &client, &other, "Foreign", 10_000, &context.xlm);
+
+    let ids = Vec::from_array(&env, [owned, foreign]);
+    let result = client.try_create_bundle(&creator, &ids, &15_000i128, &context.xlm);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for unowned prompt in bundle, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_purchase_bundle_grants_access_and_splits_payment() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let p1 = create_prompt(&env, &client, &creator, "Bundle P1", 10_000, &context.xlm);
+    let p2 = create_prompt(&env, &client, &creator, "Bundle P2", 20_000, &context.xlm);
+
+    let ids = Vec::from_array(&env, [p1, p2]);
+    let bundle_price = 24_000i128;
+    let bundle_id = client.create_bundle(&creator, &ids, &bundle_price, &context.xlm);
+
+    let stored: Bundle = client.get_bundle(&bundle_id);
+    assert_eq!(stored.price, bundle_price);
+    assert_eq!(stored.prompt_ids.len(), 2);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    let creator_before = xlm_client.balance(&creator);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+    let buyer_before = xlm_client.balance(&buyer);
+
+    client.purchase_bundle(&buyer, &bundle_id, &bundle_price);
+
+    // Access granted to every prompt in the bundle.
+    assert!(client.has_access(&buyer, &p1));
+    assert!(client.has_access(&buyer, &p2));
+
+    // Payment split: platform fee (default 500 bps) then creator remainder.
+    let fee = bundle_price * 500 / 10_000;
+    let creator_amount = bundle_price - fee;
+    assert_eq!(xlm_client.balance(&creator), creator_before + creator_amount);
+    assert_eq!(xlm_client.balance(&context.fee_wallet), fee_before + fee);
+    assert_eq!(xlm_client.balance(&buyer), buyer_before - bundle_price);
+}
+
+#[test]
+fn test_purchase_nonexistent_bundle_fails_cleanly() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let buyer = Address::generate(&env);
+    let result = client.try_purchase_bundle(&buyer, &999u128, &10_000i128);
+    match result {
+        Err(Ok(Error::BundleNotFound)) => {}
+        other => panic!("expected BundleNotFound, got {:?}", other),
+    }
+}
+
 #[test]
 fn test_creator_cannot_buy_own_prompt() {
     let env: Env = Default::default();
