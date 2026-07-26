@@ -11,27 +11,25 @@ pub enum Error {
     AlreadyPurchased = 5,
     InvalidPrice = 6,
     InvalidFeePercentage = 7,
-    InvalidTitleLength = 8,
-    InvalidCategoryLength = 9,
-    InvalidPreviewLength = 10,
-    InvalidEncryptedPromptLength = 11,
-    InvalidWrappedKeyLength = 12,
-    InvalidImageUrlLength = 13,
-    InvalidIvLength = 14,
-    FeeWalletNotSet = 15,
-    XlmAddressNotSet = 16,
-    ArithmeticOverflow = 17,
-    ReentrancyGuard = 18,
-    ContractIsPaused = 19,
-    ReferrerCannotBeBuyerOrCreator = 20,
-    InvalidPaymentAmount = 21,
-    InvalidVoucher = 22,
-    InvalidReferralPercentage = 23,
-    InvalidDiscountPercentage = 24,
-    MaxSupplyReached = 25,
-    InvalidAsset = 26,
+    // Consolidated: title/category/preview/encrypted-prompt/wrapped-key/image-url/iv
+    // all used to be distinct discriminants. Soroban's contract spec format caps a
+    // single `#[contracterror]` enum at 50 cases, so field-length validation now
+    // shares one variant instead of one-per-field.
+    InvalidFieldLength = 8,
+    FeeWalletNotSet = 9,
+    XlmAddressNotSet = 10,
+    ArithmeticOverflow = 11,
+    ReentrancyGuard = 12,
+    ContractIsPaused = 13,
+    ReferrerCannotBeBuyerOrCreator = 14,
+    InvalidPaymentAmount = 15,
+    InvalidVoucher = 16,
+    InvalidReferralPercentage = 17,
+    InvalidDiscountPercentage = 18,
+    MaxSupplyReached = 19,
+    InvalidAsset = 20,
     // #50 – revenue splits
-    InvalidSplits = 27,
+    InvalidSplits = 21,
     // #49 – time-bound listing expiry
     ListingExpired = 28,
     LicenseNotFound = 29,
@@ -41,28 +39,37 @@ pub enum Error {
     ReferralCodeTooShort = 33,
     ReferralReplay = 34,
     CircularReferral = 35,
-    SubscriptionConfigNotFound = 31,
-    SubscriptionInactive = 32,
-    InvalidSubscriptionDuration = 33,
-    InvalidSubscriptionPrice = 34,
-    SubscriptionNotFound = 35,
+    // NB: these previously reused discriminants 31–35 (duplicating the
+    // Referral* variants above), which is an E0081 compile error. Renumbered to
+    // unique values so the enum compiles; kept contiguous after the staking
+    // variants below.
+    SubscriptionConfigNotFound = 54,
+    SubscriptionInactive = 55,
+    InvalidSubscriptionDuration = 56,
+    InvalidSubscriptionPrice = 57,
+    SubscriptionNotFound = 58,
     ListingNotEligible = 36,
     // #131 – content classification
-    InvalidClassification = 37,
-    InvalidDisclosureFlags = 38,
-    InvalidContentFlagsLength = 39,
-    ClassificationAlreadyReviewed = 40,
-    NotModerator = 41,
-    InvalidSafetyFlagsLength = 42,
+    InvalidClassification = 36,
+    InvalidDisclosureFlags = 37,
+    InvalidContentFlagsLength = 38,
+    ClassificationAlreadyReviewed = 39,
+    NotModerator = 40,
+    InvalidSafetyFlagsLength = 41,
     // Promotional pricing
-    InvalidPromotionTime = 43,
-    PromotionOverlap = 44,
-    PromotionNotFound = 45,
-    UnauthorizedPromotion = 46,
+    InvalidPromotionTime = 42,
+    PromotionOverlap = 43,
+    PromotionNotFound = 44,
+    UnauthorizedPromotion = 45,
     // Encryption rotation
     EncryptionVersionNotFound = 47,
     InvalidRotation = 48,
     VersionMismatch = 49,
+    // #275 – creator reputation staking
+    StakeNotFound = 50,
+    StakeLocked = 51,
+    InvalidStakeAmount = 52,
+    NotStakeOwner = 53,
 }
 
 #[contracttype]
@@ -94,6 +101,8 @@ pub enum DataKey {
     // Encryption rotation – versioned payloads & version counter per prompt
     PromptEncryptedPayload(u128, u32),
     PromptEncryptionVersion(u128),
+    // #275 – creator reputation staking, keyed by prompt id
+    CreatorStake(u128),
 }
 
 /// A moderator-overridden classification that takes precedence
@@ -117,6 +126,10 @@ pub struct Settlement {
     pub referrer: Option<Address>,
     pub referrer_amount: i128,
     pub split_amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubscriptionConfig {
     pub creator: Address,
     pub duration_secs: u64,
@@ -131,6 +144,10 @@ pub struct ReferralCode {
     pub owner: Address,
     pub reward_bps: u32,
     pub active: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Subscription {
     pub creator: Address,
     pub subscriber: Address,
@@ -281,6 +298,23 @@ pub struct PromptEncryptedPayload {
     pub wrapped_key: String,
     pub content_hash: BytesN<32>,
     pub created_at: u64,
+}
+
+/// #275 – Creator reputation stake.
+/// A creator stakes native XLM against one of their own prompts to signal
+/// quality. Stake is held in contract custody and can be slashed by the
+/// contract admin (owner) if the prompt is verified as low-quality/malicious,
+/// or reclaimed by the creator after a cooldown period.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Stake {
+    pub creator: Address,
+    pub prompt_id: u128,
+    /// Currently-staked amount in stroops (net of any slashing/withdrawals).
+    pub amount: i128,
+    /// Ledger timestamp of the most recent stake top-up; the unstake cooldown
+    /// is measured from this value.
+    pub staked_at: u64,
 }
 
 pub trait PromptHashTrait {
@@ -443,8 +477,20 @@ pub trait PromptHashTrait {
         hashed_code: BytesN<32>,
     ) -> Result<(), Error>;
     fn get_xlm_sac(env: Env) -> Option<Address>;
-    fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
+    fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
+    fn confirm_upgrade(env: Env) -> Result<(), Error>;
+    fn cancel_upgrade(env: Env) -> Result<(), Error>;
+    fn get_pending_upgrade(env: Env) -> Option<BytesN<32>>;
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error>;
+
+    // ─── Contract state versioning ───────────────────────────────────────────
+    /// Current schema version applied to this contract's storage. `0` means
+    /// the contract predates this versioning scheme (never migrated).
+    fn get_schema_version(env: Env) -> u32;
+    /// Owner-only. Bumps the stored schema version after an `upgrade` that
+    /// changed the shape of on-chain data. Rejects moving backwards and
+    /// rejects jumping to a version this contract build doesn't know about.
+    fn migrate(env: Env, new_version: u32) -> Result<u32, Error>;
 
     // #131 – content classification
     fn set_classification(
@@ -464,6 +510,8 @@ pub trait PromptHashTrait {
         reason: String,
     ) -> Result<(), Error>;
     fn get_active_classification(env: Env, prompt_id: u128) -> Result<(String, Vec<String>), Error>;
+    fn get_moderator_override(env: Env, prompt_id: u128) -> Result<ClassificationOverride, Error>;
+    fn set_moderator_address(env: Env, admin: Address, moderator: Address) -> Result<(), Error>;
 
     // Promotional pricing
     fn create_promotion(
@@ -504,4 +552,24 @@ pub trait PromptHashTrait {
         prompt_id: u128,
         version: u32,
     ) -> Result<PromptEncryptedPayload, Error>;
+
+    // #275 – creator reputation staking
+    /// Stake native XLM against one of the creator's own prompts. Moves
+    /// `amount` stroops from the creator into contract custody and returns the
+    /// new total staked amount for the prompt.
+    fn stake(env: Env, creator: Address, prompt_id: u128, amount: i128) -> Result<i128, Error>;
+
+    /// Admin-gated slashing of a prompt's stake (see #[only_owner]). Reduces
+    /// the recorded stake and forwards the slashed stroops to the fee wallet.
+    /// `amount` is clamped to the available stake so an over-slash cannot
+    /// underflow. Returns the amount actually slashed.
+    fn slash(env: Env, prompt_id: u128, amount: i128) -> Result<i128, Error>;
+
+    /// Reclaim non-slashed stake after the cooldown period has elapsed. The
+    /// requested `amount` is clamped to the remaining stake. Returns the amount
+    /// actually returned to the creator.
+    fn unstake(env: Env, creator: Address, prompt_id: u128, amount: i128) -> Result<i128, Error>;
+
+    /// Read the current stake record for a prompt.
+    fn get_stake(env: Env, prompt_id: u128) -> Result<Stake, Error>;
 }

@@ -2,13 +2,14 @@ use super::events::Events;
 use super::storage::Storage;
 use super::types::{
     DataKey, Error, ListingConfig, Prompt, PromptEncryptedPayload, PromptHashTrait, Purchase,
-    ReferralCode, Settlement, Split, Subscription, SubscriptionConfig,
+    ReferralCode, Settlement, Split, Stake, Subscription, SubscriptionConfig,
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
 use stellar_macros::{default_impl, only_owner};
 
 const DEFAULT_FEE_BPS: u32 = 500;
+const MAX_FEE_BPS: u32 = 2_000; // 20% maximum platform fee safeguard (#41)
 const ROYALTY_BPS: u32 = 500;
 const MAX_BPS: u32 = 10_000;
 const MAX_TITLE_LEN: u32 = 120;
@@ -25,6 +26,11 @@ const MAX_CLASSIFICATION_LEN: u32 = 20;
 const MAX_SAFETY_FLAGS_COUNT: u32 = 10;
 const MAX_FLAG_LEN: u32 = 30;
 const MAX_REASON_LEN: u32 = 256;
+/// #275 – cooldown before a creator can reclaim (unstake) their stake, in
+/// seconds. Chosen as 7 days: long enough to allow moderation/reporting to run
+/// before funds can leave custody, matching the platform's weekly cadence.
+/// (No sibling-contract `*_LOCK_PERIOD` precedent exists to reuse.)
+const STAKE_COOLDOWN_SECS: u64 = 7 * 24 * 60 * 60;
 
 #[contract]
 pub struct PromptHashContract;
@@ -42,6 +48,7 @@ impl PromptHashTrait for PromptHashContract {
         Storage::set_fee_percentage(&env, &DEFAULT_FEE_BPS);
         Storage::set_xlm_address(&env, &xlm_sac);
         Storage::set_pause_status(&env, false);
+        Storage::set_schema_version(&env, CONTRACT_SCHEMA_VERSION);
         env.storage().instance().extend_ttl(
             super::storage::PERSISTENT_LIFETIME_THRESHOLD,
             super::storage::PERSISTENT_BUMP_AMOUNT,
@@ -443,6 +450,8 @@ impl PromptHashTrait for PromptHashContract {
 
     fn get_purchase_details(env: Env, prompt_id: u128, buyer: Address) -> Result<Purchase, Error> {
         Storage::require_purchase(&env, prompt_id, &buyer)
+    }
+
     fn configure_subscription_pass(
         env: Env,
         creator: Address,
@@ -531,7 +540,7 @@ impl PromptHashTrait for PromptHashContract {
 
     #[only_owner]
     fn set_fee_percentage(env: Env, new_fee_percentage: u32) -> Result<(), Error> {
-        ensure(new_fee_percentage <= MAX_BPS, Error::InvalidFeePercentage)?;
+        ensure(new_fee_percentage <= MAX_FEE_BPS, Error::FeeExceedsMaximum)?;
         Storage::set_fee_percentage(&env, &new_fee_percentage);
         Events::emit_fee_updated(&env, new_fee_percentage);
         Ok(())
@@ -651,19 +660,89 @@ impl PromptHashTrait for PromptHashContract {
         Ok(())
     }
 
+    // ─── Issue #42: Safe Contract Upgrade Authorization ────────────────────
+    //
+    // Two-step upgrade process:
+    //   1. propose_upgrade: owner proposes a new WASM hash (stores it with timestamp)
+    //   2. confirm_upgrade: owner confirms after UPGRADE_COOLDOWN_SECS have elapsed
+    //
+    // This prevents hasty or malicious upgrades by enforcing a mandatory delay.
+
     #[only_owner]
-    fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        ensure(
+            Storage::get_pending_upgrade(&env).is_none(),
+            Error::UpgradeAlreadyProposed,
+        )?;
+        let now = env.ledger().timestamp();
+        Storage::set_pending_upgrade(&env, &new_wasm_hash);
+        Storage::set_upgrade_proposer(&env, &env.current_contract_address());
+        Storage::set_upgrade_proposed_at(&env, now);
+        Events::emit_upgrade_proposed(&env, new_wasm_hash, now);
+        Ok(())
+    }
+
+    #[only_owner]
+    fn confirm_upgrade(env: Env) -> Result<(), Error> {
+        let wasm_hash =
+            Storage::get_pending_upgrade(&env).ok_or(Error::UpgradeNotProposed)?;
+        let proposed_at = Storage::get_upgrade_proposed_at(&env)
+            .ok_or(Error::UpgradeNotProposed)?;
+        let now = env.ledger().timestamp();
+        ensure(
+            now >= proposed_at + UPGRADE_COOLDOWN_SECS,
+            Error::UpgradeCooldownNotElapsed,
+        )?;
+
+        Storage::clear_pending_upgrade(&env);
+        Storage::clear_upgrade_proposer(&env);
+        Storage::clear_upgrade_proposed_at(&env);
+
+        env.deployer().update_current_contract_wasm(wasm_hash.clone());
         env.storage().instance().extend_ttl(
             super::storage::PERSISTENT_LIFETIME_THRESHOLD,
             super::storage::PERSISTENT_BUMP_AMOUNT,
         );
+        Events::emit_upgrade_confirmed(&env, wasm_hash.clone(), now);
         Ok(())
+    }
+
+    fn cancel_upgrade(env: Env) -> Result<(), Error> {
+        env.current_contract_address().require_auth();
+        let pending = Storage::get_pending_upgrade(&env)
+            .ok_or(Error::UpgradeNotProposed)?;
+        Storage::clear_pending_upgrade(&env);
+        Storage::clear_upgrade_proposer(&env);
+        Storage::clear_upgrade_proposed_at(&env);
+        Events::emit_upgrade_cancelled(&env, pending);
+        Ok(())
+    }
+
+    fn get_pending_upgrade(env: Env) -> Option<BytesN<32>> {
+        Storage::get_pending_upgrade(&env)
     }
 
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error> {
         Storage::extend_key_ttl(&env, &key);
         Ok(())
+    }
+
+    fn get_schema_version(env: Env) -> u32 {
+        Storage::get_schema_version(&env)
+    }
+
+    #[only_owner]
+    fn migrate(env: Env, new_version: u32) -> Result<u32, Error> {
+        let previous_version = Storage::get_schema_version(&env);
+        ensure(new_version > previous_version, Error::VersionMismatch)?;
+        ensure(
+            new_version <= CONTRACT_SCHEMA_VERSION,
+            Error::VersionMismatch,
+        )?;
+
+        Storage::set_schema_version(&env, new_version);
+        Events::emit_schema_migrated(&env, previous_version, new_version);
+        Ok(new_version)
     }
 
     // ─── #131: Content Classification ──────────────────────────────────────
@@ -869,10 +948,10 @@ impl PromptHashTrait for PromptHashContract {
         validate_len(
             &encrypted_prompt,
             MAX_ENCRYPTED_PROMPT_LEN,
-            Error::InvalidEncryptedPromptLength,
+            Error::InvalidFieldLength,
         )?;
-        validate_len(&wrapped_key, MAX_WRAPPED_KEY_LEN, Error::InvalidWrappedKeyLength)?;
-        validate_len(&encryption_iv, MAX_IV_LEN, Error::InvalidIvLength)?;
+        validate_len(&wrapped_key, MAX_WRAPPED_KEY_LEN, Error::InvalidFieldLength)?;
+        validate_len(&encryption_iv, MAX_IV_LEN, Error::InvalidFieldLength)?;
 
         let previous_version = prompt.encryption_version;
 
@@ -928,6 +1007,109 @@ impl PromptHashTrait for PromptHashContract {
         // Archived versions
         Storage::get_encryption_version(&env, prompt_id, version)
             .ok_or(Error::EncryptionVersionNotFound)
+    }
+
+    // ─── #275: Creator Reputation Staking ─────────────────────────────────
+
+    fn stake(env: Env, creator: Address, prompt_id: u128, amount: i128) -> Result<i128, Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+        ensure(amount > 0, Error::InvalidStakeAmount)?;
+
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        // Only the prompt's own creator can stake against it.
+        ensure(prompt.creator == creator, Error::Unauthorized)?;
+
+        // Move native XLM from the creator into contract custody.
+        let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
+        let this_contract = env.current_contract_address();
+        token::Client::new(&env, &xlm).transfer(&creator, &this_contract, &amount);
+
+        let now = env.ledger().timestamp();
+        let mut stake = Storage::get_stake(&env, prompt_id).unwrap_or(Stake {
+            creator: creator.clone(),
+            prompt_id,
+            amount: 0,
+            staked_at: now,
+        });
+        stake.amount = stake
+            .amount
+            .checked_add(amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+        // Reset the cooldown clock on every top-up.
+        stake.staked_at = now;
+        Storage::save_stake(&env, &stake);
+
+        Events::emit_stake_added(&env, prompt_id, creator, amount, stake.amount);
+        Ok(stake.amount)
+    }
+
+    #[only_owner]
+    fn slash(env: Env, prompt_id: u128, amount: i128) -> Result<i128, Error> {
+        ensure(amount > 0, Error::InvalidStakeAmount)?;
+        let mut stake = Storage::get_stake(&env, prompt_id).ok_or(Error::StakeNotFound)?;
+
+        // Clamp so an over-slash can never underflow the recorded stake.
+        let slash_amount = if amount > stake.amount {
+            stake.amount
+        } else {
+            amount
+        };
+        stake.amount = stake
+            .amount
+            .checked_sub(slash_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        if slash_amount > 0 {
+            let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
+            let fee_wallet = Storage::get_fee_wallet(&env).ok_or(Error::FeeWalletNotSet)?;
+            let this_contract = env.current_contract_address();
+            token::Client::new(&env, &xlm).transfer(&this_contract, &fee_wallet, &slash_amount);
+        }
+
+        Storage::save_stake(&env, &stake);
+        Events::emit_stake_slashed(&env, prompt_id, slash_amount, stake.amount);
+        Ok(slash_amount)
+    }
+
+    fn unstake(env: Env, creator: Address, prompt_id: u128, amount: i128) -> Result<i128, Error> {
+        creator.require_auth();
+        ensure(amount > 0, Error::InvalidStakeAmount)?;
+
+        let mut stake = Storage::get_stake(&env, prompt_id).ok_or(Error::StakeNotFound)?;
+        ensure(stake.creator == creator, Error::NotStakeOwner)?;
+
+        // Enforce the cooldown measured from the most recent top-up.
+        let now = env.ledger().timestamp();
+        ensure(
+            now >= stake.staked_at.saturating_add(STAKE_COOLDOWN_SECS),
+            Error::StakeLocked,
+        )?;
+
+        // Clamp the requested amount to whatever remains after any slashing.
+        let withdraw = if amount > stake.amount {
+            stake.amount
+        } else {
+            amount
+        };
+        stake.amount = stake
+            .amount
+            .checked_sub(withdraw)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        if withdraw > 0 {
+            let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
+            let this_contract = env.current_contract_address();
+            token::Client::new(&env, &xlm).transfer(&this_contract, &creator, &withdraw);
+        }
+
+        Storage::save_stake(&env, &stake);
+        Events::emit_stake_withdrawn(&env, prompt_id, creator, withdraw, stake.amount);
+        Ok(withdraw)
+    }
+
+    fn get_stake(env: Env, prompt_id: u128) -> Result<Stake, Error> {
+        Storage::get_stake(&env, prompt_id).ok_or(Error::StakeNotFound)
     }
 }
 
@@ -1284,21 +1466,21 @@ fn validate_prompt_fields(
     price_stroops: i128,
 ) -> Result<(), Error> {
     ensure(price_stroops > 0, Error::InvalidPrice)?;
-    validate_len(image_url, MAX_IMAGE_URL_LEN, Error::InvalidImageUrlLength)?;
-    validate_len(title, MAX_TITLE_LEN, Error::InvalidTitleLength)?;
-    validate_len(category, MAX_CATEGORY_LEN, Error::InvalidCategoryLength)?;
-    validate_len(preview_text, MAX_PREVIEW_LEN, Error::InvalidPreviewLength)?;
+    validate_len(image_url, MAX_IMAGE_URL_LEN, Error::InvalidFieldLength)?;
+    validate_len(title, MAX_TITLE_LEN, Error::InvalidFieldLength)?;
+    validate_len(category, MAX_CATEGORY_LEN, Error::InvalidFieldLength)?;
+    validate_len(preview_text, MAX_PREVIEW_LEN, Error::InvalidFieldLength)?;
     validate_len(
         encrypted_prompt,
         MAX_ENCRYPTED_PROMPT_LEN,
-        Error::InvalidEncryptedPromptLength,
+        Error::InvalidFieldLength,
     )?;
     validate_len(
         wrapped_key,
         MAX_WRAPPED_KEY_LEN,
-        Error::InvalidWrappedKeyLength,
+        Error::InvalidFieldLength,
     )?;
-    validate_len(encryption_iv, MAX_IV_LEN, Error::InvalidIvLength)?;
+    validate_len(encryption_iv, MAX_IV_LEN, Error::InvalidFieldLength)?;
     Ok(())
 }
 
@@ -1335,7 +1517,7 @@ fn validate_classification(env: &Env, classification: &String) -> Result<(), Err
 fn validate_safety_flags(env: &Env, flags: &Vec<String>) -> Result<(), Error> {
     ensure(
         flags.len() <= MAX_SAFETY_FLAGS_COUNT,
-        Error::InvalidSafetyFlagsLength,
+        Error::InvalidDisclosureFlags,
     )?;
     for i in 0..flags.len() {
         let flag = flags.get(i).unwrap();

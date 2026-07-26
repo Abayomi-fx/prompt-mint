@@ -1,5 +1,5 @@
 use super::types::{
-    DataKey, Error, Prompt, PromptEncryptedPayload, Purchase, ReferralCode, Settlement,
+    DataKey, Error, Prompt, PromptEncryptedPayload, Purchase, ReferralCode, Settlement, Stake,
     Subscription, SubscriptionConfig,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
@@ -564,5 +564,22 @@ impl Storage {
         let key = DataKey::PromptCounter; // Reuse prompt counter for promotion IDs
         let count = env.storage().persistent().get(&key).unwrap_or(0);
         count
+    }
+
+    // ─── #275: Creator Reputation Staking ─────────────────────────────────
+
+    pub fn get_stake(env: &Env, prompt_id: u128) -> Option<Stake> {
+        let key = DataKey::CreatorStake(prompt_id);
+        let stake = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        stake
+    }
+
+    pub fn save_stake(env: &Env, stake: &Stake) {
+        let key = DataKey::CreatorStake(stake.prompt_id);
+        env.storage().persistent().set(&key, stake);
+        Self::extend_key_ttl(env, &key);
     }
 }
