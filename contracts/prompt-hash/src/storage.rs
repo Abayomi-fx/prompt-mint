@@ -566,65 +566,18 @@ impl Storage {
         count
     }
 
-    // ─── Upgrade Authorization (#42) ──────────────────────────────────────
+    // ─── Contract State Versioning ─────────────────────────────────────────
 
-    pub fn set_pending_upgrade(env: &Env, wasm_hash: &BytesN<32>) {
-        let key = DataKey::PendingUpgrade;
-        env.storage().persistent().set(&key, wasm_hash);
-        Self::extend_key_ttl(env, &key);
+    /// Schema version stored on-chain. `0` means the key was never written,
+    /// which covers contract state that predates this versioning scheme.
+    pub fn get_schema_version(env: &Env) -> u32 {
+        let key = DataKey::SchemaVersion;
+        let version = env.storage().instance().get(&key).unwrap_or(0);
+        version
     }
 
-    pub fn get_pending_upgrade(env: &Env) -> Option<BytesN<32>> {
-        let key = DataKey::PendingUpgrade;
-        let hash: Option<BytesN<32>> = env.storage().persistent().get(&key);
-        if env.storage().persistent().has(&key) {
-            Self::extend_key_ttl(env, &key);
-        }
-        hash
-    }
-
-    pub fn clear_pending_upgrade(env: &Env) {
-        let key = DataKey::PendingUpgrade;
-        env.storage().persistent().remove(&key);
-    }
-
-    pub fn set_upgrade_proposer(env: &Env, proposer: &Address) {
-        let key = DataKey::UpgradeProposer;
-        env.storage().persistent().set(&key, proposer);
-        Self::extend_key_ttl(env, &key);
-    }
-
-    pub fn get_upgrade_proposer(env: &Env) -> Option<Address> {
-        let key = DataKey::UpgradeProposer;
-        let proposer: Option<Address> = env.storage().persistent().get(&key);
-        if env.storage().persistent().has(&key) {
-            Self::extend_key_ttl(env, &key);
-        }
-        proposer
-    }
-
-    pub fn clear_upgrade_proposer(env: &Env) {
-        let key = DataKey::UpgradeProposer;
-        env.storage().persistent().remove(&key);
-    }
-
-    pub fn set_upgrade_proposed_at(env: &Env, timestamp: u64) {
-        let key = DataKey::UpgradeProposedAt;
-        env.storage().persistent().set(&key, &timestamp);
-        Self::extend_key_ttl(env, &key);
-    }
-
-    pub fn get_upgrade_proposed_at(env: &Env) -> Option<u64> {
-        let key = DataKey::UpgradeProposedAt;
-        let ts: Option<u64> = env.storage().persistent().get(&key);
-        if env.storage().persistent().has(&key) {
-            Self::extend_key_ttl(env, &key);
-        }
-        ts
-    }
-
-    pub fn clear_upgrade_proposed_at(env: &Env) {
-        let key = DataKey::UpgradeProposedAt;
-        env.storage().persistent().remove(&key);
+    pub fn set_schema_version(env: &Env, version: u32) {
+        let key = DataKey::SchemaVersion;
+        env.storage().instance().set(&key, &version);
     }
 }

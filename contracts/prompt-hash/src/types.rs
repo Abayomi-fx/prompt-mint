@@ -11,6 +11,10 @@ pub enum Error {
     AlreadyPurchased = 5,
     InvalidPrice = 6,
     InvalidFeePercentage = 7,
+    // Consolidated: title/category/preview/encrypted-prompt/wrapped-key/image-url/iv
+    // all used to be distinct discriminants. Soroban's contract spec format caps a
+    // single `#[contracterror]` enum at 50 cases, so field-length validation now
+    // shares one variant instead of one-per-field.
     InvalidFieldLength = 8,
     FeeWalletNotSet = 9,
     XlmAddressNotSet = 10,
@@ -44,23 +48,21 @@ pub enum Error {
     // #131 – content classification
     InvalidClassification = 36,
     InvalidDisclosureFlags = 37,
-    ClassificationAlreadyReviewed = 38,
-    NotModerator = 39,
+    InvalidContentFlagsLength = 38,
+    ClassificationAlreadyReviewed = 39,
+    NotModerator = 40,
+    InvalidSafetyFlagsLength = 41,
     // Promotional pricing
-    InvalidPromotionTime = 40,
-    PromotionOverlap = 41,
-    PromotionNotFound = 42,
-    UnauthorizedPromotion = 43,
+    InvalidPromotionTime = 42,
+    PromotionOverlap = 43,
+    PromotionNotFound = 44,
+    UnauthorizedPromotion = 45,
     // Encryption rotation
-    EncryptionVersionNotFound = 44,
-    InvalidRotation = 45,
-    VersionMismatch = 46,
-    // Fee safeguards (#41)
-    FeeExceedsMaximum = 47,
-    // Upgrade authorization (#42)
-    UpgradeAlreadyProposed = 48,
-    UpgradeNotProposed = 49,
-    UpgradeCooldownNotElapsed = 50,
+    EncryptionVersionNotFound = 46,
+    InvalidRotation = 47,
+    // Also used to guard schema migrations: reused for a stored schema
+    // version newer than what the running contract code understands.
+    VersionMismatch = 48,
 }
 
 #[contracttype]
@@ -92,10 +94,9 @@ pub enum DataKey {
     // Encryption rotation – versioned payloads & version counter per prompt
     PromptEncryptedPayload(u128, u32),
     PromptEncryptionVersion(u128),
-    // Upgrade authorization (#42)
-    PendingUpgrade,
-    UpgradeProposer,
-    UpgradeProposedAt,
+    // Contract state schema version, bumped by `migrate` after an `upgrade`
+    // that changes stored data shapes.
+    SchemaVersion,
 }
 
 /// A moderator-overridden classification that takes precedence
@@ -458,6 +459,15 @@ pub trait PromptHashTrait {
     fn cancel_upgrade(env: Env) -> Result<(), Error>;
     fn get_pending_upgrade(env: Env) -> Option<BytesN<32>>;
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error>;
+
+    // ─── Contract state versioning ───────────────────────────────────────────
+    /// Current schema version applied to this contract's storage. `0` means
+    /// the contract predates this versioning scheme (never migrated).
+    fn get_schema_version(env: Env) -> u32;
+    /// Owner-only. Bumps the stored schema version after an `upgrade` that
+    /// changed the shape of on-chain data. Rejects moving backwards and
+    /// rejects jumping to a version this contract build doesn't know about.
+    fn migrate(env: Env, new_version: u32) -> Result<u32, Error>;
 
     // #131 – content classification
     fn set_classification(

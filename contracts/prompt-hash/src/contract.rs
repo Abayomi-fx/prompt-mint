@@ -27,7 +27,9 @@ const MAX_CLASSIFICATION_LEN: u32 = 20;
 const MAX_SAFETY_FLAGS_COUNT: u32 = 10;
 const MAX_FLAG_LEN: u32 = 30;
 const MAX_REASON_LEN: u32 = 256;
-const UPGRADE_COOLDOWN_SECS: u64 = 86_400; // 24 hours (#42)
+/// Highest storage schema version this contract build understands. Bump this
+/// alongside adding migration logic whenever `upgrade` changes stored data shapes.
+const CONTRACT_SCHEMA_VERSION: u32 = 1;
 
 #[contract]
 pub struct PromptHashContract;
@@ -45,6 +47,7 @@ impl PromptHashTrait for PromptHashContract {
         Storage::set_fee_percentage(&env, &DEFAULT_FEE_BPS);
         Storage::set_xlm_address(&env, &xlm_sac);
         Storage::set_pause_status(&env, false);
+        Storage::set_schema_version(&env, CONTRACT_SCHEMA_VERSION);
         env.storage().instance().extend_ttl(
             super::storage::PERSISTENT_LIFETIME_THRESHOLD,
             super::storage::PERSISTENT_BUMP_AMOUNT,
@@ -721,6 +724,24 @@ impl PromptHashTrait for PromptHashContract {
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error> {
         Storage::extend_key_ttl(&env, &key);
         Ok(())
+    }
+
+    fn get_schema_version(env: Env) -> u32 {
+        Storage::get_schema_version(&env)
+    }
+
+    #[only_owner]
+    fn migrate(env: Env, new_version: u32) -> Result<u32, Error> {
+        let previous_version = Storage::get_schema_version(&env);
+        ensure(new_version > previous_version, Error::VersionMismatch)?;
+        ensure(
+            new_version <= CONTRACT_SCHEMA_VERSION,
+            Error::VersionMismatch,
+        )?;
+
+        Storage::set_schema_version(&env, new_version);
+        Events::emit_schema_migrated(&env, previous_version, new_version);
+        Ok(new_version)
     }
 
     // ─── #131: Content Classification ──────────────────────────────────────

@@ -76,6 +76,12 @@ struct ContractPausedStateChanged {
 }
 
 #[contractevent]
+struct SchemaMigrated {
+    pub previous_version: u32,
+    pub new_version: u32,
+}
+
+#[contractevent]
 struct FeeUpdated {
     #[topic]
     pub new_fee_percentage: u32,
@@ -231,6 +237,14 @@ impl Events {
         ContractPausedStateChanged { is_paused }.publish(env);
     }
 
+    pub fn emit_schema_migrated(env: &Env, previous_version: u32, new_version: u32) {
+        SchemaMigrated {
+            previous_version,
+            new_version,
+        }
+        .publish(env);
+    }
+
     pub fn emit_fee_updated(env: &Env, new_fee_percentage: u32) {
         FeeUpdated { new_fee_percentage }.publish(env);
     }
@@ -327,6 +341,68 @@ impl Events {
 
     // ─── Promotional Pricing Events ──────────────────────────────────────
 
+#[contractevent]
+struct ClassificationSet {
+    #[topic]
+    pub prompt_id: u128,
+    pub classification: String,
+    pub safety_flags: Vec<String>,
+}
+
+#[contractevent]
+struct ClassificationOverridden {
+    #[topic]
+    pub prompt_id: u128,
+    pub moderator: Address,
+    pub classification: String,
+    pub safety_flags: Vec<String>,
+    pub reason: String,
+}
+
+// ─── Encryption Rotation Events ──────────────────────────────────────────
+
+#[contractevent]
+struct EncryptionRotated {
+    #[topic]
+    pub prompt_id: u128,
+    pub previous_version: u32,
+    pub new_version: u32,
+    pub rotated_at: u64,
+}
+
+// ─── Promotional Pricing Events ──────────────────────────────────────────
+
+#[contractevent]
+struct PromotionCreated {
+    #[topic]
+    pub prompt_id: u128,
+    pub promotion_id: u128,
+    pub creator: Address,
+    pub start_time: u64,
+    pub end_time: u64,
+    pub price: i128,
+    pub asset: Address,
+}
+
+#[contractevent]
+struct PromotionCancelled {
+    #[topic]
+    pub prompt_id: u128,
+    pub promotion_id: u128,
+    pub creator: Address,
+}
+
+#[contractevent]
+struct PromotionApplied {
+    #[topic]
+    pub prompt_id: u128,
+    pub promotion_id: u128,
+    pub buyer: Address,
+    pub effective_price: i128,
+    pub original_price: i128,
+}
+
+impl Events {
     pub fn emit_promotion_created(
         env: &Env,
         prompt_id: u128,
