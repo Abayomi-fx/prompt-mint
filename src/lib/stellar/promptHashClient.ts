@@ -99,6 +99,110 @@ export interface BulkPurchaseResult {
   }[];
 }
 
+export const CONTRACT_ERROR_CODES = {
+  CONTRACT_PAUSED: "CONTRACT_PAUSED",
+  PROMPT_NOT_FOUND: "PROMPT_NOT_FOUND",
+  UNAUTHORIZED: "UNAUTHORIZED",
+  INVALID_PRICE: "INVALID_PRICE",
+  ALREADY_PURCHASED: "ALREADY_PURCHASED",
+  LISTING_EXPIRED: "LISTING_EXPIRED",
+  UNKNOWN: "UNKNOWN",
+} as const;
+
+export type ContractErrorCode = (typeof CONTRACT_ERROR_CODES)[keyof typeof CONTRACT_ERROR_CODES];
+
+export interface ContractErrorDetails {
+  code: ContractErrorCode;
+  message: string;
+  isUserActionable: boolean;
+  raw: string;
+}
+
+function normalizeContractErrorText(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return "Unknown contract error";
+}
+
+export function classifyContractError(error: unknown): ContractErrorDetails {
+  const raw = normalizeContractErrorText(error).trim();
+  const normalized = raw.toLowerCase();
+
+  if (normalized.includes("paused") || normalized.includes("contractispaused")) {
+    return {
+      code: CONTRACT_ERROR_CODES.CONTRACT_PAUSED,
+      message: "The marketplace is temporarily paused. Please try again shortly.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("promptnotfound") || normalized.includes("not found") || normalized.includes("prompt #")) {
+    return {
+      code: CONTRACT_ERROR_CODES.PROMPT_NOT_FOUND,
+      message: "The requested prompt could not be found.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("unauthorized") || normalized.includes("not authorized")) {
+    return {
+      code: CONTRACT_ERROR_CODES.UNAUTHORIZED,
+      message: "You are not authorized to perform this action.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("alreadypurchased") || normalized.includes("already purchased")) {
+    return {
+      code: CONTRACT_ERROR_CODES.ALREADY_PURCHASED,
+      message: "You already have access to this prompt.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("listingexpired") || normalized.includes("expired")) {
+    return {
+      code: CONTRACT_ERROR_CODES.LISTING_EXPIRED,
+      message: "This listing is no longer available for purchase.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("invalidprice") || normalized.includes("invalid price")) {
+    return {
+      code: CONTRACT_ERROR_CODES.INVALID_PRICE,
+      message: "The requested price is invalid.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  return {
+    code: CONTRACT_ERROR_CODES.UNKNOWN,
+    message: "The marketplace could not complete that action. Please try again later.",
+    isUserActionable: true,
+    raw,
+  };
+}
+
+export function formatContractErrorMessage(error: unknown | ContractErrorDetails): string {
+  if (typeof error === "object" && error !== null && "code" in error && "message" in error) {
+    const details = error as ContractErrorDetails;
+    return details.message;
+  }
+
+  return classifyContractError(error).message;
+}
+
 export class PromptHashClient {
   /**
    * Checks if the user already has access to the prompt.

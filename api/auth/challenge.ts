@@ -6,6 +6,8 @@ import { metrics } from "../../src/lib/observability/metrics";
 import { recordAuditEvent } from "../../server/src/services/auditTrail";
 import { apiError, ErrorCode } from "../../src/lib/api/errorCodes";
 import { isPlaceholder } from "../../src/lib/validation/envValidator";
+import { negotiateVersion } from "../../src/lib/api/versionGuard";
+import { withVersion } from "../../src/lib/api/payloadVersion";
 import {
   ChallengeRequestBody,
   parseRequestBody,
@@ -16,6 +18,9 @@ async function handler(req: any, res: any) {
     res.status(405).json(apiError(ErrorCode.METHOD_NOT_ALLOWED, "Method not allowed."));
     return;
   }
+
+  const version = negotiateVersion(req, res);
+  if (!version) return;
 
   const clientIp = (req.headers["x-forwarded-for"] || req.socket.remoteAddress) as string;
   const body = req.body ?? {};
@@ -45,7 +50,7 @@ async function handler(req: any, res: any) {
     res.status(429).json(
       apiError(ErrorCode.RATE_LIMIT_IP, "Too many requests. Please try again later.", {
         reset: rateLimit.reset,
-      }),
+      }, version),
     );
     return;
   }
@@ -57,14 +62,14 @@ async function handler(req: any, res: any) {
   const secret = process.env.CHALLENGE_TOKEN_SECRET;
   if (!secret || isPlaceholder(secret) || secret.length < 16) {
     req.logger.error("CHALLENGE_TOKEN_SECRET is not configured correctly.");
-    res.status(500).json(apiError(ErrorCode.CONFIGURATION_ERROR, "Configuration error."));
+    res.status(500).json(apiError(ErrorCode.CONFIGURATION_ERROR, "Configuration error.", undefined, version));
     return;
   }
 
   const parsed = parseRequestBody(ChallengeRequestBody, req.body);
   if (!parsed.success) {
     res.status(400).json(
-      apiError(ErrorCode.MISSING_FIELDS, "address and promptId are required."),
+      apiError(ErrorCode.MISSING_FIELDS, "address and promptId are required.", undefined, version),
     );
     return;
   }
@@ -86,7 +91,7 @@ async function handler(req: any, res: any) {
     reason: null,
   });
 
-  res.status(200).json(challenge);
+  res.status(200).json(withVersion(challenge, version));
 }
 
 export default withObservability(withBodySizeLimit(handler), "auth/challenge");

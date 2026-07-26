@@ -1,23 +1,13 @@
-import { useState } from "react";
-import { X, Plus, Star, Tag, Shield, Check } from "lucide-react";
+import { X, Plus, Star, Tag, Shield, Check, ShoppingBag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatPriceLabel } from "@/lib/stellar/format";
+import {
+  MAX_COMPARE,
+  type ComparisonPrompt,
+} from "@/lib/comparison/state";
 
-export interface ComparisonPrompt {
-  id: string;
-  title: string;
-  creator: string;
-  price: number;
-  category: string;
-  tags?: string[];
-  rating?: number;
-  licenseType?: string;
-  isOwned?: boolean;
-  preview?: string;
-}
-
-const MAX_COMPARE = 3;
+export type { ComparisonPrompt };
 
 function StarRating({ rating }: { rating: number }) {
   return (
@@ -117,8 +107,15 @@ export function PromptComparisonView({
                 {prompt.rating !== undefined ? (
                   <StarRating rating={prompt.rating} />
                 ) : (
-                  <span className="text-slate-500">No ratings</span>
+                  <span className="text-slate-500">Not yet available</span>
                 )}
+              </FieldRow>
+
+              <FieldRow label="Sales">
+                <span className="inline-flex items-center gap-1">
+                  <ShoppingBag className="h-3 w-3 text-slate-400" />
+                  {prompt.salesCount ?? 0}
+                </span>
               </FieldRow>
 
               <FieldRow label="Tags">
@@ -175,28 +172,4 @@ export function PromptComparisonView({
       </div>
     </div>
   );
-}
-
-/** Hook to manage comparison state — max 3 prompts, no duplicates */
-export function usePromptComparison() {
-  const [selected, setSelected] = useState<ComparisonPrompt[]>([]);
-
-  const addToComparison = (prompt: ComparisonPrompt) => {
-    setSelected((prev) => {
-      if (prev.length >= MAX_COMPARE) return prev;
-      if (prev.some((p) => p.id === prompt.id)) return prev;
-      return [...prev, prompt];
-    });
-  };
-
-  const removeFromComparison = (id: string) => {
-    setSelected((prev) => prev.filter((p) => p.id !== id));
-  };
-
-  const clearComparison = () => setSelected([]);
-
-  const isSelected = (id: string) => selected.some((p) => p.id === id);
-  const canAdd = selected.length < MAX_COMPARE;
-
-  return { selected, addToComparison, removeFromComparison, clearComparison, isSelected, canAdd };
 }

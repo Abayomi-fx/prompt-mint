@@ -8,6 +8,8 @@
 
 import { randomBytes } from "crypto";
 import { isPlaceholder } from "../../src/lib/validation/envValidator";
+import { negotiateVersion } from "../../src/lib/api/versionGuard";
+import { withVersion } from "../../src/lib/api/payloadVersion";
 import { isValidAdminToken } from "../../src/lib/auth/adminToken";
 import { withBodySizeLimit } from "../../src/lib/api/bodySizeLimit";
 
@@ -148,7 +150,15 @@ async function handler(req: any, res: any) {
     return;
   }
 
+  const version = negotiateVersion(req, res);
+  if (!version) return;
+
   // Authentication check - only allow authorized operators
+  const authHeader = req.headers.authorization;
+  const adminToken = process.env.ADMIN_ROTATION_TOKEN;
+  
+  if (!adminToken || authHeader !== `Bearer ${adminToken}`) {
+    res.status(401).json({ apiVersion: version, error: "Unauthorized" });
   if (!isValidAdminToken(req.headers.authorization, process.env.ADMIN_ROTATION_TOKEN)) {
     res.status(401).json({ error: "Unauthorized" });
     return;
@@ -157,16 +167,21 @@ async function handler(req: any, res: any) {
   try {
     const newConfig = rotateSecret();
     
-    res.status(200).json({
-      success: true,
-      message: "Secret rotated successfully",
-      rotationTimestamp: newConfig.rotationTimestamp,
-      gracePeriodMs: newConfig.gracePeriodMs,
-      expiresAt: newConfig.rotationTimestamp + newConfig.gracePeriodMs,
-    });
+    res.status(200).json(
+      withVersion(
+        {
+          success: true,
+          message: "Secret rotated successfully",
+          rotationTimestamp: newConfig.rotationTimestamp,
+          gracePeriodMs: newConfig.gracePeriodMs,
+          expiresAt: newConfig.rotationTimestamp + newConfig.gracePeriodMs,
+        },
+        version,
+      ),
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : "Rotation failed";
-    res.status(500).json({ error: message });
+    res.status(500).json({ apiVersion: version, error: message });
   }
 }
 

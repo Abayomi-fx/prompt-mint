@@ -1,4 +1,5 @@
 import { xlmToStroops } from "@/lib/stellar/format";
+import { estimateEncryptedPayloadSize } from "@/lib/crypto/promptCrypto";
 
 // #131 – Canonical content classification taxonomy
 export const CONTENT_CLASSIFICATIONS = [
@@ -27,6 +28,9 @@ export const LISTING_LIMITS = {
   category: 40,
   preview: 280,
   fullPrompt: 50_000,
+  // On-chain MAX_ENCRYPTED_PROMPT_LEN (contracts/prompt-hash/src/contract.rs)
+  // — the encrypted+base64-encoded payload, not the plaintext character count.
+  encryptedPrompt: 4096,
 } as const;
 
 export type ListingFormInput = {
@@ -110,6 +114,8 @@ export function validateListingForm(
       "Add at least 10 characters of prompt content so buyers receive meaningful value.";
   } else if (fullPrompt.length > LISTING_LIMITS.fullPrompt) {
     errors.fullPrompt = `Shorten the prompt to ${LISTING_LIMITS.fullPrompt.toLocaleString()} characters or fewer.`;
+  } else if (estimateEncryptedPayloadSize(fullPrompt) > LISTING_LIMITS.encryptedPrompt) {
+    errors.fullPrompt = `Encrypted payload is too large for the on-chain limit (${LISTING_LIMITS.encryptedPrompt.toLocaleString()} bytes once encrypted). Shorten the prompt.`;
   }
 
   if (!priceXlm) {
@@ -146,6 +152,18 @@ export function validateListingForm(
   }
 
   return errors;
+}
+
+/**
+ * #269 – Validate a single field for inline (on-blur) feedback.
+ * Reuses {@link validateListingForm} so field rules never drift from the
+ * submit-time rules, and returns just that field's message (or undefined).
+ */
+export function validateListingField(
+  field: keyof ListingFormInput,
+  input: ListingFormInput,
+): string | undefined {
+  return validateListingForm(input)[field];
 }
 
 export async function validateImageMetadata(url: string): Promise<string | null> {
