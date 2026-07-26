@@ -13,6 +13,7 @@ const CreatorSharePage = lazy(() => import("./pages/creator/page.tsx"));
 const ComparePage = lazy(() => import("./pages/compare/page.tsx"));
 const StatusPage = lazy(() => import("./pages/status/page.tsx"));
 const ModerationPage = lazy(() => import("./pages/Moderation.tsx"));
+const ApiKeysPage = lazy(() => import("./pages/settings/ApiKeys.tsx"));
 const TransactionHistoryPage = lazy(() => import("./pages/history/page.tsx"));
 
 const AppLayout = () => (
@@ -103,6 +104,14 @@ function App() {
                 element={
                   <ErrorBoundary routeName="Status">
                     <StatusPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/settings/api-keys"
+                element={
+                  <ErrorBoundary routeName="API Keys">
+                    <ApiKeysPage />
                   </ErrorBoundary>
                 }
               />
