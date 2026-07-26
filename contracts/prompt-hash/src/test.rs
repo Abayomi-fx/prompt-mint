@@ -553,7 +553,7 @@ fn test_non_owner_cannot_transfer_license() {
 }
 
 #[test]
-fn test_transfer_license_rejects_zero_price_and_self_transfer() {
+fn test_transfer_license_allows_zero_gift_and_rejects_self_transfer() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
@@ -580,16 +580,16 @@ fn test_transfer_license_rejects_zero_price_and_self_transfer() {
         &None::<Bytes>,
     );
 
-    let zero_price = client.try_transfer_license(&owner, &prompt_id, &buyer, &0i128);
-    match zero_price {
-        Err(Ok(Error::InvalidPaymentAmount)) => {}
-        other => panic!(
-            "expected InvalidPaymentAmount for zero resale, got {:?}",
-            other
-        ),
-    }
+    // #271: a zero-consideration transfer is a valid gift. It moves access to the
+    // new owner and must NOT attempt a bogus royalty payment (creator balance
+    // unchanged).
+    let creator_before = xlm_client.balance(&creator);
+    client.transfer_license(&owner, &prompt_id, &buyer, &0i128);
+    assert_eq!(xlm_client.balance(&creator), creator_before);
+    assert!(!client.has_access(&owner, &prompt_id));
+    assert!(client.has_access(&buyer, &prompt_id));
 
-    let self_transfer = client.try_transfer_license(&owner, &prompt_id, &owner, &20_000i128);
+    let self_transfer = client.try_transfer_license(&buyer, &prompt_id, &buyer, &20_000i128);
     match self_transfer {
         Err(Ok(Error::InvalidLicenseTransfer)) => {}
         other => panic!(
