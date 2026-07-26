@@ -49,6 +49,7 @@ import {
   buildPromptShareUrl,
 } from "@/lib/marketplace/shareUrls";
 import { translateError } from "../../lib/i18n-errors";
+import { createFocusTrapKeydownHandler } from "@/lib/a11y/focusTrap";
 
 export type BuyerStatus =
   | "IDLE"
@@ -277,37 +278,11 @@ export const PromptModal: React.FC<PromptModalProps> = ({
       lastActiveElementRef.current = document.activeElement as HTMLElement;
       setTimeout(() => closeButtonRef.current?.focus(), 0);
 
-      const handleKeyDown = (e: KeyboardEvent) => {
-        if (e.key === "Escape") {
-          onClose();
-          return;
-        }
-
-        if (e.key === "Tab") {
-          if (!modalRef.current) return;
-          const focusableElements = modalRef.current.querySelectorAll(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          );
-          if (focusableElements.length === 0) return;
-
-          const firstElement = focusableElements[0] as HTMLElement;
-          const lastElement = focusableElements[focusableElements.length - 1] as HTMLElement;
-
-          if (e.shiftKey) {
-            // Shift + Tab
-            if (document.activeElement === firstElement) {
-              lastElement.focus();
-              e.preventDefault();
-            }
-          } else {
-            // Tab
-            if (document.activeElement === lastElement) {
-              firstElement.focus();
-              e.preventDefault();
-            }
-          }
-        }
-      };
+      // #270 – shared, unit-tested focus-trap + Escape handler.
+      const handleKeyDown = createFocusTrapKeydownHandler({
+        container: () => modalRef.current,
+        onEscape: onClose,
+      });
 
       document.addEventListener("keydown", handleKeyDown);
       return () => {

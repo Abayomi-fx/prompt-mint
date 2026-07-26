@@ -82,7 +82,7 @@ export function Navigation() {
                 </div>
               </div>
             </Link>
-            <nav className="hidden items-center gap-2 md:flex">
+            <nav aria-label="Primary" className="hidden items-center gap-2 md:flex">
               {navItems.map((item) => (
                 <NavLink key={item.to} to={item.to} className={linkClasses}>
                   <item.icon className="h-4 w-4" />
@@ -99,6 +99,7 @@ export function Navigation() {
               size="icon"
               className="relative border border-white/10 text-white hover:bg-white/10"
               onClick={() => setShowCart(true)}
+              aria-label="Open cart"
             >
               <CartIcon />
             </Button>
@@ -113,6 +114,7 @@ export function Navigation() {
               size="icon"
               className="relative border border-white/10 text-white hover:bg-white/10 h-10 w-10"
               onClick={() => setShowCart(true)}
+              aria-label="Open cart"
             >
               <CartIcon />
               {itemCount > 0 && (
@@ -128,6 +130,7 @@ export function Navigation() {
                   variant="ghost"
                   size="icon"
                   className="border border-white/10 text-white hover:bg-white/10 h-10 w-10"
+                  aria-label="Open menu"
                 >
                   <Menu className="h-5 w-5" />
                 </Button>
@@ -176,7 +179,7 @@ export function Navigation() {
       </header>
 
       {/* Mobile Bottom Navigation Bar */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 sm:hidden border-t border-white/10 bg-slate-950/95 backdrop-blur-lg safe-area-inset">
+      <nav aria-label="Mobile" className="fixed bottom-0 left-0 right-0 z-40 sm:hidden border-t border-white/10 bg-slate-950/95 backdrop-blur-lg safe-area-inset">
         <div className="flex items-center justify-around h-16 px-2">
           {mobileNavItems.map((item) => (
             <NavLink
