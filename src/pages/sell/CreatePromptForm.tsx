@@ -90,6 +90,8 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(true);
   const [isFirstListing] = useState(true);
+  const [imagePreviewState, setImagePreviewState] = useState<"idle" | "loading" | "valid" | "invalid">("idle");
+  const [imagePreviewMessage, setImagePreviewMessage] = useState<string | null>(null);
 
   const isConfigured = useMemo(
     () =>
@@ -191,6 +193,15 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
       delete next[name];
       return next;
     });
+
+    if (name === "imageUrl") {
+      setImagePreviewState("idle");
+      setImagePreviewMessage(null);
+      if (!value.trim()) {
+        setImagePreviewState("invalid");
+        setImagePreviewMessage("Add an image URL to preview your listing cover.");
+      }
+    }
   };
 
   const handleCategoryChange = (value: string) => {
@@ -207,6 +218,44 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
     setErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   };
+
+  useEffect(() => {
+    if (!formData.imageUrl.trim()) {
+      return;
+    }
+
+    const isLikelyUrl = /^https?:\/\/.+/i.test(formData.imageUrl.trim());
+    if (!isLikelyUrl) {
+      setImagePreviewState("invalid");
+      setImagePreviewMessage("Use a full http:// or https:// URL to preview the image.");
+      return;
+    }
+
+    let active = true;
+    setImagePreviewState("loading");
+    setImagePreviewMessage("Checking image URL...");
+
+    validateImageMetadata(formData.imageUrl.trim())
+      .then((error) => {
+        if (!active) return;
+        if (error) {
+          setImagePreviewState("invalid");
+          setImagePreviewMessage(error);
+          return;
+        }
+        setImagePreviewState("valid");
+        setImagePreviewMessage("Preview available.");
+      })
+      .catch(() => {
+        if (!active) return;
+        setImagePreviewState("invalid");
+        setImagePreviewMessage("Unable to validate the image URL right now.");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [formData.imageUrl]);
 
   const networkState = useNetworkState();
   const submittingGuardRef = useRef(false);
@@ -348,6 +397,34 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
               <AlertCircle className="h-3.5 w-3.5" />
               {errors.imageUrl}
             </p>
+          ) : null}
+          {formData.imageUrl.trim() ? (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Image preview</p>
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${imagePreviewState === "valid" ? "bg-emerald-500/15 text-emerald-300" : imagePreviewState === "loading" ? "bg-cyan-500/15 text-cyan-300" : "bg-red-500/15 text-red-300"}`}>
+                  {imagePreviewState === "valid" ? "Ready" : imagePreviewState === "loading" ? "Checking" : "Needs attention"}
+                </span>
+              </div>
+              {imagePreviewState === "loading" ? (
+                <p className="text-sm text-slate-300">{imagePreviewMessage}</p>
+              ) : (
+                <>
+                  <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950/60">
+                    <img
+                      src={formData.imageUrl.trim()}
+                      alt="Listing cover preview"
+                      className="h-40 w-full object-cover"
+                      onError={() => {
+                        setImagePreviewState("invalid");
+                        setImagePreviewMessage("The image could not be loaded. Try another URL.");
+                      }}
+                    />
+                  </div>
+                  <p className="mt-2 text-sm text-slate-300">{imagePreviewMessage}</p>
+                </>
+              )}
+            </div>
           ) : null}
         </div>
         <div className="space-y-2">
