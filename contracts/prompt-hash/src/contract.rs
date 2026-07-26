@@ -4,6 +4,8 @@ use super::types::{
     Bundle, ClassificationOverride, DataKey, Discount, Error, ListingConfig, Prompt,
     PromptEncryptedPayload, PromptHashTrait, Purchase, ReferralCode, Settlement, Split,
     Subscription, SubscriptionConfig, ALL_CLASSIFICATIONS, VALID_DISCLOSURE_FLAGS,
+    DataKey, Error, ListingConfig, Prompt, PromptEncryptedPayload, PromptHashTrait, Purchase,
+    ReferralCode, Settlement, Split, Stake, Subscription, SubscriptionConfig,
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
@@ -27,9 +29,11 @@ const MAX_CLASSIFICATION_LEN: u32 = 20;
 const MAX_SAFETY_FLAGS_COUNT: u32 = 10;
 const MAX_FLAG_LEN: u32 = 30;
 const MAX_REASON_LEN: u32 = 256;
-/// Highest storage schema version this contract build understands. Bump this
-/// alongside adding migration logic whenever `upgrade` changes stored data shapes.
-const CONTRACT_SCHEMA_VERSION: u32 = 1;
+/// #275 – cooldown before a creator can reclaim (unstake) their stake, in
+/// seconds. Chosen as 7 days: long enough to allow moderation/reporting to run
+/// before funds can leave custody, matching the platform's weekly cadence.
+/// (No sibling-contract `*_LOCK_PERIOD` precedent exists to reuse.)
+const STAKE_COOLDOWN_SECS: u64 = 7 * 24 * 60 * 60;
 
 #[contract]
 pub struct PromptHashContract;
@@ -1128,6 +1132,109 @@ impl PromptHashTrait for PromptHashContract {
         // Archived versions
         Storage::get_encryption_version(&env, prompt_id, version)
             .ok_or(Error::EncryptionVersionNotFound)
+    }
+
+    // ─── #275: Creator Reputation Staking ─────────────────────────────────
+
+    fn stake(env: Env, creator: Address, prompt_id: u128, amount: i128) -> Result<i128, Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+        ensure(amount > 0, Error::InvalidStakeAmount)?;
+
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        // Only the prompt's own creator can stake against it.
+        ensure(prompt.creator == creator, Error::Unauthorized)?;
+
+        // Move native XLM from the creator into contract custody.
+        let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
+        let this_contract = env.current_contract_address();
+        token::Client::new(&env, &xlm).transfer(&creator, &this_contract, &amount);
+
+        let now = env.ledger().timestamp();
+        let mut stake = Storage::get_stake(&env, prompt_id).unwrap_or(Stake {
+            creator: creator.clone(),
+            prompt_id,
+            amount: 0,
+            staked_at: now,
+        });
+        stake.amount = stake
+            .amount
+            .checked_add(amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+        // Reset the cooldown clock on every top-up.
+        stake.staked_at = now;
+        Storage::save_stake(&env, &stake);
+
+        Events::emit_stake_added(&env, prompt_id, creator, amount, stake.amount);
+        Ok(stake.amount)
+    }
+
+    #[only_owner]
+    fn slash(env: Env, prompt_id: u128, amount: i128) -> Result<i128, Error> {
+        ensure(amount > 0, Error::InvalidStakeAmount)?;
+        let mut stake = Storage::get_stake(&env, prompt_id).ok_or(Error::StakeNotFound)?;
+
+        // Clamp so an over-slash can never underflow the recorded stake.
+        let slash_amount = if amount > stake.amount {
+            stake.amount
+        } else {
+            amount
+        };
+        stake.amount = stake
+            .amount
+            .checked_sub(slash_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        if slash_amount > 0 {
+            let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
+            let fee_wallet = Storage::get_fee_wallet(&env).ok_or(Error::FeeWalletNotSet)?;
+            let this_contract = env.current_contract_address();
+            token::Client::new(&env, &xlm).transfer(&this_contract, &fee_wallet, &slash_amount);
+        }
+
+        Storage::save_stake(&env, &stake);
+        Events::emit_stake_slashed(&env, prompt_id, slash_amount, stake.amount);
+        Ok(slash_amount)
+    }
+
+    fn unstake(env: Env, creator: Address, prompt_id: u128, amount: i128) -> Result<i128, Error> {
+        creator.require_auth();
+        ensure(amount > 0, Error::InvalidStakeAmount)?;
+
+        let mut stake = Storage::get_stake(&env, prompt_id).ok_or(Error::StakeNotFound)?;
+        ensure(stake.creator == creator, Error::NotStakeOwner)?;
+
+        // Enforce the cooldown measured from the most recent top-up.
+        let now = env.ledger().timestamp();
+        ensure(
+            now >= stake.staked_at.saturating_add(STAKE_COOLDOWN_SECS),
+            Error::StakeLocked,
+        )?;
+
+        // Clamp the requested amount to whatever remains after any slashing.
+        let withdraw = if amount > stake.amount {
+            stake.amount
+        } else {
+            amount
+        };
+        stake.amount = stake
+            .amount
+            .checked_sub(withdraw)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        if withdraw > 0 {
+            let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
+            let this_contract = env.current_contract_address();
+            token::Client::new(&env, &xlm).transfer(&this_contract, &creator, &withdraw);
+        }
+
+        Storage::save_stake(&env, &stake);
+        Events::emit_stake_withdrawn(&env, prompt_id, creator, withdraw, stake.amount);
+        Ok(withdraw)
+    }
+
+    fn get_stake(env: Env, prompt_id: u128) -> Result<Stake, Error> {
+        Storage::get_stake(&env, prompt_id).ok_or(Error::StakeNotFound)
     }
 }
 

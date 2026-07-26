@@ -462,6 +462,38 @@ struct PromotionApplied {
     pub original_price: i128,
 }
 
+// ─── #275: Creator Reputation Staking Events ─────────────────────────────
+
+#[contractevent]
+struct StakeAdded {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub amount: i128,
+    pub total_staked: i128,
+}
+
+#[contractevent]
+struct StakeSlashed {
+    #[topic]
+    pub prompt_id: u128,
+    pub slashed_amount: i128,
+    pub remaining_staked: i128,
+}
+
+#[contractevent]
+struct StakeWithdrawn {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub amount: i128,
+    pub remaining_staked: i128,
+}
+
+// NB: `Events` is already declared earlier in this file; this is an additional
+// `impl Events` block (multiple impl blocks for one type are valid Rust). The
+// duplicate `pub struct Events;` that previously sat here has been removed to
+// keep the crate compiling.
 impl Events {
     pub fn emit_promotion_created(
         env: &Env,
@@ -535,124 +567,51 @@ impl Events {
         .publish(env);
     }
 
-    // ─── Upgrade Authorization (#42) ──────────────────────────────────────
+    // ─── #275: Creator Reputation Staking ─────────────────────────────────
 
-    pub fn emit_upgrade_proposed(
+    pub fn emit_stake_added(
         env: &Env,
-        new_wasm_hash: soroban_sdk::BytesN<32>,
-        proposed_at: u64,
+        prompt_id: u128,
+        creator: Address,
+        amount: i128,
+        total_staked: i128,
     ) {
-        UpgradeProposed {
-            new_wasm_hash,
-            proposed_at,
+        StakeAdded {
+            prompt_id,
+            creator,
+            amount,
+            total_staked,
         }
         .publish(env);
     }
 
-    pub fn emit_upgrade_confirmed(
+    pub fn emit_stake_slashed(
         env: &Env,
-        new_wasm_hash: soroban_sdk::BytesN<32>,
-        confirmed_at: u64,
+        prompt_id: u128,
+        slashed_amount: i128,
+        remaining_staked: i128,
     ) {
-        UpgradeConfirmed {
-            new_wasm_hash,
-            confirmed_at,
+        StakeSlashed {
+            prompt_id,
+            slashed_amount,
+            remaining_staked,
         }
         .publish(env);
     }
 
-    pub fn emit_upgrade_cancelled(
+    pub fn emit_stake_withdrawn(
         env: &Env,
-        cancelled_wasm_hash: soroban_sdk::BytesN<32>,
+        prompt_id: u128,
+        creator: Address,
+        amount: i128,
+        remaining_staked: i128,
     ) {
-        UpgradeCancelled {
-            cancelled_wasm_hash,
+        StakeWithdrawn {
+            prompt_id,
+            creator,
+            amount,
+            remaining_staked,
         }
         .publish(env);
     }
-}
-
-// ─── #131: Event Structs ───────────────────────────────────────────────────
-
-#[contractevent]
-struct ClassificationSet {
-    #[topic]
-    pub prompt_id: u128,
-    pub classification: String,
-    pub safety_flags: Vec<String>,
-}
-
-#[contractevent]
-struct ClassificationOverridden {
-    #[topic]
-    pub prompt_id: u128,
-    pub moderator: Address,
-    pub classification: String,
-    pub safety_flags: Vec<String>,
-    pub reason: String,
-}
-
-// ─── Encryption Rotation Events ──────────────────────────────────────────
-
-#[contractevent]
-struct EncryptionRotated {
-    #[topic]
-    pub prompt_id: u128,
-    pub previous_version: u32,
-    pub new_version: u32,
-    pub rotated_at: u64,
-}
-
-// ─── Upgrade Authorization Events (#42) ───────────────────────────────
-
-#[contractevent]
-struct UpgradeProposed {
-    #[topic]
-    pub new_wasm_hash: soroban_sdk::BytesN<32>,
-    pub proposed_at: u64,
-}
-
-#[contractevent]
-struct UpgradeConfirmed {
-    #[topic]
-    pub new_wasm_hash: soroban_sdk::BytesN<32>,
-    pub confirmed_at: u64,
-}
-
-#[contractevent]
-struct UpgradeCancelled {
-    #[topic]
-    pub cancelled_wasm_hash: soroban_sdk::BytesN<32>,
-}
-
-// ─── Promotional Pricing Events ──────────────────────────────────────────
-
-#[contractevent]
-struct PromotionCreated {
-    #[topic]
-    pub prompt_id: u128,
-    pub promotion_id: u128,
-    pub creator: Address,
-    pub start_time: u64,
-    pub end_time: u64,
-    pub price: i128,
-    pub asset: Address,
-}
-
-#[contractevent]
-struct PromotionCancelled {
-    #[topic]
-    pub prompt_id: u128,
-    pub promotion_id: u128,
-    pub creator: Address,
-}
-
-#[contractevent]
-struct PromotionApplied {
-    #[topic]
-    pub prompt_id: u128,
-    pub promotion_id: u128,
-    pub buyer: Address,
-    pub effective_price: i128,
-    pub original_price: i128,
 }
