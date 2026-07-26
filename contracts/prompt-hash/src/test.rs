@@ -1071,6 +1071,74 @@ fn test_buy_prompt_with_referrer_splits_payment_correctly() {
     );
 }
 
+// ─── Issue #274: Referral tracking events ─────────────────────────────────────
+
+#[test]
+fn test_register_referral_code_emits_event() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    client.set_referral_percentage(&500);
+
+    let referrer = Address::generate(&env);
+    let referral_code = Bytes::from_slice(&env, b"event-ref-secret-274");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+
+    let before = env.events().all().len();
+    client.register_referral_code(&referrer, &referral_hash);
+    let after = env.events().all().len();
+
+    // register_referral_code now publishes a ReferralCodeRegistered event.
+    assert!(after > before, "expected a referral-code-registered event to be emitted");
+}
+
+#[test]
+fn test_purchase_with_referrer_emits_reward_event() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    client.set_referral_percentage(&500);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let referrer = Address::generate(&env);
+    let price: i128 = 10_000;
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Reward Event Prompt",
+        price,
+        &context.xlm,
+    );
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, price);
+
+    let referral_code = Bytes::from_slice(&env, b"reward-event-secret-274");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+    client.register_referral_code(&referrer, &referral_hash);
+
+    let before = env.events().all().len();
+    client.buy_prompt(
+        &buyer,
+        &prompt_id,
+        &Some(referral_code),
+        &price,
+        &None::<Bytes>,
+    );
+    let after = env.events().all().len();
+
+    // A purchase with a recorded referrer emits the PromptPurchased event plus a
+    // dedicated ReferralRewardPaid event.
+    assert!(
+        after >= before + 2,
+        "expected purchase + referral-reward-paid events to be emitted"
+    );
+}
+
 #[test]
 fn test_referrer_cannot_be_buyer() {
     let env: Env = Default::default();
