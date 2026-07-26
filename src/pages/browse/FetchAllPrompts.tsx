@@ -11,6 +11,7 @@ import {
   ChevronRight,
   PackageSearch,
   Loader2,
+  BookmarkCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/hooks/useWallet";
@@ -275,10 +276,18 @@ const FetchAllPrompts = ({
         );
       case "sales":
         return [...prompts].sort((a, b) => b.salesCount - a.salesCount);
+      case "bookmarked":
+        // Bookmarked (saved) prompts first, newest-first within each group.
+        return [...prompts].sort((a, b) => {
+          const aSaved = savedPromptIds.has(a.id.toString()) ? 1 : 0;
+          const bSaved = savedPromptIds.has(b.id.toString()) ? 1 : 0;
+          if (aSaved !== bSaved) return bSaved - aSaved;
+          return Number(b.id - a.id);
+        });
       default:
         return [...prompts].sort((a, b) => Number(b.id - a.id));
     }
-  }, [priceRange, promptsQuery.data, searchQuery, selectedCategory, sortBy]);
+  }, [priceRange, promptsQuery.data, searchQuery, selectedCategory, sortBy, savedPromptIds]);
 
   const totalPages = Math.max(
     1,
@@ -408,6 +417,12 @@ const FetchAllPrompts = ({
             </div>
           )}
         </div>
+        {savedPromptIds.size > 0 && (
+          <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-lg">
+            <BookmarkCheck className="h-3.5 w-3.5" />
+            {savedPromptIds.size} bookmarked
+          </div>
+        )}
         {!networkState.canTrustConfirmation && (
           <div className="text-xs font-semibold text-rose-300 bg-rose-500/10 border border-rose-500/20 px-3 py-1.5 rounded-lg">
             Read-Only Mode — On-chain actions disabled until network connection is stable
