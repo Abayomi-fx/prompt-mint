@@ -37,6 +37,8 @@ import { PromptCard } from "./PromptCard";
 import { PromptModal } from "./PromptModal";
 import { invalidateAllPromptQueries } from "@/hooks/useContractSync";
 import { parsePromptIdParam } from "@/lib/marketplace/shareUrls";
+import { PromptCardSkeleton } from "@/components/MarketplaceSkeletons";
+import { EmptyState } from "@/components/ui/EmptyState";
 
 const ITEMS_PER_PAGE = 9;
 const ENABLE_INFINITE_SCROLL = true;
@@ -363,10 +365,7 @@ const FetchAllPrompts = ({
     return (
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
         {[...Array(6)].map((_, i) => (
-          <div
-            key={i}
-            className="h-[400px] rounded-3xl border border-white/5 bg-white/[0.02] animate-pulse"
-          />
+          <PromptCardSkeleton key={i} />
         ))}
       </div>
     );
@@ -432,18 +431,16 @@ const FetchAllPrompts = ({
       )}
 
       {filteredPrompts.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center space-y-4">
-          <div className="p-4 rounded-full bg-slate-900 border border-white/5">
-            <PackageSearch className="h-8 w-8 text-slate-500" />
-          </div>
-          <div className="space-y-1">
-            <h3 className="text-lg font-semibold">No prompts found</h3>
-            <p className="text-slate-500 max-w-[280px]">
-              Try adjusting your filters or search terms to find what you're
-              looking for.
-            </p>
-          </div>
-        </div>
+        <EmptyState
+          variant={searchQuery || selectedCategory || selectedTag ? "search-empty" : "no-results"}
+          title={searchQuery || selectedCategory || selectedTag ? "No matching prompts" : "No prompts found"}
+          description={
+            searchQuery || selectedCategory || selectedTag
+              ? "Try adjusting your filters or search terms to find what you're looking for."
+              : "The marketplace has no active listings at the moment. Check back soon."
+          }
+          size="lg"
+        />
       ) : (
         <>
           <div className="grid grid-cols-1 gap-8 md:grid-cols-2 xl:grid-cols-3">
