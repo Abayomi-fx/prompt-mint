@@ -21,6 +21,7 @@ import { useWallet } from "@/hooks/useWallet";
 import { unlockPublicKey } from "@/lib/env";
 import {
   encryptPromptPlaintext,
+  estimateEncryptedPayloadSize,
   wrapPromptKey,
 } from "@/lib/crypto/promptCrypto";
 import { browserStellarConfig } from "@/lib/stellar/browserConfig";
@@ -40,7 +41,6 @@ import { translateError } from "@/lib/i18n-errors";
 
 const limits = {
   ...LISTING_LIMITS,
-  encrypted: 4096,
   wrappedKey: 256,
 };
 
@@ -110,6 +110,15 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
     () => buildChecklistItems(formData),
     [formData],
   );
+
+  // #61 – real-time feedback on the *encrypted* payload size (base64 AES-GCM
+  // ciphertext), which is what the on-chain MAX_ENCRYPTED_PROMPT_LEN limit
+  // actually gates — not the plaintext character count shown while typing.
+  const encryptedSizeEstimate = useMemo(
+    () => estimateEncryptedPayloadSize(formData.fullPrompt),
+    [formData.fullPrompt],
+  );
+  const encryptedSizeRatio = encryptedSizeEstimate / limits.encryptedPrompt;
 
   const checklistHasFailures = checklistItems.some((i) => i.status === "fail");
 
@@ -394,7 +403,7 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
       const encrypted = await encryptPromptPlaintext(formData.fullPrompt);
       const wrappedKey = await wrapPromptKey(encrypted.keyBytes, unlockPublicKey);
 
-      if (encrypted.encryptedPrompt.length > limits.encrypted) {
+      if (encrypted.encryptedPrompt.length > limits.encryptedPrompt) {
         throw new Error(
           "Encrypted payload is too large for the current on-chain limit. Shorten the full prompt and try again.",
         );
@@ -744,8 +753,26 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
           placeholder="This plaintext is encrypted in the browser, then only encrypted fields are sent on-chain."
           className={fieldClass("fullPrompt")}
           aria-invalid={!!errors.fullPrompt}
-          aria-describedby={errors.fullPrompt ? "fullPrompt-error" : undefined}
+          aria-describedby={
+            errors.fullPrompt ? "fullPrompt-error" : "fullPrompt-encrypted-size"
+          }
         />
+        <p
+          id="fullPrompt-encrypted-size"
+          className={`text-xs ${
+            encryptedSizeRatio > 1
+              ? "text-red-400"
+              : encryptedSizeRatio > 0.9
+                ? "text-amber-400"
+                : "text-slate-400"
+          }`}
+        >
+          Encrypted size: {encryptedSizeEstimate.toLocaleString()} /{" "}
+          {limits.encryptedPrompt.toLocaleString()} bytes
+          {encryptedSizeRatio > 1
+            ? " — too large once encrypted, shorten the prompt"
+            : ""}
+        </p>
         {errors.fullPrompt ? (
           <p id="fullPrompt-error" className="flex items-center gap-1 text-sm text-red-400">
             <AlertCircle className="h-3.5 w-3.5" />
