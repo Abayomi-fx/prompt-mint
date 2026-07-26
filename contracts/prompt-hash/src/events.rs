@@ -447,8 +447,9 @@ impl Events {
         }
         .publish(env);
     }
+}
 
-    // ─── Promotional Pricing Events ──────────────────────────────────────
+// ─── Promotional Pricing Events ──────────────────────────────────────────
 
 #[contractevent]
 struct ClassificationSet {
@@ -537,6 +538,28 @@ struct StakeWithdrawn {
     pub creator: Address,
     pub amount: i128,
     pub remaining_staked: i128,
+}
+
+// ─── Upgrade Authorization Events (#42) ───────────────────────────────
+
+#[contractevent]
+struct UpgradeProposed {
+    #[topic]
+    pub new_wasm_hash: soroban_sdk::BytesN<32>,
+    pub proposed_at: u64,
+}
+
+#[contractevent]
+struct UpgradeConfirmed {
+    #[topic]
+    pub new_wasm_hash: soroban_sdk::BytesN<32>,
+    pub confirmed_at: u64,
+}
+
+#[contractevent]
+struct UpgradeCancelled {
+    #[topic]
+    pub cancelled_wasm_hash: soroban_sdk::BytesN<32>,
 }
 
 // NB: `Events` is already declared earlier in this file; this is an additional
@@ -660,6 +683,39 @@ impl Events {
             creator,
             amount,
             remaining_staked,
+        }
+        .publish(env);
+    }
+
+    // ─── Upgrade Authorization (#42) ──────────────────────────────────────
+
+    pub fn emit_upgrade_proposed(
+        env: &Env,
+        new_wasm_hash: soroban_sdk::BytesN<32>,
+        proposed_at: u64,
+    ) {
+        UpgradeProposed {
+            new_wasm_hash,
+            proposed_at,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_upgrade_confirmed(
+        env: &Env,
+        new_wasm_hash: soroban_sdk::BytesN<32>,
+        confirmed_at: u64,
+    ) {
+        UpgradeConfirmed {
+            new_wasm_hash,
+            confirmed_at,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_upgrade_cancelled(env: &Env, cancelled_wasm_hash: soroban_sdk::BytesN<32>) {
+        UpgradeCancelled {
+            cancelled_wasm_hash,
         }
         .publish(env);
     }
