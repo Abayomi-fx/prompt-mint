@@ -1,14 +1,16 @@
 use super::events::Events;
 use super::storage::Storage;
 use super::types::{
-    DataKey, Error, ListingConfig, Prompt, PromptEncryptedPayload, PromptHashTrait, Purchase,
-    ReferralCode, Settlement, Split, Subscription, SubscriptionConfig,
+    ClassificationOverride, DataKey, Error, ListingConfig, Prompt, PromptEncryptedPayload,
+    PromptHashTrait, Purchase, ReferralCode, Settlement, Split, Subscription, SubscriptionConfig,
+    ALL_CLASSIFICATIONS, VALID_DISCLOSURE_FLAGS,
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
 use stellar_macros::{default_impl, only_owner};
 
 const DEFAULT_FEE_BPS: u32 = 500;
+const MAX_FEE_BPS: u32 = 2_000; // 20% maximum platform fee safeguard (#41)
 const ROYALTY_BPS: u32 = 500;
 const MAX_BPS: u32 = 10_000;
 const MAX_TITLE_LEN: u32 = 120;
@@ -25,6 +27,7 @@ const MAX_CLASSIFICATION_LEN: u32 = 20;
 const MAX_SAFETY_FLAGS_COUNT: u32 = 10;
 const MAX_FLAG_LEN: u32 = 30;
 const MAX_REASON_LEN: u32 = 256;
+const UPGRADE_COOLDOWN_SECS: u64 = 86_400; // 24 hours (#42)
 
 #[contract]
 pub struct PromptHashContract;
@@ -443,6 +446,8 @@ impl PromptHashTrait for PromptHashContract {
 
     fn get_purchase_details(env: Env, prompt_id: u128, buyer: Address) -> Result<Purchase, Error> {
         Storage::require_purchase(&env, prompt_id, &buyer)
+    }
+
     fn configure_subscription_pass(
         env: Env,
         creator: Address,
@@ -531,7 +536,7 @@ impl PromptHashTrait for PromptHashContract {
 
     #[only_owner]
     fn set_fee_percentage(env: Env, new_fee_percentage: u32) -> Result<(), Error> {
-        ensure(new_fee_percentage <= MAX_BPS, Error::InvalidFeePercentage)?;
+        ensure(new_fee_percentage <= MAX_FEE_BPS, Error::FeeExceedsMaximum)?;
         Storage::set_fee_percentage(&env, &new_fee_percentage);
         Events::emit_fee_updated(&env, new_fee_percentage);
         Ok(())
@@ -651,14 +656,66 @@ impl PromptHashTrait for PromptHashContract {
         Ok(())
     }
 
+    // ─── Issue #42: Safe Contract Upgrade Authorization ────────────────────
+    //
+    // Two-step upgrade process:
+    //   1. propose_upgrade: owner proposes a new WASM hash (stores it with timestamp)
+    //   2. confirm_upgrade: owner confirms after UPGRADE_COOLDOWN_SECS have elapsed
+    //
+    // This prevents hasty or malicious upgrades by enforcing a mandatory delay.
+
     #[only_owner]
-    fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
+    fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        ensure(
+            Storage::get_pending_upgrade(&env).is_none(),
+            Error::UpgradeAlreadyProposed,
+        )?;
+        let now = env.ledger().timestamp();
+        Storage::set_pending_upgrade(&env, &new_wasm_hash);
+        Storage::set_upgrade_proposer(&env, &env.current_contract_address());
+        Storage::set_upgrade_proposed_at(&env, now);
+        Events::emit_upgrade_proposed(&env, new_wasm_hash, now);
+        Ok(())
+    }
+
+    #[only_owner]
+    fn confirm_upgrade(env: Env) -> Result<(), Error> {
+        let wasm_hash =
+            Storage::get_pending_upgrade(&env).ok_or(Error::UpgradeNotProposed)?;
+        let proposed_at = Storage::get_upgrade_proposed_at(&env)
+            .ok_or(Error::UpgradeNotProposed)?;
+        let now = env.ledger().timestamp();
+        ensure(
+            now >= proposed_at + UPGRADE_COOLDOWN_SECS,
+            Error::UpgradeCooldownNotElapsed,
+        )?;
+
+        Storage::clear_pending_upgrade(&env);
+        Storage::clear_upgrade_proposer(&env);
+        Storage::clear_upgrade_proposed_at(&env);
+
+        env.deployer().update_current_contract_wasm(wasm_hash.clone());
         env.storage().instance().extend_ttl(
             super::storage::PERSISTENT_LIFETIME_THRESHOLD,
             super::storage::PERSISTENT_BUMP_AMOUNT,
         );
+        Events::emit_upgrade_confirmed(&env, wasm_hash.clone(), now);
         Ok(())
+    }
+
+    fn cancel_upgrade(env: Env) -> Result<(), Error> {
+        env.current_contract_address().require_auth();
+        let pending = Storage::get_pending_upgrade(&env)
+            .ok_or(Error::UpgradeNotProposed)?;
+        Storage::clear_pending_upgrade(&env);
+        Storage::clear_upgrade_proposer(&env);
+        Storage::clear_upgrade_proposed_at(&env);
+        Events::emit_upgrade_cancelled(&env, pending);
+        Ok(())
+    }
+
+    fn get_pending_upgrade(env: Env) -> Option<BytesN<32>> {
+        Storage::get_pending_upgrade(&env)
     }
 
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error> {
@@ -869,10 +926,10 @@ impl PromptHashTrait for PromptHashContract {
         validate_len(
             &encrypted_prompt,
             MAX_ENCRYPTED_PROMPT_LEN,
-            Error::InvalidEncryptedPromptLength,
+            Error::InvalidFieldLength,
         )?;
-        validate_len(&wrapped_key, MAX_WRAPPED_KEY_LEN, Error::InvalidWrappedKeyLength)?;
-        validate_len(&encryption_iv, MAX_IV_LEN, Error::InvalidIvLength)?;
+        validate_len(&wrapped_key, MAX_WRAPPED_KEY_LEN, Error::InvalidFieldLength)?;
+        validate_len(&encryption_iv, MAX_IV_LEN, Error::InvalidFieldLength)?;
 
         let previous_version = prompt.encryption_version;
 
@@ -1284,21 +1341,21 @@ fn validate_prompt_fields(
     price_stroops: i128,
 ) -> Result<(), Error> {
     ensure(price_stroops > 0, Error::InvalidPrice)?;
-    validate_len(image_url, MAX_IMAGE_URL_LEN, Error::InvalidImageUrlLength)?;
-    validate_len(title, MAX_TITLE_LEN, Error::InvalidTitleLength)?;
-    validate_len(category, MAX_CATEGORY_LEN, Error::InvalidCategoryLength)?;
-    validate_len(preview_text, MAX_PREVIEW_LEN, Error::InvalidPreviewLength)?;
+    validate_len(image_url, MAX_IMAGE_URL_LEN, Error::InvalidFieldLength)?;
+    validate_len(title, MAX_TITLE_LEN, Error::InvalidFieldLength)?;
+    validate_len(category, MAX_CATEGORY_LEN, Error::InvalidFieldLength)?;
+    validate_len(preview_text, MAX_PREVIEW_LEN, Error::InvalidFieldLength)?;
     validate_len(
         encrypted_prompt,
         MAX_ENCRYPTED_PROMPT_LEN,
-        Error::InvalidEncryptedPromptLength,
+        Error::InvalidFieldLength,
     )?;
     validate_len(
         wrapped_key,
         MAX_WRAPPED_KEY_LEN,
-        Error::InvalidWrappedKeyLength,
+        Error::InvalidFieldLength,
     )?;
-    validate_len(encryption_iv, MAX_IV_LEN, Error::InvalidIvLength)?;
+    validate_len(encryption_iv, MAX_IV_LEN, Error::InvalidFieldLength)?;
     Ok(())
 }
 
@@ -1335,7 +1392,7 @@ fn validate_classification(env: &Env, classification: &String) -> Result<(), Err
 fn validate_safety_flags(env: &Env, flags: &Vec<String>) -> Result<(), Error> {
     ensure(
         flags.len() <= MAX_SAFETY_FLAGS_COUNT,
-        Error::InvalidSafetyFlagsLength,
+        Error::InvalidDisclosureFlags,
     )?;
     for i in 0..flags.len() {
         let flag = flags.get(i).unwrap();
