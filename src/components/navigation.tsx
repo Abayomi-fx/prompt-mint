@@ -4,6 +4,7 @@ import {
   Activity,
   Menu,
   MessageCircle,
+  ReceiptText,
   Search,
   ShoppingBag,
   Shield,
@@ -27,6 +28,7 @@ const navItems = [
   { to: "/sell", label: "Sell", icon: ShoppingBag },
   { to: "/chat", label: "Chat", icon: MessageCircle },
   { to: "/profile", label: "Profile", icon: User },
+  { to: "/history", label: "History", icon: ReceiptText },
   { to: "/status", label: "Status", icon: Activity },
   { to: "/moderation", label: "Moderation", icon: Shield },
 ];

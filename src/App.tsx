@@ -10,8 +10,10 @@ const ChatHome = lazy(() => import("./pages/chat/page.tsx"));
 const ProfilePage = lazy(() => import("./pages/profile/page.tsx"));
 const PromptDetailPage = lazy(() => import("./pages/prompt/page.tsx"));
 const CreatorSharePage = lazy(() => import("./pages/creator/page.tsx"));
+const ComparePage = lazy(() => import("./pages/compare/page.tsx"));
 const StatusPage = lazy(() => import("./pages/status/page.tsx"));
 const ModerationPage = lazy(() => import("./pages/Moderation.tsx"));
+const TransactionHistoryPage = lazy(() => import("./pages/history/page.tsx"));
 
 const AppLayout = () => (
   <main className="min-h-screen bg-slate-950 text-white pb-16 sm:pb-0">
@@ -65,6 +67,14 @@ function App() {
                 }
               />
               <Route
+                path="/compare"
+                element={
+                  <ErrorBoundary routeName="Compare">
+                    <ComparePage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
                 path="/sell"
                 element={
                   <ErrorBoundary routeName="Sell">
@@ -101,6 +111,14 @@ function App() {
                 element={
                   <ErrorBoundary routeName="Moderation">
                     <ModerationPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/history"
+                element={
+                  <ErrorBoundary routeName="Transaction History">
+                    <TransactionHistoryPage />
                   </ErrorBoundary>
                 }
               />

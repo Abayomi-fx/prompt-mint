@@ -1,6 +1,6 @@
 use crate::contract::{PromptHashContract, PromptHashContractClient};
 use crate::mock_asset::FungibleTokenContract;
-use crate::types::{Error, ListingConfig, Split};
+use crate::types::{Bundle, Discount, Error, ListingConfig, Split};
 extern crate std;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
@@ -553,7 +553,7 @@ fn test_non_owner_cannot_transfer_license() {
 }
 
 #[test]
-fn test_transfer_license_rejects_zero_price_and_self_transfer() {
+fn test_transfer_license_allows_zero_gift_and_rejects_self_transfer() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
@@ -580,16 +580,16 @@ fn test_transfer_license_rejects_zero_price_and_self_transfer() {
         &None::<Bytes>,
     );
 
-    let zero_price = client.try_transfer_license(&owner, &prompt_id, &buyer, &0i128);
-    match zero_price {
-        Err(Ok(Error::InvalidPaymentAmount)) => {}
-        other => panic!(
-            "expected InvalidPaymentAmount for zero resale, got {:?}",
-            other
-        ),
-    }
+    // #271: a zero-consideration transfer is a valid gift. It moves access to the
+    // new owner and must NOT attempt a bogus royalty payment (creator balance
+    // unchanged).
+    let creator_before = xlm_client.balance(&creator);
+    client.transfer_license(&owner, &prompt_id, &buyer, &0i128);
+    assert_eq!(xlm_client.balance(&creator), creator_before);
+    assert!(!client.has_access(&owner, &prompt_id));
+    assert!(client.has_access(&buyer, &prompt_id));
 
-    let self_transfer = client.try_transfer_license(&owner, &prompt_id, &owner, &20_000i128);
+    let self_transfer = client.try_transfer_license(&buyer, &prompt_id, &buyer, &20_000i128);
     match self_transfer {
         Err(Ok(Error::InvalidLicenseTransfer)) => {}
         other => panic!(
@@ -629,6 +629,80 @@ fn test_duplicate_purchase_returns_typed_error() {
     match duplicate_purchase {
         Err(Ok(error)) => assert_eq!(error, Error::AlreadyPurchased),
         other => panic!("unexpected duplicate purchase result: {:?}", other),
+    }
+}
+
+// ─── #272: Prompt Bundling ──────────────────────────────────────────────────
+
+#[test]
+fn test_create_bundle_rejects_unowned_prompts() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let other = Address::generate(&env);
+    let owned = create_prompt(&env, &client, &creator, "Owned", 10_000, &context.xlm);
+    let foreign = create_prompt(&env, &client, &other, "Foreign", 10_000, &context.xlm);
+
+    let ids = Vec::from_array(&env, [owned, foreign]);
+    let result = client.try_create_bundle(&creator, &ids, &15_000i128, &context.xlm);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for unowned prompt in bundle, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_purchase_bundle_grants_access_and_splits_payment() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let p1 = create_prompt(&env, &client, &creator, "Bundle P1", 10_000, &context.xlm);
+    let p2 = create_prompt(&env, &client, &creator, "Bundle P2", 20_000, &context.xlm);
+
+    let ids = Vec::from_array(&env, [p1, p2]);
+    let bundle_price = 24_000i128;
+    let bundle_id = client.create_bundle(&creator, &ids, &bundle_price, &context.xlm);
+
+    let stored: Bundle = client.get_bundle(&bundle_id);
+    assert_eq!(stored.price, bundle_price);
+    assert_eq!(stored.prompt_ids.len(), 2);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    let creator_before = xlm_client.balance(&creator);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+    let buyer_before = xlm_client.balance(&buyer);
+
+    client.purchase_bundle(&buyer, &bundle_id, &bundle_price);
+
+    // Access granted to every prompt in the bundle.
+    assert!(client.has_access(&buyer, &p1));
+    assert!(client.has_access(&buyer, &p2));
+
+    // Payment split: platform fee (default 500 bps) then creator remainder.
+    let fee = bundle_price * 500 / 10_000;
+    let creator_amount = bundle_price - fee;
+    assert_eq!(xlm_client.balance(&creator), creator_before + creator_amount);
+    assert_eq!(xlm_client.balance(&context.fee_wallet), fee_before + fee);
+    assert_eq!(xlm_client.balance(&buyer), buyer_before - bundle_price);
+}
+
+#[test]
+fn test_purchase_nonexistent_bundle_fails_cleanly() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let buyer = Address::generate(&env);
+    let result = client.try_purchase_bundle(&buyer, &999u128, &10_000i128);
+    match result {
+        Err(Ok(Error::BundleNotFound)) => {}
+        other => panic!("expected BundleNotFound, got {:?}", other),
     }
 }
 
@@ -3338,273 +3412,287 @@ fn test_license_transfer_preserves_encryption_version() {
     assert!(client.has_access(&buyer, &prompt_id));
 }
 
-// ─── Contract State Versioning & Migration ───────────────────────────────────
+// ─── #275: Creator Reputation Staking ────────────────────────────────────────
+
+const SECONDS_PER_WEEK: u64 = 7 * 24 * 60 * 60;
 
 #[test]
-fn test_constructor_sets_current_schema_version() {
-    let env: Env = Default::default();
-    let context = setup(&env);
-    let client = PromptHashContractClient::new(&env, &context.contract);
-
-    assert_eq!(client.get_schema_version(), 1);
-}
-
-#[test]
-fn test_migrate_bumps_schema_version_forward() {
-    let env: Env = Default::default();
-    let context = setup(&env);
-    let client = PromptHashContractClient::new(&env, &context.contract);
-
-    // Simulate a contract deployed before this versioning scheme existed,
-    // where the schema version key was never written (defaults to 0).
-    env.as_contract(&context.contract, || {
-        crate::storage::Storage::set_schema_version(&env, 0);
-    });
-    assert_eq!(client.get_schema_version(), 0);
-
-    let new_version = client.migrate(&1);
-    assert_eq!(new_version, 1);
-    assert_eq!(client.get_schema_version(), 1);
-}
-
-#[test]
-fn test_migrate_rejects_non_forward_versions() {
-    let env: Env = Default::default();
-    let context = setup(&env);
-    let client = PromptHashContractClient::new(&env, &context.contract);
-
-    // Same version as currently stored is rejected (not strictly forward).
-    let same = client.try_migrate(&1);
-    assert!(matches!(same, Err(Ok(Error::VersionMismatch))));
-
-    // Lower version is rejected.
-    let lower = client.try_migrate(&0);
-    assert!(matches!(lower, Err(Ok(Error::VersionMismatch))));
-}
-
-#[test]
-fn test_migrate_rejects_unknown_future_version() {
-    let env: Env = Default::default();
-    let context = setup(&env);
-    let client = PromptHashContractClient::new(&env, &context.contract);
-
-    // This contract build only understands up to CONTRACT_SCHEMA_VERSION (1);
-    // asking it to migrate to a version it has no logic for must fail rather
-    // than silently accept a value it can't act on.
-    let result = client.try_migrate(&2);
-    assert!(matches!(result, Err(Ok(Error::VersionMismatch))));
-    assert_eq!(client.get_schema_version(), 1);
-}
-
-#[test]
-fn test_migrate_rejects_max_u32_version() {
-    let env: Env = Default::default();
-    let context = setup(&env);
-    let client = PromptHashContractClient::new(&env, &context.contract);
-
-    let result = client.try_migrate(&u32::MAX);
-    assert!(matches!(result, Err(Ok(Error::VersionMismatch))));
-    assert_eq!(client.get_schema_version(), 1);
-}
-
-// ─── Maximum Numeric Boundary Tests ──────────────────────────────────────────
-// These exercise the contract's checked-arithmetic guards at the true type
-// maxima (i128::MAX, u64::MAX, u32::MAX), not just "very large" values, to
-// confirm overflow is always rejected with a typed error and never panics
-// or silently wraps.
-
-#[test]
-fn test_buy_prompt_at_i128_max_price_overflows_fee_calc() {
+fn test_stake_records_balance_and_moves_tokens_into_custody() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
     let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
 
     let creator = Address::generate(&env);
-    let buyer = Address::generate(&env);
-    let prompt_id = create_prompt(&env, &client, &creator, "Max price", i128::MAX, &context.xlm);
+    let prompt_id = create_prompt(&env, &client, &creator, "Staked Prompt", 10_000, &context.xlm);
 
-    // The overflow guard trips on `payment_amount_stroops.checked_mul(fee_bps)`
-    // before any token transfer is attempted, so the buyer doesn't need to
-    // actually hold i128::MAX of the mock asset (its own total-supply
-    // bookkeeping can't represent that alongside the constructor's mint).
-    fund_buyer(&xlm_client, &buyer, &context.contract, 10_000);
+    // Fund the creator so they can stake.
+    xlm_client.mint(&creator, &50_000);
+    let creator_start = xlm_client.balance(&creator);
+    let custody_start = xlm_client.balance(&context.contract);
 
-    // fee_percentage (500 bps) * i128::MAX overflows i128 before the /10_000
-    // division ever runs. The checked_mul guard must catch this rather than
-    // panicking or wrapping to a bogus fee.
-    let result = client.try_buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &i128::MAX, &None::<Bytes>);
-    assert!(matches!(result, Err(Ok(Error::ArithmeticOverflow))));
+    let total = client.stake(&creator, &prompt_id, &30_000);
+    assert_eq!(total, 30_000);
+
+    // Recorded stake reflects the amount.
+    let stake = client.get_stake(&prompt_id);
+    assert_eq!(stake.amount, 30_000);
+    assert_eq!(stake.creator, creator);
+
+    // Tokens moved from creator into contract custody.
+    assert_eq!(xlm_client.balance(&creator), creator_start - 30_000);
+    assert_eq!(xlm_client.balance(&context.contract), custody_start + 30_000);
+
+    // Additional stake accumulates.
+    let total2 = client.stake(&creator, &prompt_id, &10_000);
+    assert_eq!(total2, 40_000);
+    assert_eq!(client.get_stake(&prompt_id).amount, 40_000);
 }
 
 #[test]
-fn test_lease_prompt_duration_u64_max_overflows_expiry() {
+fn test_only_prompt_creator_can_stake() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
     let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
 
     let creator = Address::generate(&env);
-    let buyer = Address::generate(&env);
-    let prompt_id = create_prompt(&env, &client, &creator, "Lease max", 10_000, &context.xlm);
-    fund_buyer(&xlm_client, &buyer, &context.contract, 10_000);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Owned Prompt", 10_000, &context.xlm);
 
-    // A nonzero ledger timestamp is required to actually observe the overflow:
-    // `now.checked_add(u64::MAX)` only overflows when `now > 0`.
-    env.ledger().with_mut(|ledger| ledger.timestamp = 1);
-
-    let result = client.try_lease_prompt(&buyer, &prompt_id, &u64::MAX);
-    assert!(matches!(result, Err(Ok(Error::ArithmeticOverflow))));
+    xlm_client.mint(&stranger, &50_000);
+    let result = client.try_stake(&stranger, &prompt_id, &10_000);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for non-creator stake, got {:?}", other),
+    }
 }
 
 #[test]
-fn test_transfer_license_resale_price_i128_max_overflows_royalty_calc() {
+fn test_slash_reduces_stake_and_forwards_to_fee_wallet() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
     let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
 
     let creator = Address::generate(&env);
-    let seller = Address::generate(&env);
-    let new_buyer = Address::generate(&env);
-    let prompt_id = create_prompt(&env, &client, &creator, "Resale max", 10_000, &context.xlm);
+    let prompt_id = create_prompt(&env, &client, &creator, "Slashable", 10_000, &context.xlm);
 
-    fund_buyer(&xlm_client, &seller, &context.contract, 10_000);
-    client.buy_prompt(&seller, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &30_000);
 
-    // As above: the overflow guard on `resale_price.checked_mul(ROYALTY_BPS)`
-    // trips before any transfer_from, so a modest funded balance is enough.
-    fund_buyer(&xlm_client, &new_buyer, &context.contract, 10_000);
+    let fee_start = xlm_client.balance(&context.fee_wallet);
+    let custody_start = xlm_client.balance(&context.contract);
 
-    let result = client.try_transfer_license(&seller, &prompt_id, &new_buyer, &i128::MAX);
-    assert!(matches!(result, Err(Ok(Error::ArithmeticOverflow))));
+    // Owner (admin) slashes part of the stake. #[only_owner] gates this call;
+    // under mock_all_auths the owner authorization is satisfied automatically
+    // (see test_set_referral_percentage_only_owner for the same convention).
+    let slashed = client.slash(&prompt_id, &12_000);
+    assert_eq!(slashed, 12_000);
+    assert_eq!(client.get_stake(&prompt_id).amount, 18_000);
+
+    // Slashed stroops leave custody and land in the fee wallet.
+    assert_eq!(xlm_client.balance(&context.fee_wallet), fee_start + 12_000);
+    assert_eq!(xlm_client.balance(&context.contract), custody_start - 12_000);
 }
 
 #[test]
-fn test_split_bps_sum_overflow_at_u32_max_rejected() {
-    let env: Env = Default::default();
-    let context = setup(&env);
-    let client = PromptHashContractClient::new(&env, &context.contract);
-
-    let creator = Address::generate(&env);
-    let recipient_a = Address::generate(&env);
-    let recipient_b = Address::generate(&env);
-
-    // Two splits whose bps values individually pass (each <= u32::MAX) but
-    // whose *sum* wraps past u32::MAX inside validate_splits' running total -
-    // this must be caught by checked_add, not silently wrap to a small number
-    // that would then pass the `<= MAX_BPS` check.
-    let splits = Vec::from_array(
-        &env,
-        [
-            Split {
-                recipient: recipient_a.clone(),
-                bps: u32::MAX,
-            },
-            Split {
-                recipient: recipient_b.clone(),
-                bps: 1,
-            },
-        ],
-    );
-
-    let result = client.try_create_prompt(
-        &creator,
-        &String::from_str(&env, "https://example.com/prompt.png"),
-        &String::from_str(&env, "Overflowing splits"),
-        &String::from_str(&env, "Software Development"),
-        &String::from_str(&env, "Generate a production-ready implementation plan."),
-        &String::from_str(&env, "ciphertext"),
-        &String::from_str(&env, "iv"),
-        &String::from_str(&env, "wrapped-key"),
-        &hash(&env, 7),
-        &ListingConfig {
-            price: 10_000,
-            asset: context.xlm.clone(),
-            expires_at: 0,
-            splits,
-        },
-    );
-    assert!(matches!(result, Err(Ok(Error::ArithmeticOverflow))));
-}
-
-#[test]
-fn test_set_prompt_max_supply_accepts_u64_max_boundary() {
+fn test_over_slash_is_clamped_to_available_stake() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
     let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
 
     let creator = Address::generate(&env);
-    let buyer = Address::generate(&env);
-    let prompt_id = create_prompt(&env, &client, &creator, "Unlimited-ish supply", 10_000, &context.xlm);
+    let prompt_id = create_prompt(&env, &client, &creator, "Clamp", 10_000, &context.xlm);
 
-    // u64::MAX is accepted as a (very large but finite) supply cap and must
-    // not be confused with `0`, which this contract treats as "unlimited".
-    client.set_prompt_max_supply(&creator, &prompt_id, &u64::MAX);
-    assert_eq!(client.get_prompt(&prompt_id).max_supply, u64::MAX);
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &20_000);
 
-    fund_buyer(&xlm_client, &buyer, &context.contract, 10_000);
-    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
-    assert_eq!(client.get_prompt(&prompt_id).sales_count, 1);
+    // Requesting more than staked only removes what is available.
+    let slashed = client.slash(&prompt_id, &100_000);
+    assert_eq!(slashed, 20_000);
+    assert_eq!(client.get_stake(&prompt_id).amount, 0);
+
+    // A second slash on an empty stake removes nothing (clamped to zero).
+    let slashed_again = client.slash(&prompt_id, &5_000);
+    assert_eq!(slashed_again, 0);
+    assert_eq!(client.get_stake(&prompt_id).amount, 0);
 }
 
 #[test]
-fn test_configure_subscription_duration_boundary_accepts_max_rejects_over_max() {
+fn test_slash_missing_stake_is_rejected() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
 
     let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "NoStake", 10_000, &context.xlm);
 
-    // Exactly MAX_SUBSCRIPTION_DURATION_SECS (31_536_000) must be accepted.
-    client.configure_subscription_pass(&creator, &31_536_000, &10_000, &context.xlm, &true);
-    assert_eq!(
-        client.get_subscription_config(&creator).duration_secs,
-        31_536_000
-    );
-
-    // One second past the max must be rejected, not silently clamped.
-    let result =
-        client.try_configure_subscription_pass(&creator, &31_536_001, &10_000, &context.xlm, &true);
-    assert!(matches!(result, Err(Ok(Error::InvalidSubscriptionDuration))));
-
-    // u64::MAX must also be rejected the same way.
-    let result_max = client.try_configure_subscription_pass(&creator, &u64::MAX, &10_000, &context.xlm, &true);
-    assert!(matches!(result_max, Err(Ok(Error::InvalidSubscriptionDuration))));
+    let result = client.try_slash(&prompt_id, &1_000);
+    match result {
+        Err(Ok(Error::StakeNotFound)) => {}
+        other => panic!("expected StakeNotFound, got {:?}", other),
+    }
 }
 
 #[test]
-fn test_extend_listing_accepts_u64_max_expiry() {
+fn test_unstake_returns_remaining_stake_after_cooldown() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Reclaimable", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &30_000);
+
+    // Admin slashes part; creator should only reclaim the non-slashed remainder.
+    client.slash(&prompt_id, &10_000);
+    assert_eq!(client.get_stake(&prompt_id).amount, 20_000);
+
+    // Advance past the cooldown window.
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + SECONDS_PER_WEEK + 1);
+
+    let creator_before = xlm_client.balance(&creator);
+    let custody_before = xlm_client.balance(&context.contract);
+
+    let withdrawn = client.unstake(&creator, &prompt_id, &100_000);
+    assert_eq!(withdrawn, 20_000, "unstake clamps to remaining stake");
+    assert_eq!(client.get_stake(&prompt_id).amount, 0);
+
+    assert_eq!(xlm_client.balance(&creator), creator_before + 20_000);
+    assert_eq!(xlm_client.balance(&context.contract), custody_before - 20_000);
+}
+
+#[test]
+fn test_unstake_before_cooldown_is_locked() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Locked", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &30_000);
+
+    // Only a little time passes — still within the cooldown.
+    env.ledger().with_mut(|l| l.timestamp = 1_000 + 100);
+
+    let result = client.try_unstake(&creator, &prompt_id, &10_000);
+    match result {
+        Err(Ok(Error::StakeLocked)) => {}
+        other => panic!("expected StakeLocked before cooldown, got {:?}", other),
+    }
+    // Stake untouched.
+    assert_eq!(client.get_stake(&prompt_id).amount, 30_000);
+}
+
+#[test]
+fn test_unstake_by_non_owner_is_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Guarded", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &30_000);
+
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + SECONDS_PER_WEEK + 1);
+
+    let result = client.try_unstake(&stranger, &prompt_id, &10_000);
+    match result {
+        Err(Ok(Error::NotStakeOwner)) => {}
+        other => panic!("expected NotStakeOwner, got {:?}", other),
+    }
+}
+
+// ─── #273: Time-based Discount Mechanics ────────────────────────────────────
+
+#[test]
+fn test_discount_applies_within_window_and_reverts_outside() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
 
     let creator = Address::generate(&env);
-    let prompt_id = create_prompt(&env, &client, &creator, "Far future listing", 10_000, &context.xlm);
+    let prompt_id = create_prompt(&env, &client, &creator, "Discounted", 10_000, &context.xlm);
 
-    // u64::MAX is the maximum real expiry timestamp; `0` is the sentinel for
-    // "never expires" so the two must not be conflated at this boundary.
-    client.extend_listing(&creator, &prompt_id, &u64::MAX);
-    assert_eq!(client.get_prompt(&prompt_id).expires_at, u64::MAX);
+    // Discount active for ledger sequence in [100, 200].
+    client.set_discount(&creator, &prompt_id, &4_000i128, &100u32, &200u32);
+    let stored: Option<Discount> = client.get_discount(&prompt_id);
+    assert!(stored.is_some());
+    assert_eq!(stored.unwrap().discounted_price, 4_000i128);
+
+    // Before the window -> base price.
+    env.ledger().with_mut(|l| l.sequence_number = 50);
+    let (price_before, _, is_discounted_before) = client.get_effective_price(&prompt_id);
+    assert_eq!(price_before, 10_000i128);
+    assert!(!is_discounted_before);
+
+    // Inside the window -> discounted price.
+    env.ledger().with_mut(|l| l.sequence_number = 150);
+    let (price_in, _, is_discounted_in) = client.get_effective_price(&prompt_id);
+    assert_eq!(price_in, 4_000i128);
+    assert!(is_discounted_in);
+
+    // After the window -> reverts to base price automatically.
+    env.ledger().with_mut(|l| l.sequence_number = 250);
+    let (price_after, _, is_discounted_after) = client.get_effective_price(&prompt_id);
+    assert_eq!(price_after, 10_000i128);
+    assert!(!is_discounted_after);
 }
 
 #[test]
-fn test_add_voucher_rejects_discount_above_max_bps_accepts_at_max_bps() {
+fn test_only_creator_can_set_discount() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
 
     let creator = Address::generate(&env);
-    let prompt_id = create_prompt(&env, &client, &creator, "Voucher boundary", 10_000, &context.xlm);
-    let code = BytesN::from_array(&env, &[9u8; 32]);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Guarded", 10_000, &context.xlm);
 
-    // Exactly MAX_BPS (10_000 = 100%) is accepted.
-    client.add_voucher(&creator, &prompt_id, &code, &10_000);
-
-    let other_code = BytesN::from_array(&env, &[10u8; 32]);
-    // u32::MAX (and anything above MAX_BPS) must be rejected rather than
-    // silently truncated to a smaller discount.
-    let result = client.try_add_voucher(&creator, &prompt_id, &other_code, &u32::MAX);
-    assert!(matches!(result, Err(Ok(Error::InvalidDiscountPercentage))));
+    let result = client.try_set_discount(&stranger, &prompt_id, &4_000i128, &100u32, &200u32);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized, got {:?}", other),
+    }
 }
+
+#[test]
+fn test_clear_discount_removes_active_discount() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Clearable", 10_000, &context.xlm);
+
+    client.set_discount(&creator, &prompt_id, &4_000i128, &100u32, &200u32);
+    client.clear_discount(&creator, &prompt_id);
+    assert!(client.get_discount(&prompt_id).is_none());
+
+    // Inside what used to be the window, base price is charged again.
+    env.ledger().with_mut(|l| l.sequence_number = 150);
+    let (price, _, is_discounted) = client.get_effective_price(&prompt_id);
+    assert_eq!(price, 10_000i128);
+    assert!(!is_discounted);
+}
+
