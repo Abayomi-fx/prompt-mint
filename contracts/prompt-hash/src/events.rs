@@ -36,6 +36,24 @@ struct PromptPurchased {
     pub referrer_amount: i128,
 }
 
+// ─── #274: Referral tracking events ──────────────────────────────────────
+#[contractevent]
+struct ReferralCodeRegistered {
+    #[topic]
+    pub referrer: Address,
+    pub code_hash: soroban_sdk::BytesN<32>,
+    pub reward_bps: u32,
+}
+
+#[contractevent]
+struct ReferralRewardPaid {
+    #[topic]
+    pub prompt_id: u128,
+    pub referrer: Address,
+    pub buyer: Address,
+    pub reward_amount: i128,
+}
+
 #[contractevent]
 struct LicenseTransferred {
     #[topic]
@@ -127,6 +145,66 @@ struct SubscriptionRenewed {
     pub renewal_count: u32,
 }
 
+// ─── #272: Prompt Bundle Events ───────────────────────────────────────────
+
+#[contractevent]
+struct BundleCreated {
+    #[topic]
+    pub bundle_id: u128,
+    pub creator: Address,
+    pub price: i128,
+    pub asset: Address,
+}
+
+#[contractevent]
+struct BundlePurchased {
+    #[topic]
+    pub bundle_id: u128,
+    pub buyer: Address,
+    pub creator: Address,
+    pub price: i128,
+    pub creator_amount: i128,
+    pub platform_amount: i128,
+}
+
+impl Events {
+    pub fn emit_bundle_created(
+        env: &Env,
+        bundle_id: u128,
+        creator: Address,
+        price: i128,
+        asset: Address,
+    ) {
+        BundleCreated {
+            bundle_id,
+            creator,
+            price,
+            asset,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_bundle_purchased(
+        env: &Env,
+        bundle_id: u128,
+        buyer: Address,
+        creator: Address,
+        price: i128,
+        creator_amount: i128,
+        platform_amount: i128,
+    ) {
+        BundlePurchased {
+            bundle_id,
+            buyer,
+            creator,
+            price,
+            creator_amount,
+            platform_amount,
+        }
+        .publish(env);
+    }
+}
+
 pub struct Events;
 
 impl Events {
@@ -178,6 +256,37 @@ impl Events {
             creator_amount,
             platform_amount,
             referrer_amount,
+        }
+        .publish(env);
+    }
+
+    // ─── #274: Referral tracking events ───────────────────────────────────
+    pub fn emit_referral_code_registered(
+        env: &Env,
+        referrer: Address,
+        code_hash: soroban_sdk::BytesN<32>,
+        reward_bps: u32,
+    ) {
+        ReferralCodeRegistered {
+            referrer,
+            code_hash,
+            reward_bps,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_referral_reward_paid(
+        env: &Env,
+        prompt_id: u128,
+        referrer: Address,
+        buyer: Address,
+        reward_amount: i128,
+    ) {
+        ReferralRewardPaid {
+            prompt_id,
+            referrer,
+            buyer,
+            reward_amount,
         }
         .publish(env);
     }
@@ -609,5 +718,135 @@ impl Events {
             cancelled_wasm_hash,
         }
         .publish(env);
+    }
+}
+
+// ─── #131: Event Structs ───────────────────────────────────────────────────
+
+#[contractevent]
+struct ClassificationSet {
+    #[topic]
+    pub prompt_id: u128,
+    pub classification: String,
+    pub safety_flags: Vec<String>,
+}
+
+#[contractevent]
+struct ClassificationOverridden {
+    #[topic]
+    pub prompt_id: u128,
+    pub moderator: Address,
+    pub classification: String,
+    pub safety_flags: Vec<String>,
+    pub reason: String,
+}
+
+// ─── Encryption Rotation Events ──────────────────────────────────────────
+
+#[contractevent]
+struct EncryptionRotated {
+    #[topic]
+    pub prompt_id: u128,
+    pub previous_version: u32,
+    pub new_version: u32,
+    pub rotated_at: u64,
+}
+
+// ─── Upgrade Authorization Events (#42) ───────────────────────────────
+
+#[contractevent]
+struct UpgradeProposed {
+    #[topic]
+    pub new_wasm_hash: soroban_sdk::BytesN<32>,
+    pub proposed_at: u64,
+}
+
+#[contractevent]
+struct UpgradeConfirmed {
+    #[topic]
+    pub new_wasm_hash: soroban_sdk::BytesN<32>,
+    pub confirmed_at: u64,
+}
+
+#[contractevent]
+struct UpgradeCancelled {
+    #[topic]
+    pub cancelled_wasm_hash: soroban_sdk::BytesN<32>,
+}
+
+// ─── Promotional Pricing Events ──────────────────────────────────────────
+
+#[contractevent]
+struct PromotionCreated {
+    #[topic]
+    pub prompt_id: u128,
+    pub promotion_id: u128,
+    pub creator: Address,
+    pub start_time: u64,
+    pub end_time: u64,
+    pub price: i128,
+    pub asset: Address,
+}
+
+#[contractevent]
+struct PromotionCancelled {
+    #[topic]
+    pub prompt_id: u128,
+    pub promotion_id: u128,
+    pub creator: Address,
+}
+
+#[contractevent]
+struct PromotionApplied {
+    #[topic]
+    pub prompt_id: u128,
+    pub promotion_id: u128,
+    pub buyer: Address,
+    pub effective_price: i128,
+    pub original_price: i128,
+}
+
+// ─── #273: Time-based Discount Events ─────────────────────────────────────
+
+#[contractevent]
+struct DiscountSet {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub discounted_price: i128,
+    pub start_ledger: u32,
+    pub end_ledger: u32,
+}
+
+#[contractevent]
+struct DiscountCleared {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+}
+
+impl Events {
+    // ─── #273: Time-based Discounts ────────────────────────────────────────
+
+    pub fn emit_discount_set(
+        env: &Env,
+        prompt_id: u128,
+        creator: Address,
+        discounted_price: i128,
+        start_ledger: u32,
+        end_ledger: u32,
+    ) {
+        DiscountSet {
+            prompt_id,
+            creator,
+            discounted_price,
+            start_ledger,
+            end_ledger,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_discount_cleared(env: &Env, prompt_id: u128, creator: Address) {
+        DiscountCleared { prompt_id, creator }.publish(env);
     }
 }

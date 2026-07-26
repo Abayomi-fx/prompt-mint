@@ -1,6 +1,10 @@
 use super::types::{
     ClassificationOverride, DataKey, Error, Prompt, PromptEncryptedPayload, Purchase, ReferralCode,
     Settlement, Stake, Subscription, SubscriptionConfig,
+    Bundle, ClassificationOverride, DataKey, Discount, Error, Prompt, PromptEncryptedPayload,
+    Purchase, ReferralCode, Settlement, Subscription, SubscriptionConfig,
+    DataKey, Error, Prompt, PromptEncryptedPayload, Purchase, ReferralCode, Settlement, Stake,
+    Subscription, SubscriptionConfig,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
 
@@ -517,6 +521,38 @@ impl Storage {
         addr
     }
 
+    // ─── #272: Prompt Bundles ──────────────────────────────────────────────
+
+    pub fn get_bundle_counter(env: &Env) -> u128 {
+        let key = DataKey::BundleCounter;
+        let count = env.storage().persistent().get(&key).unwrap_or(0);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        count
+    }
+
+    pub fn save_bundle(env: &Env, bundle: &Bundle) -> Result<(), Error> {
+        let key = DataKey::Bundle(bundle.id);
+        env.storage().persistent().set(&key, bundle);
+        Self::extend_key_ttl(env, &key);
+
+        let counter_key = DataKey::BundleCounter;
+        let next_id = bundle.id.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        env.storage().persistent().set(&counter_key, &next_id);
+        Self::extend_key_ttl(env, &counter_key);
+        Ok(())
+    }
+
+    pub fn get_bundle(env: &Env, bundle_id: u128) -> Option<Bundle> {
+        let key = DataKey::Bundle(bundle_id);
+        let bundle = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        bundle
+    }
+
     // ─── Promotional Pricing ──────────────────────────────────────────────
 
     pub fn set_active_promotion(env: &Env, prompt_id: u128, promotion: &super::types::Promotion) {
@@ -667,5 +703,26 @@ impl Storage {
         env.storage()
             .instance()
             .set(&DataKey::SchemaVersion, &version);
+    }
+    // ─── #273: Time-based Discounts ────────────────────────────────────────
+
+    pub fn set_discount(env: &Env, discount: &Discount) {
+        let key = DataKey::Discount(discount.prompt_id);
+        env.storage().persistent().set(&key, discount);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_discount(env: &Env, prompt_id: u128) -> Option<Discount> {
+        let key = DataKey::Discount(prompt_id);
+        let discount = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        discount
+    }
+
+    pub fn clear_discount(env: &Env, prompt_id: u128) {
+        let key = DataKey::Discount(prompt_id);
+        env.storage().persistent().remove(&key);
     }
 }

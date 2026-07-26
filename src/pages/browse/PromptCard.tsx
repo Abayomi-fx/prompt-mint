@@ -7,13 +7,15 @@ import {
   TrendingUp,
   AlertTriangle,
   Info,
+  GitCompare,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { shortenAddress } from "@/lib/utils";
-import { formatPriceLabel } from "@/lib/stellar/format";
+import { formatPriceLabel, stroopsToXlmString } from "@/lib/stellar/format";
 import { CurrencyPrice } from "@/components/CurrencyPrice";
+import { useComparison } from "@/hooks/useComparison";
 import type { PromptRecord } from "@/lib/stellar/promptHashClient";
 import { StarRating } from "@/components/prompts/StarRating";
 import { useQuery } from "@tanstack/react-query";
@@ -38,6 +40,12 @@ export const PromptCard = ({
   onToggleSave: (_prompt: PromptRecord) => void;
 }) => {
   const isBestSeller = prompt.salesCount >= 10;
+
+  // #277 – comparison selection (persisted via localStorage)
+  const comparison = useComparison();
+  const promptIdStr = prompt.id.toString();
+  const inComparison = comparison.isSelected(promptIdStr);
+  const compareDisabled = !inComparison && !comparison.canAdd;
 
   // Fetch review stats for this prompt
   const { data: reviewStats } = useQuery({
@@ -97,7 +105,47 @@ export const PromptCard = ({
             </Badge>
           )}
         </div>
-        <div className="absolute top-4 right-4">
+        <div className="absolute top-4 right-4 flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="secondary"
+            className={`h-8 rounded-full border px-3 text-xs shadow-lg backdrop-blur-md ${
+              inComparison
+                ? "border-emerald-500/40 bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30"
+                : "border-white/10 bg-slate-950/75 text-white hover:bg-slate-900"
+            }`}
+            disabled={compareDisabled}
+            aria-pressed={inComparison}
+            aria-label={
+              inComparison
+                ? `Remove ${prompt.title} from comparison`
+                : `Add ${prompt.title} to comparison`
+            }
+            title={
+              compareDisabled
+                ? "You can compare up to 4 prompts"
+                : inComparison
+                  ? "Remove from comparison"
+                  : "Add to comparison"
+            }
+            onClick={(event) => {
+              event.stopPropagation();
+              comparison.toggle({
+                id: promptIdStr,
+                title: prompt.title,
+                creator: prompt.creator,
+                price: Number(stroopsToXlmString(prompt.priceStroops)),
+                category: prompt.category,
+                tags: prompt.tags,
+                salesCount: prompt.salesCount,
+                preview: prompt.previewText,
+                isOwned: hasAccess,
+              });
+            }}
+          >
+            <GitCompare className="mr-1.5 h-3.5 w-3.5" />
+            {inComparison ? "Comparing" : "Compare"}
+          </Button>
           <Button
             size="sm"
             variant="secondary"

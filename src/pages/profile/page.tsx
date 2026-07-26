@@ -21,6 +21,7 @@ import {
   PencilLine,
   PlugZap,
   RadioTower,
+  Receipt,
   ShieldCheck,
   ShoppingBag,
   Wallet,
@@ -70,6 +71,7 @@ import {
   buildPromptSharePath,
   parseCreatorAddressParam,
 } from "@/lib/marketplace/shareUrls";
+import { TransactionHistoryPanel } from "@/components/dashboard/TransactionHistoryPanel";
 
 const promptImageFallback = "/images/codeguru.png";
 
@@ -1082,6 +1084,16 @@ export default function ProfilePage() {
                   ))}
                 </div>
               )}
+
+              {profileAddress ? (
+                <TransactionHistoryPanel
+                  walletAddress={profileAddress}
+                  role="creator"
+                  title="Creator sales history"
+                  description="Public sales activity for this creator wallet (metadata only — does not change unlock rights)."
+                  emptyMessage="No indexed sales yet for this creator."
+                />
+              ) : null}
             </section>
           ) : !address ? (
             <DisconnectedProfile />
@@ -1121,7 +1133,7 @@ export default function ProfilePage() {
                     </p>
                   </div>
 
-                  <TabsList className="mb-6 grid h-auto w-full grid-cols-4 rounded-xl border border-white/10 bg-white/[0.03] p-1.5 sm:w-[48rem]">
+                  <TabsList className="mb-6 grid h-auto w-full grid-cols-2 rounded-xl border border-white/10 bg-white/[0.03] p-1.5 sm:grid-cols-5 sm:w-[56rem]">
                     <TabsTrigger
                       value="purchased"
                       aria-label="Open my library tab"
@@ -1162,6 +1174,14 @@ export default function ProfilePage() {
                     >
                       <Clock className="h-4 w-4" />
                       Recent
+                    </TabsTrigger>
+                    <TabsTrigger
+                      value="transactions"
+                      aria-label="Open purchase transaction history tab"
+                      className="flex items-center gap-2 rounded-lg px-4 py-2.5 text-slate-400 transition-all data-[state=active]:bg-sky-300 data-[state=active]:text-slate-950 data-[state=active]:shadow-sm"
+                    >
+                      <Receipt className="h-4 w-4" />
+                      Transactions
                     </TabsTrigger>
                   </TabsList>
 
@@ -1273,6 +1293,16 @@ export default function ProfilePage() {
 
                   <TabsContent value="recently-viewed" className="mt-0 space-y-4">
                     <RecentlyViewed walletAddress={address} />
+                  </TabsContent>
+
+                  <TabsContent value="transactions" className="mt-0 space-y-4">
+                    <TransactionHistoryPanel
+                      walletAddress={address}
+                      role="buyer"
+                      title="Purchase history"
+                      description="Prompts this wallet bought on-chain or recorded via the license API."
+                      emptyMessage="No purchases recorded yet. Completed buys appear here with links to Stellar Expert when a tx hash is available."
+                    />
                   </TabsContent>
                 </Tabs>
               </section>
