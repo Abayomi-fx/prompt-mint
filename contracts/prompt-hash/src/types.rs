@@ -11,58 +11,56 @@ pub enum Error {
     AlreadyPurchased = 5,
     InvalidPrice = 6,
     InvalidFeePercentage = 7,
-    InvalidTitleLength = 8,
-    InvalidCategoryLength = 9,
-    InvalidPreviewLength = 10,
-    InvalidEncryptedPromptLength = 11,
-    InvalidWrappedKeyLength = 12,
-    InvalidImageUrlLength = 13,
-    InvalidIvLength = 14,
-    FeeWalletNotSet = 15,
-    XlmAddressNotSet = 16,
-    ArithmeticOverflow = 17,
-    ReentrancyGuard = 18,
-    ContractIsPaused = 19,
-    ReferrerCannotBeBuyerOrCreator = 20,
-    InvalidPaymentAmount = 21,
-    InvalidVoucher = 22,
-    InvalidReferralPercentage = 23,
-    InvalidDiscountPercentage = 24,
-    MaxSupplyReached = 25,
-    InvalidAsset = 26,
+    InvalidFieldLength = 8,
+    FeeWalletNotSet = 9,
+    XlmAddressNotSet = 10,
+    ArithmeticOverflow = 11,
+    ReentrancyGuard = 12,
+    ContractIsPaused = 13,
+    ReferrerCannotBeBuyerOrCreator = 14,
+    InvalidPaymentAmount = 15,
+    InvalidVoucher = 16,
+    InvalidReferralPercentage = 17,
+    InvalidDiscountPercentage = 18,
+    MaxSupplyReached = 19,
+    InvalidAsset = 20,
     // #50 – revenue splits
-    InvalidSplits = 27,
+    InvalidSplits = 21,
     // #49 – time-bound listing expiry
-    ListingExpired = 28,
-    LicenseNotFound = 29,
-    InvalidLicenseTransfer = 30,
-    ReferralCodeNotFound = 31,
-    ReferralCodeAlreadyExists = 32,
-    ReferralCodeTooShort = 33,
-    ReferralReplay = 34,
-    CircularReferral = 35,
-    SubscriptionConfigNotFound = 31,
-    SubscriptionInactive = 32,
-    InvalidSubscriptionDuration = 33,
-    InvalidSubscriptionPrice = 34,
-    SubscriptionNotFound = 35,
-    ListingNotEligible = 36,
+    ListingExpired = 22,
+    LicenseNotFound = 23,
+    InvalidLicenseTransfer = 24,
+    ReferralCodeNotFound = 25,
+    ReferralCodeAlreadyExists = 26,
+    ReferralCodeTooShort = 27,
+    ReferralReplay = 28,
+    CircularReferral = 29,
+    SubscriptionConfigNotFound = 30,
+    SubscriptionInactive = 31,
+    InvalidSubscriptionDuration = 32,
+    InvalidSubscriptionPrice = 33,
+    SubscriptionNotFound = 34,
+    ListingNotEligible = 35,
     // #131 – content classification
-    InvalidClassification = 37,
-    InvalidDisclosureFlags = 38,
-    InvalidContentFlagsLength = 39,
-    ClassificationAlreadyReviewed = 40,
-    NotModerator = 41,
-    InvalidSafetyFlagsLength = 42,
+    InvalidClassification = 36,
+    InvalidDisclosureFlags = 37,
+    ClassificationAlreadyReviewed = 38,
+    NotModerator = 39,
     // Promotional pricing
-    InvalidPromotionTime = 43,
-    PromotionOverlap = 44,
-    PromotionNotFound = 45,
-    UnauthorizedPromotion = 46,
+    InvalidPromotionTime = 40,
+    PromotionOverlap = 41,
+    PromotionNotFound = 42,
+    UnauthorizedPromotion = 43,
     // Encryption rotation
-    EncryptionVersionNotFound = 47,
-    InvalidRotation = 48,
-    VersionMismatch = 49,
+    EncryptionVersionNotFound = 44,
+    InvalidRotation = 45,
+    VersionMismatch = 46,
+    // Fee safeguards (#41)
+    FeeExceedsMaximum = 47,
+    // Upgrade authorization (#42)
+    UpgradeAlreadyProposed = 48,
+    UpgradeNotProposed = 49,
+    UpgradeCooldownNotElapsed = 50,
 }
 
 #[contracttype]
@@ -94,6 +92,10 @@ pub enum DataKey {
     // Encryption rotation – versioned payloads & version counter per prompt
     PromptEncryptedPayload(u128, u32),
     PromptEncryptionVersion(u128),
+    // Upgrade authorization (#42)
+    PendingUpgrade,
+    UpgradeProposer,
+    UpgradeProposedAt,
 }
 
 /// A moderator-overridden classification that takes precedence
@@ -117,6 +119,10 @@ pub struct Settlement {
     pub referrer: Option<Address>,
     pub referrer_amount: i128,
     pub split_amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubscriptionConfig {
     pub creator: Address,
     pub duration_secs: u64,
@@ -131,6 +137,10 @@ pub struct ReferralCode {
     pub owner: Address,
     pub reward_bps: u32,
     pub active: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Subscription {
     pub creator: Address,
     pub subscriber: Address,
@@ -443,7 +453,10 @@ pub trait PromptHashTrait {
         hashed_code: BytesN<32>,
     ) -> Result<(), Error>;
     fn get_xlm_sac(env: Env) -> Option<Address>;
-    fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
+    fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
+    fn confirm_upgrade(env: Env) -> Result<(), Error>;
+    fn cancel_upgrade(env: Env) -> Result<(), Error>;
+    fn get_pending_upgrade(env: Env) -> Option<BytesN<32>>;
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error>;
 
     // #131 – content classification
@@ -464,6 +477,8 @@ pub trait PromptHashTrait {
         reason: String,
     ) -> Result<(), Error>;
     fn get_active_classification(env: Env, prompt_id: u128) -> Result<(String, Vec<String>), Error>;
+    fn get_moderator_override(env: Env, prompt_id: u128) -> Result<ClassificationOverride, Error>;
+    fn set_moderator_address(env: Env, admin: Address, moderator: Address) -> Result<(), Error>;
 
     // Promotional pricing
     fn create_promotion(
