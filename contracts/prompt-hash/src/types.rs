@@ -62,9 +62,17 @@ pub enum Error {
     PromotionNotFound = 44,
     UnauthorizedPromotion = 45,
     // Encryption rotation
+    EncryptionVersionNotFound = 46,
+    InvalidRotation = 47,
+    // Also used to guard schema migrations: reused for a stored schema
+    // version newer than what the running contract code understands.
+    VersionMismatch = 48,
+    // #272 – prompt bundling
+    BundleNotFound = 49,
     EncryptionVersionNotFound = 47,
     InvalidRotation = 48,
     VersionMismatch = 49,
+    KeyNotFound = 50,
     // #275 – creator reputation staking
     StakeNotFound = 50,
     StakeLocked = 51,
@@ -83,6 +91,9 @@ pub enum DataKey {
     CreatorPrompts(Address),
     BuyerPrompts(Address),
     Purchase(u128, Address),
+    // #272 – prompt bundles and their id counter
+    Bundle(u128),
+    BundleCounter,
     Reentrancy,
     ReferralPercentage,
     IsPaused,
@@ -101,6 +112,26 @@ pub enum DataKey {
     // Encryption rotation – versioned payloads & version counter per prompt
     PromptEncryptedPayload(u128, u32),
     PromptEncryptionVersion(u128),
+    // Contract state schema version, bumped by `migrate` after an `upgrade`
+    // that changes stored data shapes.
+    SchemaVersion,
+    // #273 – time-based discount schedule per prompt
+    Discount(u128),
+}
+
+/// #273 – Time-based discount schedule for a prompt.
+/// While the current ledger sequence is within `[start_ledger, end_ledger]`
+/// (inclusive), `discounted_price` transparently overrides the base price on
+/// the purchase path. The window is expressed in ledger sequence numbers so it
+/// reverts automatically once the window closes, with no further action needed.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Discount {
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub discounted_price: i128,
+    pub start_ledger: u32,
+    pub end_ledger: u32,
     // #275 – creator reputation staking, keyed by prompt id
     CreatorStake(u128),
 }
@@ -170,6 +201,19 @@ pub struct Promotion {
     /// Promotional price in stroops.
     pub price: i128,
     /// Token contract address for the promotional price.
+    pub asset: Address,
+}
+
+/// #272 – A bundle of prompts sold together at a single discounted total price.
+/// A buyer who purchases the bundle receives a license/entitlement for every
+/// prompt id it contains.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Bundle {
+    pub id: u128,
+    pub creator: Address,
+    pub prompt_ids: Vec<u128>,
+    pub price: i128,
     pub asset: Address,
 }
 
@@ -398,6 +442,28 @@ pub trait PromptHashTrait {
         referral_code: Option<Bytes>,
     ) -> Result<(), Error>;
 
+    // ─── #272: Prompt bundling ────────────────────────────────────────────────
+    /// Creator-gated. Bundles multiple prompts (all owned by `creator`) at a
+    /// single `price`. Returns the new bundle id.
+    fn create_bundle(
+        env: Env,
+        creator: Address,
+        prompt_ids: Vec<u128>,
+        price: i128,
+        asset: Address,
+    ) -> Result<u128, Error>;
+
+    /// Purchases a bundle: transfers `price` from the buyer (split to creator and
+    /// platform fee) and grants the buyer a license for every prompt in it.
+    fn purchase_bundle(
+        env: Env,
+        buyer: Address,
+        bundle_id: u128,
+        payment_amount: i128,
+    ) -> Result<(), Error>;
+
+    fn get_bundle(env: Env, bundle_id: u128) -> Result<Bundle, Error>;
+
     fn transfer_license(
         env: Env,
         seller: Address,
@@ -553,6 +619,23 @@ pub trait PromptHashTrait {
         version: u32,
     ) -> Result<PromptEncryptedPayload, Error>;
 
+    // ─── #273: Time-based discount mechanics ──────────────────────────────────
+    /// Creator-gated. Sets (or replaces) a discount window for a prompt. While
+    /// `env.ledger().sequence()` is within `[start_ledger, end_ledger]`, the
+    /// purchase path uses `discounted_price` instead of the base price.
+    fn set_discount(
+        env: Env,
+        creator: Address,
+        prompt_id: u128,
+        discounted_price: i128,
+        start_ledger: u32,
+        end_ledger: u32,
+    ) -> Result<(), Error>;
+
+    /// Creator-gated early-cancel of an active/scheduled discount window.
+    fn clear_discount(env: Env, creator: Address, prompt_id: u128) -> Result<(), Error>;
+
+    fn get_discount(env: Env, prompt_id: u128) -> Result<Option<Discount>, Error>;
     // #275 – creator reputation staking
     /// Stake native XLM against one of the creator's own prompts. Moves
     /// `amount` stroops from the creator into contract custody and returns the

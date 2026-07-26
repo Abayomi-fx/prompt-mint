@@ -27,6 +27,9 @@ export interface TakedownRecord {
   escalatedAt?: number;
   reinstatedAt?: number;
   disputeId?: string;
+  disputeEvidence?: string;
+  disputeStatus?: "OPEN" | "RESOLVED" | "REJECTED";
+  disputeResolutionReason?: string;
 }
 
 const takedownMap = new Map<string, TakedownRecord>();
@@ -57,6 +60,9 @@ export function applyTakedown(
     escalatedBy,
     escalatedAt: Date.now(),
     disputeId: existing?.disputeId,
+    disputeEvidence: existing?.disputeEvidence,
+    disputeStatus: existing?.disputeStatus,
+    disputeResolutionReason: existing?.disputeResolutionReason,
   };
 
   takedownMap.set(id, record);
@@ -72,6 +78,7 @@ export function reinstateListing(promptId: bigint): TakedownRecord | null {
     ...existing,
     state: TakedownState.NONE,
     reinstatedAt: Date.now(),
+    disputeStatus: existing.disputeId ? "RESOLVED" : existing.disputeStatus,
   };
 
   takedownMap.set(id, record);
@@ -85,12 +92,51 @@ export function disputeTakedown(
   const id = key(promptId);
   const existing = takedownMap.get(id);
   if (!existing || existing.state === TakedownState.NONE) return null;
+  if (existing.disputeId) return null;
 
   const disputeId = `dispute_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const record: TakedownRecord = {
     ...existing,
     disputeId,
+    disputeEvidence: evidence,
+    disputeStatus: "OPEN",
     reason: `${existing.reason} | DISPUTE: ${evidence}`,
+  };
+
+  takedownMap.set(id, record);
+  return record;
+}
+
+export function resolveDispute(
+  promptId: bigint,
+  reason: string,
+): TakedownRecord | null {
+  const id = key(promptId);
+  const existing = takedownMap.get(id);
+  if (!existing?.disputeId) return null;
+
+  const record: TakedownRecord = {
+    ...existing,
+    disputeStatus: "RESOLVED",
+    disputeResolutionReason: reason,
+  };
+
+  takedownMap.set(id, record);
+  return record;
+}
+
+export function rejectDispute(
+  promptId: bigint,
+  reason: string,
+): TakedownRecord | null {
+  const id = key(promptId);
+  const existing = takedownMap.get(id);
+  if (!existing?.disputeId) return null;
+
+  const record: TakedownRecord = {
+    ...existing,
+    disputeStatus: "REJECTED",
+    disputeResolutionReason: reason,
   };
 
   takedownMap.set(id, record);

@@ -7,6 +7,8 @@ import { Skeleton } from "../../components/Skeleton";
 import { StatusBanner } from "../../components/StatusBanner";
 import { UnlockExplainer } from "../../components/UnlockExplainer";
 import { copyToClipboard } from "../../lib/clipboard/secureClipboard";
+import { MarkdownPreview } from "../../components/MarkdownPreview";
+import { CopyButton } from "../../components/CopyButton";
 import {
   CheckCircle,
   Loader2,
@@ -49,6 +51,7 @@ import {
   buildPromptShareUrl,
 } from "@/lib/marketplace/shareUrls";
 import { translateError } from "../../lib/i18n-errors";
+import { createFocusTrapKeydownHandler } from "@/lib/a11y/focusTrap";
 import { explorerTxUrl } from "../../lib/stellar/explorer";
 import { recordTransaction } from "../../lib/history/transactions";
 
@@ -99,11 +102,12 @@ const PromptMetadataSection: React.FC<{ itemId: string; status: BuyerStatus }> =
 
   return (
     <div className="mb-6 space-y-4">
-      {/* Preview Content */}
-      <div className="p-4 rounded-xl bg-white/5 border border-white/5">
-        <p className="text-xs uppercase tracking-wider text-slate-400 mb-2">Preview</p>
-        <p className="text-sm text-slate-300 leading-relaxed">{prompt.previewText}</p>
-      </div>
+      {/* Preview Content – rendered as markdown */}
+      <MarkdownPreview
+        content={prompt.previewText}
+        label="Preview"
+        previewOnly={false}
+      />
 
       {/* Metadata Grid */}
       <div className="grid grid-cols-2 gap-3">
@@ -112,19 +116,26 @@ const PromptMetadataSection: React.FC<{ itemId: string; status: BuyerStatus }> =
             <User className="h-3 w-3 text-slate-400" />
             <p className="text-xs text-slate-400">Creator</p>
           </div>
-          {creatorHref ? (
-            <Link
-              to={creatorHref}
-              className="text-xs font-mono text-cyan-200 truncate hover:text-cyan-100 underline-offset-2 hover:underline"
-              title={prompt.creator}
-            >
-              {prompt.creator.slice(0, 8)}...{prompt.creator.slice(-4)}
-            </Link>
-          ) : (
-            <p className="text-xs font-mono text-white truncate" title={prompt.creator}>
-              {prompt.creator.slice(0, 8)}...{prompt.creator.slice(-4)}
-            </p>
-          )}
+          <div className="flex items-center gap-1.5">
+            {creatorHref ? (
+              <Link
+                to={creatorHref}
+                className="text-xs font-mono text-cyan-200 truncate hover:text-cyan-100 underline-offset-2 hover:underline"
+                title={prompt.creator}
+              >
+                {prompt.creator.slice(0, 8)}...{prompt.creator.slice(-4)}
+              </Link>
+            ) : (
+              <p className="text-xs font-mono text-white truncate" title={prompt.creator}>
+                {prompt.creator.slice(0, 8)}...{prompt.creator.slice(-4)}
+              </p>
+            )}
+            <CopyButton
+              value={prompt.creator}
+              label="creator address"
+              variant="inline"
+            />
+          </div>
         </div>
 
         <div className="p-3 rounded-lg bg-white/5 border border-white/5">
@@ -148,9 +159,16 @@ const PromptMetadataSection: React.FC<{ itemId: string; status: BuyerStatus }> =
             <Hash className="h-3 w-3 text-slate-400" />
             <p className="text-xs text-slate-400">Content Hash</p>
           </div>
-          <p className="text-xs font-mono text-white truncate" title={prompt.contentHash}>
-            {prompt.contentHash.slice(0, 8)}...
-          </p>
+          <div className="flex items-center gap-1.5">
+            <p className="text-xs font-mono text-white truncate" title={prompt.contentHash}>
+              {prompt.contentHash.slice(0, 8)}...
+            </p>
+            <CopyButton
+              value={prompt.contentHash}
+              label="content hash"
+              variant="inline"
+            />
+          </div>
         </div>
 
         {/* #131 – Classification */}
@@ -279,37 +297,11 @@ export const PromptModal: React.FC<PromptModalProps> = ({
       lastActiveElementRef.current = document.activeElement as HTMLElement;
       setTimeout(() => closeButtonRef.current?.focus(), 0);
 
-      const handleKeyDown = (e: KeyboardEvent) => {
-        if (e.key === "Escape") {
-          onClose();
-          return;
-        }
-
-        if (e.key === "Tab") {
-          if (!modalRef.current) return;
-          const focusableElements = modalRef.current.querySelectorAll(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          );
-          if (focusableElements.length === 0) return;
-
-          const firstElement = focusableElements[0] as HTMLElement;
-          const lastElement = focusableElements[focusableElements.length - 1] as HTMLElement;
-
-          if (e.shiftKey) {
-            // Shift + Tab
-            if (document.activeElement === firstElement) {
-              lastElement.focus();
-              e.preventDefault();
-            }
-          } else {
-            // Tab
-            if (document.activeElement === lastElement) {
-              firstElement.focus();
-              e.preventDefault();
-            }
-          }
-        }
-      };
+      // #270 – shared, unit-tested focus-trap + Escape handler.
+      const handleKeyDown = createFocusTrapKeydownHandler({
+        container: () => modalRef.current,
+        onEscape: onClose,
+      });
 
       document.addEventListener("keydown", handleKeyDown);
       return () => {
@@ -669,6 +661,21 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                     message="Broadcasting to Stellar..."
                   />
                   {txHash && (
+                    <div className="mt-6 flex items-center gap-2">
+                      <a
+                        href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-2 text-xs text-slate-500 hover:text-emerald-400 font-mono transition-colors"
+                      >
+                        View Transaction <ExternalLink className="h-3 w-3" />
+                      </a>
+                      <CopyButton
+                        value={txHash}
+                        label="transaction hash"
+                        variant="icon"
+                      />
+                    </div>
                     <a
                       href={explorerTxUrl(txHash)}
                       target="_blank"

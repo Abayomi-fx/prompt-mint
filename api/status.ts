@@ -1,4 +1,7 @@
 import { withObservability } from "../src/lib/observability/wrapper";
+import { negotiateVersion } from "../src/lib/api/versionGuard";
+import { withVersion } from "../src/lib/api/payloadVersion";
+import { apiError, ErrorCode } from "../src/lib/api/errorCodes";
 import { getCircuitBreaker, listCircuitBreakers } from "../src/lib/observability/circuitBreaker";
 
 const STELLAR_RPC_URL =
@@ -106,9 +109,12 @@ async function pingUnlockService(): Promise<ServiceCheck> {
 
 async function handler(req: any, res: any) {
   if (req.method !== "GET") {
-    res.status(405).json({ error: "Method not allowed." });
+    res.status(405).json(apiError(ErrorCode.METHOD_NOT_ALLOWED, "Method not allowed."));
     return;
   }
+
+  const version = negotiateVersion(req, res);
+  if (!version) return;
 
   const [rpc, horizon, unlock] = await Promise.all([
     pingRpc(),
@@ -123,6 +129,17 @@ async function handler(req: any, res: any) {
       ? "degraded"
       : "down";
 
+  res.status(200).json(
+    withVersion(
+      {
+        status: overallStatus,
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        services,
+      },
+      version,
+    ),
+  );
   res.status(200).json({
     status: overallStatus,
     timestamp: new Date().toISOString(),
