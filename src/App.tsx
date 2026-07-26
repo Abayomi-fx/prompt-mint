@@ -12,6 +12,7 @@ const PromptDetailPage = lazy(() => import("./pages/prompt/page.tsx"));
 const CreatorSharePage = lazy(() => import("./pages/creator/page.tsx"));
 const StatusPage = lazy(() => import("./pages/status/page.tsx"));
 const ModerationPage = lazy(() => import("./pages/Moderation.tsx"));
+const TransactionHistoryPage = lazy(() => import("./pages/history/page.tsx"));
 
 const AppLayout = () => (
   <main className="min-h-screen bg-slate-950 text-white pb-16 sm:pb-0">
@@ -101,6 +102,14 @@ function App() {
                 element={
                   <ErrorBoundary routeName="Moderation">
                     <ModerationPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/history"
+                element={
+                  <ErrorBoundary routeName="Transaction History">
+                    <TransactionHistoryPage />
                   </ErrorBoundary>
                 }
               />
