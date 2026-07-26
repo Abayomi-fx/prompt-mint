@@ -1,9 +1,9 @@
 use super::events::Events;
 use super::storage::Storage;
 use super::types::{
-    ClassificationOverride, DataKey, Error, ListingConfig, Prompt, PromptEncryptedPayload,
-    PromptHashTrait, Purchase, ReferralCode, Settlement, Split, Subscription, SubscriptionConfig,
-    ALL_CLASSIFICATIONS, VALID_DISCLOSURE_FLAGS,
+    Bundle, ClassificationOverride, DataKey, Discount, Error, ListingConfig, Prompt,
+    PromptEncryptedPayload, PromptHashTrait, Purchase, ReferralCode, Settlement, Split,
+    Subscription, SubscriptionConfig, ALL_CLASSIFICATIONS, VALID_DISCLOSURE_FLAGS,
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
@@ -343,6 +343,128 @@ impl PromptHashTrait for PromptHashContract {
             )?;
         }
         Ok(())
+    }
+
+    // ─── Issue #272: Prompt Bundling ─────────────────────────────────────────
+
+    fn create_bundle(
+        env: Env,
+        creator: Address,
+        prompt_ids: Vec<u128>,
+        price: i128,
+        asset: Address,
+    ) -> Result<u128, Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+        ensure(price > 0, Error::InvalidPrice)?;
+        ensure(!prompt_ids.is_empty(), Error::InvalidPrice)?;
+
+        // Validate the asset implements the token interface.
+        token::Client::new(&env, &asset).decimals();
+
+        // The creator must own/have created every prompt in the bundle.
+        for i in 0..prompt_ids.len() {
+            let pid = prompt_ids.get(i).unwrap();
+            let prompt = Storage::require_prompt(&env, pid)?;
+            ensure(prompt.creator == creator, Error::Unauthorized)?;
+        }
+
+        let bundle_id = Storage::get_bundle_counter(&env);
+        let bundle = Bundle {
+            id: bundle_id,
+            creator: creator.clone(),
+            prompt_ids,
+            price,
+            asset: asset.clone(),
+        };
+        Storage::save_bundle(&env, &bundle)?;
+        Events::emit_bundle_created(&env, bundle_id, creator, price, asset);
+        Ok(bundle_id)
+    }
+
+    fn purchase_bundle(
+        env: Env,
+        buyer: Address,
+        bundle_id: u128,
+        payment_amount: i128,
+    ) -> Result<(), Error> {
+        buyer.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+
+        let bundle = Storage::get_bundle(&env, bundle_id).ok_or(Error::BundleNotFound)?;
+        ensure(bundle.creator != buyer, Error::CreatorCannotBuy)?;
+        ensure(payment_amount >= bundle.price, Error::InvalidPaymentAmount)?;
+
+        Storage::set_reentrancy_guard(&env)?;
+
+        let fee_wallet = Storage::get_fee_wallet(&env).ok_or(Error::FeeWalletNotSet)?;
+        let this_contract = env.current_contract_address();
+        let fee_percentage = Storage::get_fee_percentage(&env);
+        ensure(fee_percentage <= MAX_BPS, Error::InvalidFeePercentage)?;
+
+        // Split proceeds exactly like a single purchase: platform fee first,
+        // creator receives the remainder.
+        let fee_amount = bundle
+            .price
+            .checked_mul(fee_percentage as i128)
+            .ok_or(Error::ArithmeticOverflow)?
+            / MAX_BPS as i128;
+        let creator_amount = bundle
+            .price
+            .checked_sub(fee_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        let asset_client = token::StellarAssetClient::new(&env, &bundle.asset);
+        if creator_amount > 0 {
+            asset_client.transfer_from(&this_contract, &buyer, &bundle.creator, &creator_amount);
+        }
+        if fee_amount > 0 {
+            asset_client.transfer_from(&this_contract, &buyer, &fee_wallet, &fee_amount);
+        }
+
+        // Grant the buyer an entitlement for every prompt in the bundle, reusing
+        // the single-purchase license-granting path.
+        for i in 0..bundle.prompt_ids.len() {
+            let pid = bundle.prompt_ids.get(i).unwrap();
+            if let Some(mut prompt) = Storage::get_prompt(&env, pid) {
+                prompt.sales_count = prompt
+                    .sales_count
+                    .checked_add(1)
+                    .ok_or(Error::ArithmeticOverflow)?;
+                Storage::update_prompt(&env, &prompt);
+                Storage::grant_purchase(
+                    &env,
+                    &prompt,
+                    &buyer,
+                    0,
+                    MAX_ACCESS_EXPIRY,
+                    Settlement {
+                        buyer_amount: 0,
+                        creator_amount: 0,
+                        platform_amount: 0,
+                        referrer: None,
+                        referrer_amount: 0,
+                        split_amount: 0,
+                    },
+                );
+            }
+        }
+
+        Storage::clear_reentrancy_guard(&env);
+        Events::emit_bundle_purchased(
+            &env,
+            bundle_id,
+            buyer,
+            bundle.creator,
+            bundle.price,
+            creator_amount,
+            fee_amount,
+        );
+        Ok(())
+    }
+
+    fn get_bundle(env: Env, bundle_id: u128) -> Result<Bundle, Error> {
+        Storage::get_bundle(&env, bundle_id).ok_or(Error::BundleNotFound)
     }
 
     fn transfer_license(

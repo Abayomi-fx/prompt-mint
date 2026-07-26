@@ -63,6 +63,8 @@ pub enum Error {
     // Also used to guard schema migrations: reused for a stored schema
     // version newer than what the running contract code understands.
     VersionMismatch = 48,
+    // #272 – prompt bundling
+    BundleNotFound = 49,
 }
 
 #[contracttype]
@@ -76,6 +78,9 @@ pub enum DataKey {
     CreatorPrompts(Address),
     BuyerPrompts(Address),
     Purchase(u128, Address),
+    // #272 – prompt bundles and their id counter
+    Bundle(u128),
+    BundleCounter,
     Reentrancy,
     ReferralPercentage,
     IsPaused,
@@ -164,6 +169,19 @@ pub struct Promotion {
     /// Promotional price in stroops.
     pub price: i128,
     /// Token contract address for the promotional price.
+    pub asset: Address,
+}
+
+/// #272 – A bundle of prompts sold together at a single discounted total price.
+/// A buyer who purchases the bundle receives a license/entitlement for every
+/// prompt id it contains.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Bundle {
+    pub id: u128,
+    pub creator: Address,
+    pub prompt_ids: Vec<u128>,
+    pub price: i128,
     pub asset: Address,
 }
 
@@ -374,6 +392,28 @@ pub trait PromptHashTrait {
         payment_amounts: Vec<i128>,
         referral_code: Option<Bytes>,
     ) -> Result<(), Error>;
+
+    // ─── #272: Prompt bundling ────────────────────────────────────────────────
+    /// Creator-gated. Bundles multiple prompts (all owned by `creator`) at a
+    /// single `price`. Returns the new bundle id.
+    fn create_bundle(
+        env: Env,
+        creator: Address,
+        prompt_ids: Vec<u128>,
+        price: i128,
+        asset: Address,
+    ) -> Result<u128, Error>;
+
+    /// Purchases a bundle: transfers `price` from the buyer (split to creator and
+    /// platform fee) and grants the buyer a license for every prompt in it.
+    fn purchase_bundle(
+        env: Env,
+        buyer: Address,
+        bundle_id: u128,
+        payment_amount: i128,
+    ) -> Result<(), Error>;
+
+    fn get_bundle(env: Env, bundle_id: u128) -> Result<Bundle, Error>;
 
     fn transfer_license(
         env: Env,
