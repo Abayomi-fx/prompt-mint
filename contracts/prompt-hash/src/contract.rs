@@ -480,7 +480,13 @@ impl PromptHashTrait for PromptHashContract {
     ) -> Result<(), Error> {
         seller.require_auth();
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
-        ensure(resale_price > 0, Error::InvalidPaymentAmount)?;
+        // #271: royalty enforcement path (b). `transfer_license` already carries a
+        // `resale_price` and moves value on-chain, so the creator royalty is skimmed
+        // directly from the existing payment distribution below rather than in a new
+        // function. A zero `resale_price` is a valid gift transfer that changes no
+        // value hands, so it must be allowed WITHOUT attempting a bogus royalty
+        // payment — the royalty/seller transfers below are already `> 0`-guarded.
+        ensure(resale_price >= 0, Error::InvalidPaymentAmount)?;
         ensure(seller != new_buyer, Error::InvalidLicenseTransfer)?;
         new_buyer.require_auth();
 
