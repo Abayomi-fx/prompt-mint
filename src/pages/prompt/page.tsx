@@ -6,6 +6,7 @@ import { Footer } from "@/components/footer";
 import { Button } from "@/components/ui/button";
 import { PromptModal } from "@/pages/browse/PromptModal";
 import { ShareLinkButton } from "@/components/ShareLinkButton";
+import { SocialShareButtons } from "@/components/SocialShareButtons";
 import { PromptHashClient } from "@/lib/stellar/promptHashClient";
 import { browserStellarConfig } from "@/lib/stellar/browserConfig";
 import {
@@ -135,12 +136,18 @@ export default function PromptDetailPage() {
               Marketplace
             </Link>
           </Button>
-          <ShareLinkButton
-            url={shareUrl}
-            label="Copy listing link"
-            shareTitle={promptQuery.data.title}
-            shareText={`Check out this prompt on Prompt Mint: ${promptQuery.data.title}`}
-          />
+          <div className="flex flex-col items-end gap-2">
+            <ShareLinkButton
+              url={shareUrl}
+              label="Copy listing link"
+              shareTitle={promptQuery.data.title}
+              shareText={`Check out this prompt on Prompt Mint: ${promptQuery.data.title}`}
+            />
+            <SocialShareButtons
+              url={shareUrl}
+              shareText={`Check out this prompt on Prompt Mint: ${promptQuery.data.title}`}
+            />
+          </div>
         </div>
         <p className="text-xs text-slate-500">
           Shareable URL:{" "}
