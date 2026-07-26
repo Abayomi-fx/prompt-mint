@@ -616,4 +616,26 @@ impl Storage {
         env.storage().persistent().set(&key, stake);
         Self::extend_key_ttl(env, &key);
     }
+
+    // ─── #273: Time-based Discounts ────────────────────────────────────────
+
+    pub fn set_discount(env: &Env, discount: &Discount) {
+        let key = DataKey::Discount(discount.prompt_id);
+        env.storage().persistent().set(&key, discount);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_discount(env: &Env, prompt_id: u128) -> Option<Discount> {
+        let key = DataKey::Discount(prompt_id);
+        let discount = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        discount
+    }
+
+    pub fn clear_discount(env: &Env, prompt_id: u128) {
+        let key = DataKey::Discount(prompt_id);
+        env.storage().persistent().remove(&key);
+    }
 }

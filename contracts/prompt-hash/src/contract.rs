@@ -1134,6 +1134,63 @@ impl PromptHashTrait for PromptHashContract {
             .ok_or(Error::EncryptionVersionNotFound)
     }
 
+    // ─── #273: Time-based Discount Mechanics ──────────────────────────────────
+
+    fn set_discount(
+        env: Env,
+        creator: Address,
+        prompt_id: u128,
+        discounted_price: i128,
+        start_ledger: u32,
+        end_ledger: u32,
+    ) -> Result<(), Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        ensure(prompt.creator == creator, Error::Unauthorized)?;
+        ensure(discounted_price > 0, Error::InvalidPrice)?;
+        // Reuse the promotion-time error for an invalid ledger window.
+        ensure(end_ledger >= start_ledger, Error::InvalidPromotionTime)?;
+
+        let discount = Discount {
+            prompt_id,
+            creator: creator.clone(),
+            discounted_price,
+            start_ledger,
+            end_ledger,
+        };
+        Storage::set_discount(&env, &discount);
+        Events::emit_discount_set(
+            &env,
+            prompt_id,
+            creator,
+            discounted_price,
+            start_ledger,
+            end_ledger,
+        );
+        Ok(())
+    }
+
+    fn clear_discount(env: Env, creator: Address, prompt_id: u128) -> Result<(), Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        ensure(prompt.creator == creator, Error::Unauthorized)?;
+        // Reuse the promotion-not-found error when there is nothing to clear.
+        ensure(
+            Storage::get_discount(&env, prompt_id).is_some(),
+            Error::PromotionNotFound,
+        )?;
+
+        Storage::clear_discount(&env, prompt_id);
+        Events::emit_discount_cleared(&env, prompt_id, creator);
+        Ok(())
+    }
+
+    fn get_discount(env: Env, prompt_id: u128) -> Result<Option<Discount>, Error> {
+        Ok(Storage::get_discount(&env, prompt_id))
     // ─── #275: Creator Reputation Staking ─────────────────────────────────
 
     fn stake(env: Env, creator: Address, prompt_id: u128, amount: i128) -> Result<i128, Error> {
@@ -1693,14 +1750,25 @@ fn check_promotion_overlap(env: &Env, prompt_id: u128, start_time: u64, end_time
 fn get_effective_price_for_prompt(env: &Env, prompt_id: u128) -> Result<(i128, Address, bool), Error> {
     let prompt = Storage::require_prompt(env, prompt_id)?;
     let now = env.ledger().timestamp();
-    
+
+    // #273: an active time-based discount window takes precedence. The window is
+    // expressed in ledger sequence numbers so it reverts automatically once
+    // `end_ledger` passes — no separate purchase path, this is the price all
+    // buyers read.
+    let seq = env.ledger().sequence();
+    if let Some(discount) = Storage::get_discount(env, prompt_id) {
+        if seq >= discount.start_ledger && seq <= discount.end_ledger {
+            return Ok((discount.discounted_price, prompt.asset, true));
+        }
+    }
+
     // Check if there's an active promotion
     if let Some(promo) = Storage::get_active_promotion(env, prompt_id) {
         if now >= promo.start_time && now < promo.end_time {
             return Ok((promo.price, promo.asset, true));
         }
     }
-    
+
     // No active promotion, use base price
     Ok((prompt.price_stroops, prompt.asset, false))
 }

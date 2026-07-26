@@ -1,6 +1,6 @@
 use crate::contract::{PromptHashContract, PromptHashContractClient};
 use crate::mock_asset::FungibleTokenContract;
-use crate::types::{Error, ListingConfig, Split};
+use crate::types::{Bundle, Discount, Error, ListingConfig, Split};
 extern crate std;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
@@ -3622,3 +3622,77 @@ fn test_unstake_by_non_owner_is_rejected() {
         other => panic!("expected NotStakeOwner, got {:?}", other),
     }
 }
+
+// ─── #273: Time-based Discount Mechanics ────────────────────────────────────
+
+#[test]
+fn test_discount_applies_within_window_and_reverts_outside() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Discounted", 10_000, &context.xlm);
+
+    // Discount active for ledger sequence in [100, 200].
+    client.set_discount(&creator, &prompt_id, &4_000i128, &100u32, &200u32);
+    let stored: Option<Discount> = client.get_discount(&prompt_id);
+    assert!(stored.is_some());
+    assert_eq!(stored.unwrap().discounted_price, 4_000i128);
+
+    // Before the window -> base price.
+    env.ledger().with_mut(|l| l.sequence_number = 50);
+    let (price_before, _, is_discounted_before) = client.get_effective_price(&prompt_id);
+    assert_eq!(price_before, 10_000i128);
+    assert!(!is_discounted_before);
+
+    // Inside the window -> discounted price.
+    env.ledger().with_mut(|l| l.sequence_number = 150);
+    let (price_in, _, is_discounted_in) = client.get_effective_price(&prompt_id);
+    assert_eq!(price_in, 4_000i128);
+    assert!(is_discounted_in);
+
+    // After the window -> reverts to base price automatically.
+    env.ledger().with_mut(|l| l.sequence_number = 250);
+    let (price_after, _, is_discounted_after) = client.get_effective_price(&prompt_id);
+    assert_eq!(price_after, 10_000i128);
+    assert!(!is_discounted_after);
+}
+
+#[test]
+fn test_only_creator_can_set_discount() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Guarded", 10_000, &context.xlm);
+
+    let result = client.try_set_discount(&stranger, &prompt_id, &4_000i128, &100u32, &200u32);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_clear_discount_removes_active_discount() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Clearable", 10_000, &context.xlm);
+
+    client.set_discount(&creator, &prompt_id, &4_000i128, &100u32, &200u32);
+    client.clear_discount(&creator, &prompt_id);
+    assert!(client.get_discount(&prompt_id).is_none());
+
+    // Inside what used to be the window, base price is charged again.
+    env.ledger().with_mut(|l| l.sequence_number = 150);
+    let (price, _, is_discounted) = client.get_effective_price(&prompt_id);
+    assert_eq!(price, 10_000i128);
+    assert!(!is_discounted);
+}
+
