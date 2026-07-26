@@ -1,6 +1,6 @@
 use super::types::{
-    DataKey, Error, Prompt, PromptEncryptedPayload, Purchase, ReferralCode, Settlement,
-    Subscription, SubscriptionConfig,
+    ClassificationOverride, DataKey, Error, Prompt, PromptEncryptedPayload, Purchase,
+    ReferralCode, Settlement, Subscription, SubscriptionConfig,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
 
@@ -564,5 +564,67 @@ impl Storage {
         let key = DataKey::PromptCounter; // Reuse prompt counter for promotion IDs
         let count = env.storage().persistent().get(&key).unwrap_or(0);
         count
+    }
+
+    // ─── Upgrade Authorization (#42) ──────────────────────────────────────
+
+    pub fn set_pending_upgrade(env: &Env, wasm_hash: &BytesN<32>) {
+        let key = DataKey::PendingUpgrade;
+        env.storage().persistent().set(&key, wasm_hash);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_pending_upgrade(env: &Env) -> Option<BytesN<32>> {
+        let key = DataKey::PendingUpgrade;
+        let hash: Option<BytesN<32>> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        hash
+    }
+
+    pub fn clear_pending_upgrade(env: &Env) {
+        let key = DataKey::PendingUpgrade;
+        env.storage().persistent().remove(&key);
+    }
+
+    pub fn set_upgrade_proposer(env: &Env, proposer: &Address) {
+        let key = DataKey::UpgradeProposer;
+        env.storage().persistent().set(&key, proposer);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_upgrade_proposer(env: &Env) -> Option<Address> {
+        let key = DataKey::UpgradeProposer;
+        let proposer: Option<Address> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        proposer
+    }
+
+    pub fn clear_upgrade_proposer(env: &Env) {
+        let key = DataKey::UpgradeProposer;
+        env.storage().persistent().remove(&key);
+    }
+
+    pub fn set_upgrade_proposed_at(env: &Env, timestamp: u64) {
+        let key = DataKey::UpgradeProposedAt;
+        env.storage().persistent().set(&key, &timestamp);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_upgrade_proposed_at(env: &Env) -> Option<u64> {
+        let key = DataKey::UpgradeProposedAt;
+        let ts: Option<u64> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        ts
+    }
+
+    pub fn clear_upgrade_proposed_at(env: &Env) {
+        let key = DataKey::UpgradeProposedAt;
+        env.storage().persistent().remove(&key);
     }
 }
