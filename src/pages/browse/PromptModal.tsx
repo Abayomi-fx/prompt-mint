@@ -48,6 +48,10 @@ import {
   buildCreatorSharePath,
   buildPromptShareUrl,
 } from "@/lib/marketplace/shareUrls";
+import { translateError } from "../../lib/i18n-errors";
+import { createFocusTrapKeydownHandler } from "@/lib/a11y/focusTrap";
+import { explorerTxUrl } from "../../lib/stellar/explorer";
+import { recordTransaction } from "../../lib/history/transactions";
 
 export type BuyerStatus =
   | "IDLE"
@@ -245,13 +249,13 @@ export const PromptModal: React.FC<PromptModalProps> = ({
   const modalRef = useRef<HTMLDivElement>(null);
   const lastActiveElementRef = useRef<HTMLElement | null>(null);
 
-  // Fetch prompt data for gift modal
+  // Fetch prompt data for gift modal and OG metadata generation
   const { data: promptData } = useQuery({
     queryKey: ["prompt-detail", itemId],
     queryFn: async () => {
       return await PromptHashClient.getPrompt(browserStellarConfig, BigInt(itemId));
     },
-    enabled: isOpen && showGiftModal,
+    enabled: isOpen,
   });
   // Track this prompt view in recently viewed (privacy-controlled)
   useTrackPromptView(wallet?.address ?? null, itemId, isOpen);
@@ -276,37 +280,11 @@ export const PromptModal: React.FC<PromptModalProps> = ({
       lastActiveElementRef.current = document.activeElement as HTMLElement;
       setTimeout(() => closeButtonRef.current?.focus(), 0);
 
-      const handleKeyDown = (e: KeyboardEvent) => {
-        if (e.key === "Escape") {
-          onClose();
-          return;
-        }
-
-        if (e.key === "Tab") {
-          if (!modalRef.current) return;
-          const focusableElements = modalRef.current.querySelectorAll(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          );
-          if (focusableElements.length === 0) return;
-
-          const firstElement = focusableElements[0] as HTMLElement;
-          const lastElement = focusableElements[focusableElements.length - 1] as HTMLElement;
-
-          if (e.shiftKey) {
-            // Shift + Tab
-            if (document.activeElement === firstElement) {
-              lastElement.focus();
-              e.preventDefault();
-            }
-          } else {
-            // Tab
-            if (document.activeElement === lastElement) {
-              firstElement.focus();
-              e.preventDefault();
-            }
-          }
-        }
-      };
+      // #270 – shared, unit-tested focus-trap + Escape handler.
+      const handleKeyDown = createFocusTrapKeydownHandler({
+        container: () => modalRef.current,
+        onEscape: onClose,
+      });
 
       document.addEventListener("keydown", handleKeyDown);
       return () => {
@@ -406,6 +384,21 @@ export const PromptModal: React.FC<PromptModalProps> = ({
         setStatus("UNLOCKING");
         onRefresh?.();
         trackEventWithWallet("prompt_purchase_completed", wallet?.address, { promptId: itemId });
+        if (wallet?.address) {
+          const hash = data.txHash || txHash;
+          recordTransaction(wallet.address, {
+            id: hash || `purchase-${itemId}-${Date.now()}`,
+            txHash: hash || undefined,
+            type: "purchase",
+            status: "success",
+            timestamp: Date.now(),
+            promptId: itemId,
+            title: promptData?.title,
+            amountStroops: promptData?.priceStroops
+              ? String(promptData.priceStroops)
+              : undefined,
+          });
+        }
         runUnlock(data.txHash || txHash).catch(() => {});
       },
       onError: () => {
@@ -477,9 +470,21 @@ export const PromptModal: React.FC<PromptModalProps> = ({
 
   if (!isOpen) return null;
 
+  // Prepare listing metadata for OG tags: only public fields (not gated content)
+  const listingMetadata =
+    promptData && promptData.active
+      ? {
+          title: promptData.title,
+          description: promptData.previewText, // public teaser, not gated prompt body
+          imageUrl: promptData.imageUrl,
+          creator: promptData.creator,
+          category: promptData.category,
+        }
+      : null;
+
   return (
     <>
-      <SEOHead promptId={itemId} />
+      <SEOHead promptId={itemId} listingMetadata={listingMetadata} />
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-md sm:p-4">
       <div
         ref={modalRef}
@@ -569,7 +574,7 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                   {status === "ERROR" && purchaseError && (
                     <StatusBanner
                       status="error"
-                      message={purchaseError.message}
+                      message={translateError(purchaseError.message)}
                     />
                   )}
 
@@ -640,7 +645,7 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                   />
                   {txHash && (
                     <a
-                      href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+                      href={explorerTxUrl(txHash)}
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-2 mt-6 text-xs text-slate-500 hover:text-emerald-400 font-mono transition-colors"
@@ -675,7 +680,7 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                   {unlockError && (
                     <StatusBanner
                       status="error"
-                      message={unlockError.message}
+                      message={translateError(unlockError.message)}
                     />
                   )}
 

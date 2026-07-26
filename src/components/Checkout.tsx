@@ -24,6 +24,7 @@ import { detectNetworkMismatch } from '@/lib/wallet/networkDetection';
 import { useWallet } from '@/hooks/useWallet';
 import { useQueryClient } from '@tanstack/react-query';
 import { fetchActiveLicenseTerms, type LicenseTerm } from '@/lib/checkout/licenseTerms';
+import { translateError } from '@/lib/i18n-errors';
 
 const promptImageFallback = '/images/codeguru.png';
 
@@ -91,7 +92,11 @@ export function Checkout({ onClose }: CheckoutProps) {
     }
 
     if (!summary?.allValid) {
-      setGlobalError('Some items failed validation. Please remove invalid items.');
+      const balanceMessage = summary?.balanceErrors[0]?.message;
+      setGlobalError(
+        balanceMessage ??
+          'Some items failed validation. Please remove invalid items.',
+      );
       setStep('error');
       return;
     }
@@ -139,7 +144,7 @@ export function Checkout({ onClose }: CheckoutProps) {
 
       setStep('complete');
     } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : 'Purchase failed');
+      setGlobalError(translateError(error instanceof Error ? error.message : 'Purchase failed'));
       setStep('error');
     } finally {
       setCheckingOut(false);
@@ -338,6 +343,30 @@ export function Checkout({ onClose }: CheckoutProps) {
           );
         })}
       </div>
+
+      {/* XLM balance / reserve */}
+      {summary?.balanceErrors && summary.balanceErrors.length > 0 && (
+        <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 text-red-400 mt-0.5 shrink-0" />
+            <div className="space-y-1">
+              {summary.balanceErrors.map((error, idx) => (
+                <p key={idx} className="text-sm text-red-300">
+                  {error.message}
+                </p>
+              ))}
+              {summary.balanceCheck && !summary.balanceCheck.sufficient && (
+                <p className="text-xs text-red-400/90">
+                  Cart total{' '}
+                  {formatPrice(summary.balanceCheck.purchaseTotalStroops)} · minimum reserve after
+                  fees required{' '}
+                  {formatPrice(summary.balanceCheck.requiredStroops)}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Invalid items notice */}
       {summary && !summary.allValid && (

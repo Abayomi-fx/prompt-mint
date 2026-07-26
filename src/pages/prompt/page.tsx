@@ -6,12 +6,14 @@ import { Footer } from "@/components/footer";
 import { Button } from "@/components/ui/button";
 import { PromptModal } from "@/pages/browse/PromptModal";
 import { ShareLinkButton } from "@/components/ShareLinkButton";
+import { SocialShareButtons } from "@/components/SocialShareButtons";
 import { PromptHashClient } from "@/lib/stellar/promptHashClient";
 import { browserStellarConfig } from "@/lib/stellar/browserConfig";
 import {
   buildPromptShareUrl,
   parsePromptIdParam,
 } from "@/lib/marketplace/shareUrls";
+import { SEOHead } from "@/components/seo/SEOHead";
 
 export default function PromptDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -33,9 +35,22 @@ export default function PromptDetailPage() {
     retry: false,
   });
 
+  // Prepare listing metadata for OG tags: only public fields (not gated content)
+  const listingMetadata =
+    promptQuery.data && promptQuery.data.active
+      ? {
+          title: promptQuery.data.title,
+          description: promptQuery.data.previewText, // public teaser, not gated prompt body
+          imageUrl: promptQuery.data.imageUrl,
+          creator: promptQuery.data.creator,
+          category: promptQuery.data.category,
+        }
+      : null;
+
   if (!parsed.ok) {
     return (
       <div className="min-h-screen bg-slate-950 text-white">
+        <SEOHead />
         <Navigation />
         <main className="mx-auto flex max-w-2xl flex-col items-center px-4 py-20 text-center">
           <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-rose-500/10 text-rose-300">
@@ -58,6 +73,7 @@ export default function PromptDetailPage() {
   if (promptQuery.isLoading) {
     return (
       <div className="min-h-screen bg-slate-950 text-white">
+        <SEOHead promptId={parsed.promptId} />
         <Navigation />
         <main className="flex min-h-[50vh] items-center justify-center">
           <div className="flex items-center gap-3 text-slate-300">
@@ -78,6 +94,7 @@ export default function PromptDetailPage() {
 
     return (
       <div className="min-h-screen bg-slate-950 text-white">
+        <SEOHead promptId={parsed.promptId} />
         <Navigation />
         <main className="mx-auto flex max-w-2xl flex-col items-center px-4 py-20 text-center">
           <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-500/10 text-amber-200">
@@ -105,6 +122,7 @@ export default function PromptDetailPage() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
+      <SEOHead promptId={parsed.promptId} listingMetadata={listingMetadata} />
       <Navigation />
       <main className="mx-auto max-w-3xl space-y-4 px-4 py-8">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -118,12 +136,18 @@ export default function PromptDetailPage() {
               Marketplace
             </Link>
           </Button>
-          <ShareLinkButton
-            url={shareUrl}
-            label="Copy listing link"
-            shareTitle={promptQuery.data.title}
-            shareText={`Check out this prompt on Prompt Mint: ${promptQuery.data.title}`}
-          />
+          <div className="flex flex-col items-end gap-2">
+            <ShareLinkButton
+              url={shareUrl}
+              label="Copy listing link"
+              shareTitle={promptQuery.data.title}
+              shareText={`Check out this prompt on Prompt Mint: ${promptQuery.data.title}`}
+            />
+            <SocialShareButtons
+              url={shareUrl}
+              shareText={`Check out this prompt on Prompt Mint: ${promptQuery.data.title}`}
+            />
+          </div>
         </div>
         <p className="text-xs text-slate-500">
           Shareable URL:{" "}

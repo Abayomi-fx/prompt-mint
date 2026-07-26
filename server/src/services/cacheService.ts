@@ -41,6 +41,28 @@ export async function cacheSet(
   }
 }
 
+/**
+ * Atomically sets `key` only if it doesn't already exist (SET NX EX).
+ * Returns true if this call created the key (i.e. the lock was acquired).
+ * With no Redis backend configured, there's nothing to lock against, so
+ * callers are allowed to proceed — consistent with the rest of this
+ * module's fail-open behavior when caching is unavailable.
+ */
+export async function cacheSetNX(
+  key: string,
+  value: string,
+  ttlSeconds = DEFAULT_TTL,
+): Promise<boolean> {
+  try {
+    const c = await getClient();
+    if (!c) return true;
+    const result = await c.set(key, value, { NX: true, EX: ttlSeconds });
+    return result !== null;
+  } catch {
+    return true;
+  }
+}
+
 export async function cacheDel(...keys: string[]): Promise<void> {
   try {
     const c = await getClient();
