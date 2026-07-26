@@ -163,6 +163,21 @@ export const GetPromptVersionDetail = asyncRoute(async (req, res) => {
     throw new AppError("walletAddress is required to view version details.", 401, "UNAUTHENTICATED");
   }
 
+  const termsVersion = prompt.termsVersion ?? 1;
+  const licenseTerm = await LicenseTerm.findOne({ version: termsVersion });
+
+  const purchase = await Purchase.create({
+    promptId,
+    buyerWallet: buyerWallet.toLowerCase(),
+    versionIndex: prompt.currentVersionIndex ?? 1,
+    txHash: txHash ?? "",
+    termsSnapshot: {
+      termsVersion,
+      termsTitle: licenseTerm?.title ?? "Standard License",
+      termsContent: licenseTerm?.content ?? "Standard marketplace license terms.",
+      acceptedAt: new Date(),
+    },
+  });
   if (!Number.isInteger(versionIndex) || versionIndex < 1) {
     throw new AppError("versionIndex must be a positive integer.", 400, "INVALID_VERSION");
   }
