@@ -3,7 +3,7 @@ use crate::mock_asset::FungibleTokenContract;
 use crate::types::{Bundle, Discount, Error, ListingConfig, Split};
 extern crate std;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+    testutils::{Address as _, Events as _, Ledger},
     token, Address, Bytes, BytesN, Env, String, Vec,
 };
 
@@ -649,7 +649,10 @@ fn test_create_bundle_rejects_unowned_prompts() {
     let result = client.try_create_bundle(&creator, &ids, &15_000i128, &context.xlm);
     match result {
         Err(Ok(Error::Unauthorized)) => {}
-        other => panic!("expected Unauthorized for unowned prompt in bundle, got {:?}", other),
+        other => panic!(
+            "expected Unauthorized for unowned prompt in bundle, got {:?}",
+            other
+        ),
     }
 }
 
@@ -687,7 +690,10 @@ fn test_purchase_bundle_grants_access_and_splits_payment() {
     // Payment split: platform fee (default 500 bps) then creator remainder.
     let fee = bundle_price * 500 / 10_000;
     let creator_amount = bundle_price - fee;
-    assert_eq!(xlm_client.balance(&creator), creator_before + creator_amount);
+    assert_eq!(
+        xlm_client.balance(&creator),
+        creator_before + creator_amount
+    );
     assert_eq!(xlm_client.balance(&context.fee_wallet), fee_before + fee);
     assert_eq!(xlm_client.balance(&buyer), buyer_before - bundle_price);
 }
@@ -1111,7 +1117,10 @@ fn test_register_referral_code_emits_event() {
     let after = env.events().all().len();
 
     // register_referral_code now publishes a ReferralCodeRegistered event.
-    assert!(after > before, "expected a referral-code-registered event to be emitted");
+    assert!(
+        after > before,
+        "expected a referral-code-registered event to be emitted"
+    );
 }
 
 #[test]
@@ -2731,7 +2740,7 @@ fn test_subscription_renewal_failure_is_atomic_and_success_preserves_time() {
     let wrong_price = client.try_renew_catalog_subscription(&subscriber, &creator, &10_000);
     assert!(matches!(
         wrong_price,
-        Err(Ok(Error::InvalidSubscriptionPrice))
+        Err(Ok(Error::InvalidSubscriptionConfig))
     ));
     assert_eq!(
         client.get_subscription(&subscriber, &creator).expires_at,
@@ -3586,6 +3595,19 @@ fn test_extend_ttl_success() {
 
 #[test]
 fn test_extend_ttl_failure_key_not_found() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let missing_key = crate::types::DataKey::Prompt(9999);
+    let result = client.try_extend_ttl(&missing_key);
+
+    match result {
+        Err(Ok(Error::KeyNotFound)) => {}
+        other => panic!("expected KeyNotFound, got {:?}", other),
+    }
+}
+
 // ─── #275: Creator Reputation Staking ────────────────────────────────────────
 
 const SECONDS_PER_WEEK: u64 = 7 * 24 * 60 * 60;
@@ -3723,14 +3745,6 @@ fn test_slash_missing_stake_is_rejected() {
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
 
-    let missing_key = crate::types::DataKey::Prompt(9999);
-    let result = client.try_extend_ttl(&missing_key);
-
-    match result {
-        Err(Ok(Error::KeyNotFound)) => {}
-        other => panic!("expected KeyNotFound, got {:?}", other),
-    }
-}
     let creator = Address::generate(&env);
     let prompt_id = create_prompt(&env, &client, &creator, "NoStake", 10_000, &context.xlm);
 
@@ -3962,6 +3976,9 @@ fn test_create_prompt_category_over_max_length_rejected() {
     match result {
         Err(Ok(Error::InvalidFieldLength)) => {}
         other => panic!("expected InvalidFieldLength, got {:?}", other),
+    }
+}
+
 // ─── #273: Time-based Discount Mechanics ────────────────────────────────────
 
 #[test]
@@ -4106,6 +4123,8 @@ fn test_create_prompt_empty_title_rejected() {
         other => panic!("expected InvalidFieldLength, got {:?}", other),
     }
 }
+
+#[test]
 fn test_clear_discount_removes_active_discount() {
     let env: Env = Default::default();
     let context = setup(&env);
@@ -4125,3 +4144,78 @@ fn test_clear_discount_removes_active_discount() {
     assert!(!is_discounted);
 }
 
+// ─── #35: Two-step contract administrator transfer ───────────────────────────
+//
+// The contract already wires up `stellar_access::ownable::Ownable`'s built-in
+// 2-step transfer via `#[default_impl] impl Ownable for PromptHashContract {}`
+// (see contract.rs) — `transfer_ownership`/`accept_ownership` were already
+// exposed as public contract entrypoints, just never exercised by any test in
+// this crate. These tests lock in that the flow behaves correctly end to end.
+
+#[test]
+fn test_two_step_ownership_transfer_completes_and_updates_owner() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.sequence_number = 100);
+    let new_admin = Address::generate(&env);
+
+    assert_eq!(client.get_owner(), Some(context.admin.clone()));
+
+    // Step 1: current owner proposes a transfer. Ownership does not change yet.
+    client.transfer_ownership(&new_admin, &1_000u32);
+    assert_eq!(client.get_owner(), Some(context.admin.clone()));
+
+    // Step 2: the proposed owner accepts. Only now does ownership move.
+    client.accept_ownership();
+    assert_eq!(client.get_owner(), Some(new_admin));
+}
+
+#[test]
+fn test_accept_ownership_without_pending_transfer_is_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    // No transfer_ownership() call preceded this — nothing to accept.
+    let result = client.try_accept_ownership();
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_transfer_ownership_with_past_ledger_is_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.sequence_number = 500);
+    let new_admin = Address::generate(&env);
+
+    // live_until_ledger (100) is already in the past relative to the current
+    // ledger sequence (500).
+    let result = client.try_transfer_ownership(&new_admin, &100u32);
+    assert!(result.is_err());
+
+    // Ownership is unaffected by the rejected proposal.
+    assert_eq!(client.get_owner(), Some(context.admin));
+}
+
+#[test]
+fn test_transfer_ownership_can_be_cancelled_before_acceptance() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.sequence_number = 100);
+    let new_admin = Address::generate(&env);
+
+    client.transfer_ownership(&new_admin, &1_000u32);
+    // live_until_ledger == 0 cancels the pending transfer.
+    client.transfer_ownership(&new_admin, &0u32);
+
+    // Nothing left to accept.
+    let result = client.try_accept_ownership();
+    assert!(result.is_err());
+    assert_eq!(client.get_owner(), Some(context.admin));
+}

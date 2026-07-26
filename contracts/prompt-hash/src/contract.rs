@@ -1,14 +1,9 @@
 use super::events::Events;
 use super::storage::Storage;
 use super::types::{
-    ClassificationOverride, DataKey, Error, ListingConfig, Prompt, PromptEncryptedPayload,
-    PromptHashTrait, Purchase, ReferralCode, Settlement, Split, Stake, Subscription,
-    SubscriptionConfig,
     Bundle, ClassificationOverride, DataKey, Discount, Error, ListingConfig, Prompt,
-    PromptEncryptedPayload, PromptHashTrait, Purchase, ReferralCode, Settlement, Split,
+    PromptEncryptedPayload, PromptHashTrait, Purchase, ReferralCode, Settlement, Split, Stake,
     Subscription, SubscriptionConfig, ALL_CLASSIFICATIONS, VALID_DISCLOSURE_FLAGS,
-    DataKey, Error, ListingConfig, Prompt, PromptEncryptedPayload, PromptHashTrait, Purchase,
-    ReferralCode, Settlement, Split, Stake, Subscription, SubscriptionConfig,
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
@@ -32,30 +27,6 @@ const MAX_CLASSIFICATION_LEN: u32 = 20;
 const MAX_SAFETY_FLAGS_COUNT: u32 = 10;
 const MAX_FLAG_LEN: u32 = 30;
 const MAX_REASON_LEN: u32 = 256;
-// #131 – content classification: the closed set of category/flag values
-// `validate_classification`/`validate_safety_flags` accept. Sourced from
-// `test_classification_with_all_valid_categories` (categories) and the
-// disclosure-flag values already exercised by passing tests
-// ("ai-generated", "political", "none"), extended with a few more common
-// content-disclosure labels.
-const ALL_CLASSIFICATIONS: &[&str] = &[
-    "general",
-    "educational",
-    "professional",
-    "creative",
-    "technical",
-    "sensitive",
-    "restricted",
-];
-const VALID_DISCLOSURE_FLAGS: &[&str] = &[
-    "none",
-    "ai-generated",
-    "political",
-    "violence",
-    "adult-content",
-    "hate-speech",
-    "graphic-content",
-];
 /// Highest storage schema version this contract build understands. Bump this
 /// alongside adding migration logic whenever `upgrade` changes stored data shapes.
 const CONTRACT_SCHEMA_VERSION: u32 = 1;
@@ -627,9 +598,9 @@ impl PromptHashTrait for PromptHashContract {
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
         ensure(
             duration_secs > 0 && duration_secs <= MAX_SUBSCRIPTION_DURATION_SECS,
-            Error::InvalidSubscriptionDuration,
+            Error::InvalidSubscriptionConfig,
         )?;
-        ensure(price > 0, Error::InvalidSubscriptionPrice)?;
+        ensure(price > 0, Error::InvalidSubscriptionConfig)?;
         token::Client::new(&env, &asset).decimals();
         Storage::save_subscription_config(
             &env,
@@ -693,7 +664,7 @@ impl PromptHashTrait for PromptHashContract {
     }
 
     fn get_subscription_config(env: Env, creator: Address) -> Result<SubscriptionConfig, Error> {
-        Storage::get_subscription_config(&env, &creator).ok_or(Error::SubscriptionConfigNotFound)
+        Storage::get_subscription_config(&env, &creator).ok_or(Error::SubscriptionNotFound)
     }
 
     fn is_subscription_eligible(env: Env, prompt_id: u128) -> Result<bool, Error> {
@@ -1244,6 +1215,8 @@ impl PromptHashTrait for PromptHashContract {
 
     fn get_discount(env: Env, prompt_id: u128) -> Result<Option<Discount>, Error> {
         Ok(Storage::get_discount(&env, prompt_id))
+    }
+
     // ─── #275: Creator Reputation Staking ─────────────────────────────────
 
     fn stake(env: Env, creator: Address, prompt_id: u128, amount: i128) -> Result<i128, Error> {
@@ -1364,11 +1337,11 @@ fn settle_subscription(
     ensure(!Storage::is_paused(env), Error::ContractIsPaused)?;
     ensure(subscriber != creator, Error::CreatorCannotBuy)?;
     let config =
-        Storage::get_subscription_config(env, creator).ok_or(Error::SubscriptionConfigNotFound)?;
+        Storage::get_subscription_config(env, creator).ok_or(Error::SubscriptionNotFound)?;
     ensure(config.active, Error::SubscriptionInactive)?;
     ensure(
         payment_amount == config.price,
-        Error::InvalidSubscriptionPrice,
+        Error::InvalidSubscriptionConfig,
     )?;
 
     let existing = Storage::get_subscription(env, subscriber, creator);
