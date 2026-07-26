@@ -454,7 +454,10 @@ pub trait PromptHashTrait {
         hashed_code: BytesN<32>,
     ) -> Result<(), Error>;
     fn get_xlm_sac(env: Env) -> Option<Address>;
-    fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
+    fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
+    fn confirm_upgrade(env: Env) -> Result<(), Error>;
+    fn cancel_upgrade(env: Env) -> Result<(), Error>;
+    fn get_pending_upgrade(env: Env) -> Option<BytesN<32>>;
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error>;
 
     // ─── Contract state versioning ───────────────────────────────────────────
