@@ -1,6 +1,6 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import {
   ListingQualityChecklist,
   buildChecklistItems,
@@ -29,9 +29,11 @@ import { createPrompt } from "@/lib/stellar/promptHashClient";
 import {
   LISTING_LIMITS,
   validateListingForm,
+  validateListingField,
   validateImageMetadata,
   CONTENT_CLASSIFICATIONS,
   SAFETY_DISCLOSURE_FLAGS,
+  type ListingFormInput,
 } from "@/lib/validation/listing";
 import { useNetworkState } from "@/hooks/useNetworkState";
 import { translateError } from "@/lib/i18n-errors";
@@ -82,6 +84,7 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
   const skipNextAutosaveRef = useRef(false);
   const [formData, setFormData] = useState<FormData>(createEmptyFormData);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -206,6 +209,7 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
 
   const handleCategoryChange = (value: string) => {
     setFormData((previous) => ({ ...previous, category: value }));
+    setTouched((previous) => ({ ...previous, category: true }));
     setErrors((previous) => {
       const next = { ...previous };
       delete next.category;
@@ -213,10 +217,46 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
     });
   };
 
+  // #269 – order used to auto-focus the first invalid field on a failed submit
+  const FIELD_ORDER: (keyof ListingFormInput)[] = [
+    "imageUrl",
+    "title",
+    "category",
+    "previewText",
+    "priceXlm",
+    "classification",
+    "fullPrompt",
+  ];
+
   const validateForm = () => {
     const nextErrors = validateListingForm(formData);
     setErrors(nextErrors);
-    return Object.keys(nextErrors).length === 0;
+    if (Object.keys(nextErrors).length > 0) {
+      // Auto-focus the first invalid field so the user lands on the problem.
+      const firstInvalid = FIELD_ORDER.find((field) => nextErrors[field]);
+      if (firstInvalid) {
+        requestAnimationFrame(() =>
+          document.getElementById(firstInvalid)?.focus(),
+        );
+      }
+      return false;
+    }
+    return true;
+  };
+
+  // #269 – validate a single field on blur so feedback is inline and real-time.
+  const handleBlur = (name: keyof ListingFormInput) => {
+    setTouched((prev) => ({ ...prev, [name]: true }));
+    const message = validateListingField(name, formData);
+    setErrors((prev) => {
+      const next = { ...prev };
+      if (message) {
+        next[name] = message;
+      } else {
+        delete next[name];
+      }
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -256,6 +296,22 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
       active = false;
     };
   }, [formData.imageUrl]);
+  // #269 – a field is "success" once touched and passing validation.
+  const isFieldValid = (name: keyof ListingFormInput) =>
+    Boolean(touched[name]) && !validateListingField(name, formData);
+
+  const fieldClass = (name: keyof ListingFormInput) =>
+    errors[name]
+      ? "border-red-500"
+      : isFieldValid(name)
+        ? "border-emerald-500 focus-visible:ring-emerald-500/30"
+        : "";
+
+  // #269 – submit stays disabled until every required field is valid.
+  const isFormValid = useMemo(
+    () => Object.keys(validateListingForm(formData)).length === 0,
+    [formData],
+  );
 
   const networkState = useNetworkState();
   const submittingGuardRef = useRef(false);
@@ -385,10 +441,11 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
             name="imageUrl"
             value={formData.imageUrl}
             onChange={handleChange}
+            onBlur={() => handleBlur("imageUrl")}
             type="url"
             autoComplete="url"
             placeholder="https://example.com/prompt-cover.png"
-            className={errors.imageUrl ? "border-red-500" : ""}
+            className={fieldClass("imageUrl")}
             aria-invalid={!!errors.imageUrl}
             aria-describedby={errors.imageUrl ? "imageUrl-error" : undefined}
           />
@@ -396,6 +453,11 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
             <p id="imageUrl-error" className="flex items-center gap-1 text-sm text-red-400">
               <AlertCircle className="h-3.5 w-3.5" />
               {errors.imageUrl}
+            </p>
+          ) : isFieldValid("imageUrl") ? (
+            <p className="flex items-center gap-1 text-sm text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Looks good
             </p>
           ) : null}
           {formData.imageUrl.trim() ? (
@@ -436,9 +498,10 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
             name="title"
             value={formData.title}
             onChange={handleChange}
+            onBlur={() => handleBlur("title")}
             autoComplete="off"
             placeholder="Board-ready launch plan"
-            className={errors.title ? "border-red-500" : ""}
+            className={fieldClass("title")}
             aria-invalid={!!errors.title}
             aria-describedby={errors.title ? "title-error" : undefined}
           />
@@ -449,6 +512,11 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
             <p id="title-error" className="flex items-center gap-1 text-sm text-red-400">
               <AlertCircle className="h-3.5 w-3.5" />
               {errors.title}
+            </p>
+          ) : isFieldValid("title") ? (
+            <p className="flex items-center gap-1 text-sm text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Looks good
             </p>
           ) : null}
         </div>
@@ -464,10 +532,9 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
             name="previewText"
             value={formData.previewText}
             onChange={handleChange}
+            onBlur={() => handleBlur("previewText")}
             placeholder="Brief description of the prompt. This will be publicly visible."
-            className={`min-h-[120px] resize-none ${
-              errors.previewText ? "border-red-500" : ""
-            }`}
+            className={`min-h-[120px] resize-none ${fieldClass("previewText")}`}
             aria-invalid={!!errors.previewText}
             aria-describedby={errors.previewText ? "previewText-error" : undefined}
           />
@@ -479,6 +546,11 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
               <AlertCircle className="h-3.5 w-3.5" />
               {errors.previewText}
             </p>
+          ) : isFieldValid("previewText") ? (
+            <p className="flex items-center gap-1 text-sm text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Looks good
+            </p>
           ) : null}
         </div>
         <div className="space-y-2">
@@ -488,7 +560,7 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
           <Select value={formData.category} onValueChange={handleCategoryChange}>
             <SelectTrigger
               id="category"
-              className={errors.category ? "border-red-500" : ""}
+              className={fieldClass("category")}
             >
               <SelectValue placeholder="Select category" />
             </SelectTrigger>
@@ -515,10 +587,11 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
             name="priceXlm"
             value={formData.priceXlm}
             onChange={handleChange}
+            onBlur={() => handleBlur("priceXlm")}
             type="number"
             min="1"
             step="1"
-            className={errors.priceXlm ? "border-red-500" : ""}
+            className={fieldClass("priceXlm")}
             aria-invalid={!!errors.priceXlm}
             aria-describedby={errors.priceXlm ? "priceXlm-error" : undefined}
           />
@@ -526,6 +599,11 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
             <p id="priceXlm-error" className="flex items-center gap-1 text-sm text-red-400">
               <AlertCircle className="h-3.5 w-3.5" />
               {errors.priceXlm}
+            </p>
+          ) : isFieldValid("priceXlm") ? (
+            <p className="flex items-center gap-1 text-sm text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Looks good
             </p>
           ) : null}
         </div>
@@ -544,6 +622,7 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
             value={formData.classification}
             onValueChange={(value) => {
               setFormData((prev) => ({ ...prev, classification: value }));
+              setTouched((prev) => ({ ...prev, classification: true }));
               setErrors((prev) => {
                 const next = { ...prev };
                 delete next.classification;
@@ -553,7 +632,7 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
           >
             <SelectTrigger
               id="classification"
-              className={errors.classification ? "border-red-500" : ""}
+              className={fieldClass("classification")}
             >
               <SelectValue placeholder="Select classification" />
             </SelectTrigger>
@@ -635,15 +714,23 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
           name="fullPrompt"
           value={formData.fullPrompt}
           onChange={handleChange}
+          onBlur={() => handleBlur("fullPrompt")}
           autoComplete="off"
           rows={12}
           placeholder="This plaintext is encrypted in the browser, then only encrypted fields are sent on-chain."
-          className={errors.fullPrompt ? "border-red-500" : ""}
+          className={fieldClass("fullPrompt")}
+          aria-invalid={!!errors.fullPrompt}
+          aria-describedby={errors.fullPrompt ? "fullPrompt-error" : undefined}
         />
         {errors.fullPrompt ? (
-          <p className="flex items-center gap-1 text-sm text-red-400">
+          <p id="fullPrompt-error" className="flex items-center gap-1 text-sm text-red-400">
             <AlertCircle className="h-3.5 w-3.5" />
             {errors.fullPrompt}
+          </p>
+        ) : isFieldValid("fullPrompt") ? (
+          <p className="flex items-center gap-1 text-sm text-emerald-400">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Looks good
           </p>
         ) : null}
       </div>
@@ -683,7 +770,12 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
 
       <Button
         className="w-full bg-emerald-400 text-slate-950 hover:bg-emerald-300"
-        disabled={isSubmitting || !networkState.canTrustConfirmation || (showChecklist && checklistHasFailures)}
+        disabled={
+          isSubmitting ||
+          !networkState.canTrustConfirmation ||
+          !isFormValid ||
+          (showChecklist && checklistHasFailures)
+        }
         onClick={handleSubmit}
       >
         {isSubmitting ? (

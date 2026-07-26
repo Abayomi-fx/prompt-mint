@@ -13,7 +13,7 @@ import { TransactionProvider } from "./components/TransactionProvider.tsx";
 import { NotificationProvider } from "./providers/NotificationProvider.tsx";
 import { ContractSyncProvider } from "./providers/ContractSyncProvider.tsx";
 import { CurrencyProvider } from "./providers/CurrencyProvider.tsx";
-import { NetworkStateProvider } from "./hooks/useNetworkState.ts";
+import { NetworkStateProvider } from "./hooks/useNetworkState.tsx";
 import { ReducedMotionProvider } from "./components/ReducedMotionProvider.tsx";
 
 const queryClient = new QueryClient({
