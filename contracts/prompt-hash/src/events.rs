@@ -76,6 +76,12 @@ struct ContractPausedStateChanged {
 }
 
 #[contractevent]
+struct SchemaMigrated {
+    pub previous_version: u32,
+    pub new_version: u32,
+}
+
+#[contractevent]
 struct FeeUpdated {
     #[topic]
     pub new_fee_percentage: u32,
@@ -229,6 +235,14 @@ impl Events {
 
     pub fn emit_contract_paused_state_changed(env: &Env, is_paused: bool) {
         ContractPausedStateChanged { is_paused }.publish(env);
+    }
+
+    pub fn emit_schema_migrated(env: &Env, previous_version: u32, new_version: u32) {
+        SchemaMigrated {
+            previous_version,
+            new_version,
+        }
+        .publish(env);
     }
 
     pub fn emit_fee_updated(env: &Env, new_fee_percentage: u32) {
@@ -388,8 +402,6 @@ struct PromotionApplied {
     pub effective_price: i128,
     pub original_price: i128,
 }
-
-pub struct Events;
 
 impl Events {
     pub fn emit_promotion_created(

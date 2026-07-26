@@ -1,8 +1,9 @@
 use super::events::Events;
 use super::storage::Storage;
 use super::types::{
-    DataKey, Error, ListingConfig, Prompt, PromptEncryptedPayload, PromptHashTrait, Purchase,
-    ReferralCode, Settlement, Split, Subscription, SubscriptionConfig,
+    ClassificationOverride, DataKey, Error, ListingConfig, Prompt, PromptEncryptedPayload,
+    PromptHashTrait, Purchase, ReferralCode, Settlement, Split, Subscription, SubscriptionConfig,
+    ALL_CLASSIFICATIONS, VALID_DISCLOSURE_FLAGS,
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
@@ -25,6 +26,9 @@ const MAX_CLASSIFICATION_LEN: u32 = 20;
 const MAX_SAFETY_FLAGS_COUNT: u32 = 10;
 const MAX_FLAG_LEN: u32 = 30;
 const MAX_REASON_LEN: u32 = 256;
+/// Highest storage schema version this contract build understands. Bump this
+/// alongside adding migration logic whenever `upgrade` changes stored data shapes.
+const CONTRACT_SCHEMA_VERSION: u32 = 1;
 
 #[contract]
 pub struct PromptHashContract;
@@ -42,6 +46,7 @@ impl PromptHashTrait for PromptHashContract {
         Storage::set_fee_percentage(&env, &DEFAULT_FEE_BPS);
         Storage::set_xlm_address(&env, &xlm_sac);
         Storage::set_pause_status(&env, false);
+        Storage::set_schema_version(&env, CONTRACT_SCHEMA_VERSION);
         env.storage().instance().extend_ttl(
             super::storage::PERSISTENT_LIFETIME_THRESHOLD,
             super::storage::PERSISTENT_BUMP_AMOUNT,
@@ -443,6 +448,8 @@ impl PromptHashTrait for PromptHashContract {
 
     fn get_purchase_details(env: Env, prompt_id: u128, buyer: Address) -> Result<Purchase, Error> {
         Storage::require_purchase(&env, prompt_id, &buyer)
+    }
+
     fn configure_subscription_pass(
         env: Env,
         creator: Address,
@@ -666,6 +673,24 @@ impl PromptHashTrait for PromptHashContract {
         Ok(())
     }
 
+    fn get_schema_version(env: Env) -> u32 {
+        Storage::get_schema_version(&env)
+    }
+
+    #[only_owner]
+    fn migrate(env: Env, new_version: u32) -> Result<u32, Error> {
+        let previous_version = Storage::get_schema_version(&env);
+        ensure(new_version > previous_version, Error::VersionMismatch)?;
+        ensure(
+            new_version <= CONTRACT_SCHEMA_VERSION,
+            Error::VersionMismatch,
+        )?;
+
+        Storage::set_schema_version(&env, new_version);
+        Events::emit_schema_migrated(&env, previous_version, new_version);
+        Ok(new_version)
+    }
+
     // ─── #131: Content Classification ──────────────────────────────────────
 
     fn set_classification(
@@ -869,10 +894,10 @@ impl PromptHashTrait for PromptHashContract {
         validate_len(
             &encrypted_prompt,
             MAX_ENCRYPTED_PROMPT_LEN,
-            Error::InvalidEncryptedPromptLength,
+            Error::InvalidFieldLength,
         )?;
-        validate_len(&wrapped_key, MAX_WRAPPED_KEY_LEN, Error::InvalidWrappedKeyLength)?;
-        validate_len(&encryption_iv, MAX_IV_LEN, Error::InvalidIvLength)?;
+        validate_len(&wrapped_key, MAX_WRAPPED_KEY_LEN, Error::InvalidFieldLength)?;
+        validate_len(&encryption_iv, MAX_IV_LEN, Error::InvalidFieldLength)?;
 
         let previous_version = prompt.encryption_version;
 
@@ -1284,21 +1309,21 @@ fn validate_prompt_fields(
     price_stroops: i128,
 ) -> Result<(), Error> {
     ensure(price_stroops > 0, Error::InvalidPrice)?;
-    validate_len(image_url, MAX_IMAGE_URL_LEN, Error::InvalidImageUrlLength)?;
-    validate_len(title, MAX_TITLE_LEN, Error::InvalidTitleLength)?;
-    validate_len(category, MAX_CATEGORY_LEN, Error::InvalidCategoryLength)?;
-    validate_len(preview_text, MAX_PREVIEW_LEN, Error::InvalidPreviewLength)?;
+    validate_len(image_url, MAX_IMAGE_URL_LEN, Error::InvalidFieldLength)?;
+    validate_len(title, MAX_TITLE_LEN, Error::InvalidFieldLength)?;
+    validate_len(category, MAX_CATEGORY_LEN, Error::InvalidFieldLength)?;
+    validate_len(preview_text, MAX_PREVIEW_LEN, Error::InvalidFieldLength)?;
     validate_len(
         encrypted_prompt,
         MAX_ENCRYPTED_PROMPT_LEN,
-        Error::InvalidEncryptedPromptLength,
+        Error::InvalidFieldLength,
     )?;
     validate_len(
         wrapped_key,
         MAX_WRAPPED_KEY_LEN,
-        Error::InvalidWrappedKeyLength,
+        Error::InvalidFieldLength,
     )?;
-    validate_len(encryption_iv, MAX_IV_LEN, Error::InvalidIvLength)?;
+    validate_len(encryption_iv, MAX_IV_LEN, Error::InvalidFieldLength)?;
     Ok(())
 }
 

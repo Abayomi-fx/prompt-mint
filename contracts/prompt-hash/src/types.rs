@@ -11,58 +11,58 @@ pub enum Error {
     AlreadyPurchased = 5,
     InvalidPrice = 6,
     InvalidFeePercentage = 7,
-    InvalidTitleLength = 8,
-    InvalidCategoryLength = 9,
-    InvalidPreviewLength = 10,
-    InvalidEncryptedPromptLength = 11,
-    InvalidWrappedKeyLength = 12,
-    InvalidImageUrlLength = 13,
-    InvalidIvLength = 14,
-    FeeWalletNotSet = 15,
-    XlmAddressNotSet = 16,
-    ArithmeticOverflow = 17,
-    ReentrancyGuard = 18,
-    ContractIsPaused = 19,
-    ReferrerCannotBeBuyerOrCreator = 20,
-    InvalidPaymentAmount = 21,
-    InvalidVoucher = 22,
-    InvalidReferralPercentage = 23,
-    InvalidDiscountPercentage = 24,
-    MaxSupplyReached = 25,
-    InvalidAsset = 26,
+    // Consolidated: title/category/preview/encrypted-prompt/wrapped-key/image-url/iv
+    // all used to be distinct discriminants. Soroban's contract spec format caps a
+    // single `#[contracterror]` enum at 50 cases, so field-length validation now
+    // shares one variant instead of one-per-field.
+    InvalidFieldLength = 8,
+    FeeWalletNotSet = 9,
+    XlmAddressNotSet = 10,
+    ArithmeticOverflow = 11,
+    ReentrancyGuard = 12,
+    ContractIsPaused = 13,
+    ReferrerCannotBeBuyerOrCreator = 14,
+    InvalidPaymentAmount = 15,
+    InvalidVoucher = 16,
+    InvalidReferralPercentage = 17,
+    InvalidDiscountPercentage = 18,
+    MaxSupplyReached = 19,
+    InvalidAsset = 20,
     // #50 – revenue splits
-    InvalidSplits = 27,
+    InvalidSplits = 21,
     // #49 – time-bound listing expiry
-    ListingExpired = 28,
-    LicenseNotFound = 29,
-    InvalidLicenseTransfer = 30,
-    ReferralCodeNotFound = 31,
-    ReferralCodeAlreadyExists = 32,
-    ReferralCodeTooShort = 33,
-    ReferralReplay = 34,
-    CircularReferral = 35,
-    SubscriptionConfigNotFound = 31,
-    SubscriptionInactive = 32,
-    InvalidSubscriptionDuration = 33,
-    InvalidSubscriptionPrice = 34,
-    SubscriptionNotFound = 35,
-    ListingNotEligible = 36,
+    ListingExpired = 22,
+    LicenseNotFound = 23,
+    InvalidLicenseTransfer = 24,
+    ReferralCodeNotFound = 25,
+    ReferralCodeAlreadyExists = 26,
+    ReferralCodeTooShort = 27,
+    ReferralReplay = 28,
+    CircularReferral = 29,
+    SubscriptionConfigNotFound = 30,
+    SubscriptionInactive = 31,
+    InvalidSubscriptionDuration = 32,
+    InvalidSubscriptionPrice = 33,
+    SubscriptionNotFound = 34,
+    ListingNotEligible = 35,
     // #131 – content classification
-    InvalidClassification = 37,
-    InvalidDisclosureFlags = 38,
-    InvalidContentFlagsLength = 39,
-    ClassificationAlreadyReviewed = 40,
-    NotModerator = 41,
-    InvalidSafetyFlagsLength = 42,
+    InvalidClassification = 36,
+    InvalidDisclosureFlags = 37,
+    InvalidContentFlagsLength = 38,
+    ClassificationAlreadyReviewed = 39,
+    NotModerator = 40,
+    InvalidSafetyFlagsLength = 41,
     // Promotional pricing
-    InvalidPromotionTime = 43,
-    PromotionOverlap = 44,
-    PromotionNotFound = 45,
-    UnauthorizedPromotion = 46,
+    InvalidPromotionTime = 42,
+    PromotionOverlap = 43,
+    PromotionNotFound = 44,
+    UnauthorizedPromotion = 45,
     // Encryption rotation
-    EncryptionVersionNotFound = 47,
-    InvalidRotation = 48,
-    VersionMismatch = 49,
+    EncryptionVersionNotFound = 46,
+    InvalidRotation = 47,
+    // Also used to guard schema migrations: reused for a stored schema
+    // version newer than what the running contract code understands.
+    VersionMismatch = 48,
 }
 
 #[contracttype]
@@ -94,6 +94,9 @@ pub enum DataKey {
     // Encryption rotation – versioned payloads & version counter per prompt
     PromptEncryptedPayload(u128, u32),
     PromptEncryptionVersion(u128),
+    // Contract state schema version, bumped by `migrate` after an `upgrade`
+    // that changes stored data shapes.
+    SchemaVersion,
 }
 
 /// A moderator-overridden classification that takes precedence
@@ -117,6 +120,10 @@ pub struct Settlement {
     pub referrer: Option<Address>,
     pub referrer_amount: i128,
     pub split_amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubscriptionConfig {
     pub creator: Address,
     pub duration_secs: u64,
@@ -131,6 +138,10 @@ pub struct ReferralCode {
     pub owner: Address,
     pub reward_bps: u32,
     pub active: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Subscription {
     pub creator: Address,
     pub subscriber: Address,
@@ -446,6 +457,15 @@ pub trait PromptHashTrait {
     fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error>;
 
+    // ─── Contract state versioning ───────────────────────────────────────────
+    /// Current schema version applied to this contract's storage. `0` means
+    /// the contract predates this versioning scheme (never migrated).
+    fn get_schema_version(env: Env) -> u32;
+    /// Owner-only. Bumps the stored schema version after an `upgrade` that
+    /// changed the shape of on-chain data. Rejects moving backwards and
+    /// rejects jumping to a version this contract build doesn't know about.
+    fn migrate(env: Env, new_version: u32) -> Result<u32, Error>;
+
     // #131 – content classification
     fn set_classification(
         env: Env,
@@ -464,6 +484,8 @@ pub trait PromptHashTrait {
         reason: String,
     ) -> Result<(), Error>;
     fn get_active_classification(env: Env, prompt_id: u128) -> Result<(String, Vec<String>), Error>;
+    fn get_moderator_override(env: Env, prompt_id: u128) -> Result<ClassificationOverride, Error>;
+    fn set_moderator_address(env: Env, admin: Address, moderator: Address) -> Result<(), Error>;
 
     // Promotional pricing
     fn create_promotion(

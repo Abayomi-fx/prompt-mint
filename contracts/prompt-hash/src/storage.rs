@@ -1,6 +1,6 @@
 use super::types::{
-    DataKey, Error, Prompt, PromptEncryptedPayload, Purchase, ReferralCode, Settlement,
-    Subscription, SubscriptionConfig,
+    ClassificationOverride, DataKey, Error, Prompt, PromptEncryptedPayload, Purchase,
+    ReferralCode, Settlement, Subscription, SubscriptionConfig,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
 
@@ -564,5 +564,20 @@ impl Storage {
         let key = DataKey::PromptCounter; // Reuse prompt counter for promotion IDs
         let count = env.storage().persistent().get(&key).unwrap_or(0);
         count
+    }
+
+    // ─── Contract State Versioning ─────────────────────────────────────────
+
+    /// Schema version stored on-chain. `0` means the key was never written,
+    /// which covers contract state that predates this versioning scheme.
+    pub fn get_schema_version(env: &Env) -> u32 {
+        let key = DataKey::SchemaVersion;
+        let version = env.storage().instance().get(&key).unwrap_or(0);
+        version
+    }
+
+    pub fn set_schema_version(env: &Env, version: u32) {
+        let key = DataKey::SchemaVersion;
+        env.storage().instance().set(&key, &version);
     }
 }
