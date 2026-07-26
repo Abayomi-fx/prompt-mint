@@ -1,6 +1,6 @@
 use super::types::{
-    DataKey, Error, Prompt, PromptEncryptedPayload, Purchase, ReferralCode, Settlement, Stake,
-    Subscription, SubscriptionConfig,
+    ClassificationOverride, DataKey, Error, Prompt, PromptEncryptedPayload, Purchase, ReferralCode,
+    Settlement, Stake, Subscription, SubscriptionConfig,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
 
@@ -483,7 +483,11 @@ impl Storage {
 
     // ─── #131: Content Classification ───────────────────────────────────────
 
-    pub fn set_moderator_override(env: &Env, prompt_id: u128, override_entry: &ClassificationOverride) {
+    pub fn set_moderator_override(
+        env: &Env,
+        prompt_id: u128,
+        override_entry: &ClassificationOverride,
+    ) {
         let key = DataKey::ClassificationOverride(prompt_id);
         env.storage().persistent().set(&key, override_entry);
         Self::extend_key_ttl(env, &key);
@@ -535,7 +539,11 @@ impl Storage {
         env.storage().persistent().remove(&key);
     }
 
-    pub fn add_promotion_to_history(env: &Env, prompt_id: u128, promotion: &super::types::Promotion) {
+    pub fn add_promotion_to_history(
+        env: &Env,
+        prompt_id: u128,
+        promotion: &super::types::Promotion,
+    ) {
         let key = DataKey::PromotionHistory(prompt_id);
         let mut history: Vec<super::types::Promotion> = env
             .storage()
@@ -562,8 +570,7 @@ impl Storage {
 
     pub fn get_promotion_counter(env: &Env) -> u128 {
         let key = DataKey::PromptCounter; // Reuse prompt counter for promotion IDs
-        let count = env.storage().persistent().get(&key).unwrap_or(0);
-        count
+        env.storage().persistent().get(&key).unwrap_or(0)
     }
 
     // ─── #275: Creator Reputation Staking ─────────────────────────────────
@@ -581,5 +588,84 @@ impl Storage {
         let key = DataKey::CreatorStake(stake.prompt_id);
         env.storage().persistent().set(&key, stake);
         Self::extend_key_ttl(env, &key);
+    }
+
+    // ─── Upgrade Authorization (#42) ──────────────────────────────────────
+
+    pub fn set_pending_upgrade(env: &Env, wasm_hash: &BytesN<32>) {
+        let key = DataKey::PendingUpgrade;
+        env.storage().persistent().set(&key, wasm_hash);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_pending_upgrade(env: &Env) -> Option<BytesN<32>> {
+        let key = DataKey::PendingUpgrade;
+        let hash: Option<BytesN<32>> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        hash
+    }
+
+    pub fn clear_pending_upgrade(env: &Env) {
+        let key = DataKey::PendingUpgrade;
+        env.storage().persistent().remove(&key);
+    }
+
+    pub fn set_upgrade_proposer(env: &Env, proposer: &Address) {
+        let key = DataKey::UpgradeProposer;
+        env.storage().persistent().set(&key, proposer);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_upgrade_proposer(env: &Env) -> Option<Address> {
+        let key = DataKey::UpgradeProposer;
+        let proposer: Option<Address> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        proposer
+    }
+
+    pub fn clear_upgrade_proposer(env: &Env) {
+        let key = DataKey::UpgradeProposer;
+        env.storage().persistent().remove(&key);
+    }
+
+    pub fn set_upgrade_proposed_at(env: &Env, timestamp: u64) {
+        let key = DataKey::UpgradeProposedAt;
+        env.storage().persistent().set(&key, &timestamp);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_upgrade_proposed_at(env: &Env) -> Option<u64> {
+        let key = DataKey::UpgradeProposedAt;
+        let ts: Option<u64> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        ts
+    }
+
+    pub fn clear_upgrade_proposed_at(env: &Env) {
+        let key = DataKey::UpgradeProposedAt;
+        env.storage().persistent().remove(&key);
+    }
+
+    // ─── Contract State Versioning ─────────────────────────────────────────
+
+    /// Schema version stored on-chain. `0` means the key was never written,
+    /// which covers contract state that predates this versioning scheme.
+    pub fn get_schema_version(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::SchemaVersion)
+            .unwrap_or(0)
+    }
+
+    pub fn set_schema_version(env: &Env, version: u32) {
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &version);
     }
 }
