@@ -1,6 +1,9 @@
 use super::events::Events;
 use super::storage::Storage;
-use super::types::{DataKey, Error, ListingConfig, Prompt, PromptHashTrait, Split};
+use super::types::{
+    Bundle, BundlePurchase, DataKey, Error, ListingConfig, Prompt, PromptHashTrait, Split,
+    MAX_BUNDLE_DESC_LEN, MAX_BUNDLE_ITEMS, MAX_BUNDLE_TITLE_LEN,
+};
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
 use stellar_macros::{default_impl, only_owner};
@@ -483,6 +486,308 @@ impl PromptHashTrait for PromptHashContract {
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error> {
         Storage::extend_key_ttl(&env, &key);
         Ok(())
+    }
+
+    // ─── Bundle methods ──────────────────────────────────────────────────────
+
+    fn create_bundle(
+        env: Env,
+        creator: Address,
+        title: String,
+        description: String,
+        image_url: String,
+        prompt_ids: Vec<u128>,
+        price_stroops: i128,
+        asset: Address,
+    ) -> Result<u128, Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+
+        // Field length validation
+        ensure(
+            title.len() > 0 && title.len() <= MAX_BUNDLE_TITLE_LEN,
+            Error::InvalidBundleTitleLength,
+        )?;
+        ensure(
+            description.len() <= MAX_BUNDLE_DESC_LEN,
+            Error::InvalidBundleDescriptionLength,
+        )?;
+        ensure(
+            image_url.len() <= MAX_IMAGE_URL_LEN,
+            Error::InvalidImageUrlLength,
+        )?;
+        ensure(price_stroops > 0, Error::InvalidPrice)?;
+        // At least one item, at most MAX_BUNDLE_ITEMS
+        ensure(prompt_ids.len() > 0, Error::BundleEmpty)?;
+        ensure(
+            prompt_ids.len() <= MAX_BUNDLE_ITEMS,
+            Error::InvalidBundleItemCount,
+        )?;
+
+        // Validate token interface
+        token::Client::new(&env, &asset).decimals();
+
+        // Validate every prompt: must exist, be active, and be owned by creator
+        for i in 0..prompt_ids.len() {
+            let pid = prompt_ids.get(i).unwrap();
+            let prompt = Storage::require_prompt(&env, pid)?;
+            ensure(prompt.creator == creator, Error::Unauthorized)?;
+            ensure(prompt.active, Error::PromptInactive)?;
+            // Check for duplicates within the supplied list
+            for j in (i + 1)..prompt_ids.len() {
+                ensure(
+                    prompt_ids.get(j).unwrap() != pid,
+                    Error::PromptAlreadyInBundle,
+                )?;
+            }
+        }
+
+        let bundle_id = Storage::get_bundle_counter(&env);
+        let bundle = Bundle {
+            id: bundle_id,
+            creator: creator.clone(),
+            title,
+            description,
+            image_url,
+            prompt_ids: prompt_ids.clone(),
+            price_stroops,
+            asset,
+            active: true,
+            sales_count: 0,
+            created_at: env.ledger().timestamp(),
+        };
+
+        Storage::save_bundle(&env, &bundle)?;
+        Storage::add_bundle_to_creator(&env, &creator, bundle_id);
+        Events::emit_bundle_created(&env, bundle_id, creator, price_stroops, prompt_ids.len());
+        Ok(bundle_id)
+    }
+
+    fn add_bundle_item(
+        env: Env,
+        creator: Address,
+        bundle_id: u128,
+        prompt_id: u128,
+    ) -> Result<(), Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+        let mut bundle = Storage::require_bundle(&env, bundle_id)?;
+        ensure(bundle.creator == creator, Error::Unauthorized)?;
+
+        // Capacity check
+        ensure(
+            bundle.prompt_ids.len() < MAX_BUNDLE_ITEMS,
+            Error::InvalidBundleItemCount,
+        )?;
+
+        // Prompt must exist, be active, and belong to this creator
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        ensure(prompt.creator == creator, Error::Unauthorized)?;
+        ensure(prompt.active, Error::PromptInactive)?;
+
+        // Must not already be a member
+        for i in 0..bundle.prompt_ids.len() {
+            ensure(
+                bundle.prompt_ids.get(i).unwrap() != prompt_id,
+                Error::PromptAlreadyInBundle,
+            )?;
+        }
+
+        bundle.prompt_ids.push_back(prompt_id);
+        Storage::update_bundle(&env, &bundle);
+        Events::emit_bundle_item_added(&env, bundle_id, prompt_id);
+        Ok(())
+    }
+
+    fn remove_bundle_item(
+        env: Env,
+        creator: Address,
+        bundle_id: u128,
+        prompt_id: u128,
+    ) -> Result<(), Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+        let mut bundle = Storage::require_bundle(&env, bundle_id)?;
+        ensure(bundle.creator == creator, Error::Unauthorized)?;
+
+        let mut found = false;
+        let mut idx = 0u32;
+        while idx < bundle.prompt_ids.len() {
+            if bundle.prompt_ids.get(idx).unwrap() == prompt_id {
+                bundle.prompt_ids.remove(idx);
+                found = true;
+                break;
+            }
+            idx += 1;
+        }
+        ensure(found, Error::PromptNotInBundle)?;
+        // Bundle must retain at least one item
+        ensure(bundle.prompt_ids.len() > 0, Error::BundleEmpty)?;
+
+        Storage::update_bundle(&env, &bundle);
+        Events::emit_bundle_item_removed(&env, bundle_id, prompt_id);
+        Ok(())
+    }
+
+    fn update_bundle_price(
+        env: Env,
+        creator: Address,
+        bundle_id: u128,
+        price_stroops: i128,
+    ) -> Result<(), Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+        let mut bundle = Storage::require_bundle(&env, bundle_id)?;
+        ensure(bundle.creator == creator, Error::Unauthorized)?;
+        ensure(price_stroops > 0, Error::InvalidPrice)?;
+
+        bundle.price_stroops = price_stroops;
+        Storage::update_bundle(&env, &bundle);
+        Events::emit_bundle_price_updated(&env, bundle_id, price_stroops);
+        Ok(())
+    }
+
+    fn set_bundle_active(
+        env: Env,
+        creator: Address,
+        bundle_id: u128,
+        active: bool,
+    ) -> Result<(), Error> {
+        creator.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+        let mut bundle = Storage::require_bundle(&env, bundle_id)?;
+        ensure(bundle.creator == creator, Error::Unauthorized)?;
+
+        bundle.active = active;
+        Storage::update_bundle(&env, &bundle);
+        Events::emit_bundle_active_updated(&env, bundle_id, active);
+        Ok(())
+    }
+
+    fn buy_bundle(
+        env: Env,
+        buyer: Address,
+        bundle_id: u128,
+        payment_amount_stroops: i128,
+        referrer: Option<Address>,
+    ) -> Result<(), Error> {
+        buyer.require_auth();
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+
+        let mut bundle = Storage::require_bundle(&env, bundle_id)?;
+        ensure(bundle.active, Error::BundleInactive)?;
+        ensure(bundle.creator != buyer, Error::CreatorCannotBuy)?;
+        ensure(
+            !Storage::has_bundle_purchase(&env, bundle_id, &buyer),
+            Error::BundleAlreadyPurchased,
+        )?;
+        ensure(
+            payment_amount_stroops >= bundle.price_stroops,
+            Error::InvalidPaymentAmount,
+        )?;
+
+        // Validate referrer
+        if let Some(ref r) = referrer {
+            ensure(
+                r != &buyer && r != &bundle.creator,
+                Error::ReferrerCannotBeBuyerOrCreator,
+            )?;
+        }
+
+        Storage::set_reentrancy_guard(&env)?;
+
+        let fee_wallet = Storage::get_fee_wallet(&env).ok_or(Error::FeeWalletNotSet)?;
+        let fee_percentage = Storage::get_fee_percentage(&env);
+        let referral_percentage = Storage::get_referral_percentage(&env);
+        let this_contract = env.current_contract_address();
+        let asset_client = token::StellarAssetClient::new(&env, &bundle.asset);
+        let price = bundle.price_stroops;
+
+        let fee_amount = price
+            .checked_mul(fee_percentage as i128)
+            .ok_or(Error::ArithmeticOverflow)?
+            / MAX_BPS as i128;
+
+        let referral_amount = if referrer.is_some() {
+            price
+                .checked_mul(referral_percentage as i128)
+                .ok_or(Error::ArithmeticOverflow)?
+                / MAX_BPS as i128
+        } else {
+            0
+        };
+
+        let creator_amount = price
+            .checked_sub(fee_amount)
+            .ok_or(Error::ArithmeticOverflow)?
+            .checked_sub(referral_amount)
+            .ok_or(Error::ArithmeticOverflow)?;
+
+        // Route payments
+        asset_client.transfer_from(&this_contract, &buyer, &bundle.creator, &creator_amount);
+        if fee_amount > 0 {
+            asset_client.transfer_from(&this_contract, &buyer, &fee_wallet, &fee_amount);
+        }
+        if let Some(ref r) = referrer {
+            if referral_amount > 0 {
+                asset_client.transfer_from(&this_contract, &buyer, r, &referral_amount);
+            }
+        }
+
+        // Record purchase with snapshot of current prompt_ids
+        let now = env.ledger().timestamp();
+        let purchase = BundlePurchase {
+            bundle_id,
+            owner: buyer.clone(),
+            original_creator: bundle.creator.clone(),
+            paid_price: payment_amount_stroops,
+            purchased_at: now,
+            purchased_prompt_ids: bundle.prompt_ids.clone(),
+        };
+        Storage::save_bundle_purchase(&env, &purchase);
+        Storage::add_bundle_to_buyer(&env, &buyer, bundle_id);
+
+        bundle.sales_count = bundle
+            .sales_count
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Storage::update_bundle(&env, &bundle);
+
+        Storage::clear_reentrancy_guard(&env);
+
+        Events::emit_bundle_purchased(
+            &env,
+            bundle_id,
+            buyer,
+            bundle.creator,
+            payment_amount_stroops,
+            referrer,
+        );
+        Ok(())
+    }
+
+    fn has_bundle_access(env: Env, user: Address, bundle_id: u128) -> Result<bool, Error> {
+        let bundle = Storage::require_bundle(&env, bundle_id)?;
+        if bundle.creator == user {
+            return Ok(true);
+        }
+        Ok(Storage::has_bundle_purchase(&env, bundle_id, &user))
+    }
+
+    fn get_bundle(env: Env, bundle_id: u128) -> Result<Bundle, Error> {
+        Storage::require_bundle(&env, bundle_id)
+    }
+
+    fn get_all_bundles(env: Env) -> Result<Vec<Bundle>, Error> {
+        Ok(Storage::get_all_bundles(&env))
+    }
+
+    fn get_bundles_by_creator(env: Env, creator: Address) -> Result<Vec<Bundle>, Error> {
+        Ok(Storage::get_bundles_by_creator(&env, &creator))
+    }
+
+    fn get_bundles_by_buyer(env: Env, buyer: Address) -> Result<Vec<Bundle>, Error> {
+        Ok(Storage::get_bundles_by_buyer(&env, &buyer))
     }
 }
 

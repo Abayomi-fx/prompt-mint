@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { PlusCircle, LayoutList } from "lucide-react";
+import { Layers, LayoutList, PlusCircle } from "lucide-react";
 import { Footer } from "@/components/footer";
 import { Navigation } from "@/components/navigation";
 import { CreatePromptForm } from "./CreatePromptForm";
+import { CreateBundleForm } from "./CreateBundleForm";
 import MyPrompts from "./MyPrompts";
 
-type View = "create" | "manage";
+type View = "create" | "bundle" | "manage";
 
 export default function SellPage() {
   const [view, setView] = useState<View>("create");
@@ -64,6 +65,18 @@ export default function SellPage() {
             Create listing
           </button>
           <button
+            onClick={() => setView("bundle")}
+            aria-pressed={view === "bundle"}
+            className={`min-h-11 flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-all sm:px-4 ${
+              view === "bundle"
+                ? "bg-violet-500/20 text-violet-300 shadow-inner"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            <Layers className="h-4 w-4" />
+            Create bundle
+          </button>
+          <button
             onClick={() => setView("manage")}
             aria-pressed={view === "manage"}
             className={`min-h-11 flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-all sm:px-4 ${
@@ -79,6 +92,8 @@ export default function SellPage() {
 
         {view === "create" ? (
           <CreatePromptForm onCreated={() => setView("manage")} />
+        ) : view === "bundle" ? (
+          <CreateBundleForm onCreated={() => setView("manage")} />
         ) : (
           <MyPrompts onCreateNew={() => setView("create")} />
         )}
