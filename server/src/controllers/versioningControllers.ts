@@ -7,6 +7,9 @@ import Purchase from "../models/Purchase";
 import User from "../models/User";
 import { AppError } from "../lib/AppError";
 import { asyncRoute } from "../lib/asyncRoute";
+import { recordMarketplaceTransaction } from "../services/transactionHistoryService";
+
+export const PostPromptUpdate = asyncRoute(async (req, res) => {
 import { enqueuePromptUpdateNotifications } from "../services/notificationService";
 
 function getWalletAddress(req: Request): string | null {
@@ -108,6 +111,7 @@ export const ListPromptVersions = asyncRoute(async (req, res) => {
     throw new AppError("walletAddress is required to list versions.", 401, "UNAUTHENTICATED");
   }
 
+  const prompt = await Prompt.findById(promptId).populate("owner", "walletAddress");
   const user = await User.findOne({ walletAddress });
   if (!user) throw new AppError("User not found.", 404, "NOT_FOUND");
 
@@ -119,6 +123,20 @@ export const ListPromptVersions = asyncRoute(async (req, res) => {
     throw new AppError("Unauthorized to view prompt version history.", 403, "FORBIDDEN");
   }
 
+  const termsVersion = prompt.termsVersion ?? 1;
+  const licenseTerm = await LicenseTerm.findOne({ version: termsVersion });
+
+  const purchase = await Purchase.create({
+    promptId,
+    buyerWallet: buyerWallet.toLowerCase(),
+    versionIndex: prompt.currentVersionIndex ?? 1,
+    txHash: txHash ?? "",
+    termsSnapshot: {
+      termsVersion,
+      termsTitle: licenseTerm?.title ?? "Standard License",
+      termsContent: licenseTerm?.content ?? "Standard marketplace license terms.",
+      acceptedAt: new Date(),
+    },
   const versions = await PromptVersion.find(
     { promptId },
     "versionIndex changelog createdAt contentHash",
@@ -180,6 +198,25 @@ export const GetPromptVersions = asyncRoute(async (req, res) => {
   const promptId = String(req.params.promptId || req.params.id);
   if (!promptId) throw new AppError("promptId is required.", 400, "MISSING_FIELDS");
 
+  const ownerWallet =
+    prompt.owner && typeof prompt.owner === "object" && "walletAddress" in prompt.owner
+      ? String((prompt.owner as { walletAddress?: string }).walletAddress ?? "")
+      : "";
+
+  if (ownerWallet) {
+    await recordMarketplaceTransaction({
+      promptOnChainId: prompt.onChainId ?? String(prompt._id),
+      promptMongoId: String(prompt._id),
+      promptTitle: prompt.title,
+      buyerWallet: buyerWallet.toLowerCase(),
+      creatorWallet: ownerWallet,
+      priceStroops: Math.round(Number(prompt.price) * 10_000_000),
+      txHash: txHash ?? "",
+      occurredAt: purchase.createdAt ?? new Date(),
+    });
+  }
+
+  res.status(201).json({ message: "Purchase recorded.", versionIndex: purchase.versionIndex });
   const versions = await PromptVersion.find(
     { promptId },
     "versionIndex changelog createdAt contentHash",
