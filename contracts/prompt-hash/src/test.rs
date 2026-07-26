@@ -4219,3 +4219,390 @@ fn test_transfer_ownership_can_be_cancelled_before_acceptance() {
     assert!(result.is_err());
     assert_eq!(client.get_owner(), Some(context.admin));
 }
+
+// ─── #45: Invariant Tests for Creator and Buyer Catalog Indexes ─────────────
+
+#[test]
+fn test_creator_catalog_index_invariant_prompt_added_on_creation() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    
+    // Invariant: creator index should be empty before any prompts
+    assert_eq!(client.get_prompts_by_creator(&creator).len(), 0);
+    
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    // Invariant: creator index should contain exactly the created prompt
+    let creator_prompts = client.get_prompts_by_creator(&creator);
+    assert_eq!(creator_prompts.len(), 1);
+    assert_eq!(creator_prompts.get(0).unwrap().id, prompt_id);
+    assert_eq!(creator_prompts.get(0).unwrap().creator, creator);
+}
+
+#[test]
+fn test_creator_catalog_index_invariant_multiple_prompts_tracked() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    
+    let prompt_1 = create_prompt(&env, &client, &creator, "Prompt 1", 5_000, &context.xlm);
+    let prompt_2 = create_prompt(&env, &client, &creator, "Prompt 2", 7_500, &context.xlm);
+    let prompt_3 = create_prompt(&env, &client, &creator, "Prompt 3", 12_000, &context.xlm);
+    
+    // Invariant: creator index should contain all created prompts
+    let creator_prompts = client.get_prompts_by_creator(&creator);
+    assert_eq!(creator_prompts.len(), 3);
+    
+    // Invariant: all prompts in index should belong to the creator
+    for i in 0..creator_prompts.len() {
+        assert_eq!(creator_prompts.get(i).unwrap().creator, creator);
+    }
+    
+    // Invariant: specific prompt IDs should be present
+    let mut prompt_ids = Vec::new(&env);
+    for i in 0..creator_prompts.len() {
+        prompt_ids.push_back(creator_prompts.get(i).unwrap().id);
+    }
+    let mut found_1 = false;
+    let mut found_2 = false;
+    let mut found_3 = false;
+    for i in 0..prompt_ids.len() {
+        if prompt_ids.get(i).unwrap() == prompt_1 { found_1 = true; }
+        if prompt_ids.get(i).unwrap() == prompt_2 { found_2 = true; }
+        if prompt_ids.get(i).unwrap() == prompt_3 { found_3 = true; }
+    }
+    assert!(found_1);
+    assert!(found_2);
+    assert!(found_3);
+}
+
+#[test]
+fn test_creator_catalog_index_invariant_isolation_between_creators() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator_a = Address::generate(&env);
+    let creator_b = Address::generate(&env);
+    
+    let prompt_a = create_prompt(&env, &client, &creator_a, "A's Prompt", 10_000, &context.xlm);
+    let prompt_b = create_prompt(&env, &client, &creator_b, "B's Prompt", 15_000, &context.xlm);
+    
+    // Invariant: creator A's index should only contain their prompts
+    let a_prompts = client.get_prompts_by_creator(&creator_a);
+    assert_eq!(a_prompts.len(), 1);
+    assert_eq!(a_prompts.get(0).unwrap().id, prompt_a);
+    assert_eq!(a_prompts.get(0).unwrap().creator, creator_a);
+    
+    // Invariant: creator B's index should only contain their prompts
+    let b_prompts = client.get_prompts_by_creator(&creator_b);
+    assert_eq!(b_prompts.len(), 1);
+    assert_eq!(b_prompts.get(0).unwrap().id, prompt_b);
+    assert_eq!(b_prompts.get(0).unwrap().creator, creator_b);
+}
+
+#[test]
+fn test_creator_catalog_index_invariant_persistence_across_operations() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    // Invariant: creator index should persist after purchase
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    
+    let creator_prompts = client.get_prompts_by_creator(&creator);
+    assert_eq!(creator_prompts.len(), 1);
+    assert_eq!(creator_prompts.get(0).unwrap().id, prompt_id);
+    
+    // Invariant: creator index should persist after price update
+    client.update_prompt_price(&creator, &prompt_id, &15_000);
+    let creator_prompts = client.get_prompts_by_creator(&creator);
+    assert_eq!(creator_prompts.len(), 1);
+    assert_eq!(creator_prompts.get(0).unwrap().id, prompt_id);
+    assert_eq!(creator_prompts.get(0).unwrap().price_stroops, 15_000);
+    
+    // Invariant: creator index should persist after status change
+    client.set_prompt_sale_status(&creator, &prompt_id, &false);
+    let creator_prompts = client.get_prompts_by_creator(&creator);
+    assert_eq!(creator_prompts.len(), 1);
+    assert!(!creator_prompts.get(0).unwrap().active);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_prompt_added_on_purchase() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    // Invariant: buyer index should be empty before purchase
+    assert_eq!(client.get_prompts_by_buyer(&buyer).len(), 0);
+    
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    
+    // Invariant: buyer index should contain the purchased prompt
+    let buyer_prompts = client.get_prompts_by_buyer(&buyer);
+    assert_eq!(buyer_prompts.len(), 1);
+    assert_eq!(buyer_prompts.get(0).unwrap().id, prompt_id);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_duplicate_purchase_prevented() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    
+    // Invariant: duplicate purchase should not add duplicate to index
+    let duplicate_result = client.try_buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    match duplicate_result {
+        Err(Ok(Error::AlreadyPurchased)) => {}
+        other => panic!("expected AlreadyPurchased, got {:?}", other),
+    }
+    
+    let buyer_prompts = client.get_prompts_by_buyer(&buyer);
+    assert_eq!(buyer_prompts.len(), 1);
+    assert_eq!(buyer_prompts.get(0).unwrap().id, prompt_id);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_transfer_updates_both_indexes() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    fund_buyer(&xlm_client, &seller, &context.contract, 100_000);
+    client.buy_prompt(&seller, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    
+    // Invariant: seller should have prompt in index before transfer
+    assert_eq!(client.get_prompts_by_buyer(&seller).len(), 1);
+    assert_eq!(client.get_prompts_by_buyer(&buyer).len(), 0);
+    
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.transfer_license(&seller, &prompt_id, &buyer, &20_000i128);
+    
+    // Invariant: seller's index should be updated (prompt removed)
+    assert_eq!(client.get_prompts_by_buyer(&seller).len(), 0);
+    
+    // Invariant: buyer's index should be updated (prompt added)
+    let buyer_prompts = client.get_prompts_by_buyer(&buyer);
+    assert_eq!(buyer_prompts.len(), 1);
+    assert_eq!(buyer_prompts.get(0).unwrap().id, prompt_id);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_multiple_purchases_tracked() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    
+    let prompt_1 = create_prompt(&env, &client, &creator, "Prompt 1", 5_000, &context.xlm);
+    let prompt_2 = create_prompt(&env, &client, &creator, "Prompt 2", 7_500, &context.xlm);
+    let prompt_3 = create_prompt(&env, &client, &creator, "Prompt 3", 12_000, &context.xlm);
+    
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.buy_prompt(&buyer, &prompt_1, &None::<Bytes>, &5_000i128, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_2, &None::<Bytes>, &7_500i128, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_3, &None::<Bytes>, &12_000i128, &None::<Bytes>);
+    
+    // Invariant: buyer index should contain all purchased prompts
+    let buyer_prompts = client.get_prompts_by_buyer(&buyer);
+    assert_eq!(buyer_prompts.len(), 3);
+    
+    // Invariant: all purchased prompt IDs should be present
+    let mut prompt_ids = Vec::new(&env);
+    for i in 0..buyer_prompts.len() {
+        prompt_ids.push_back(buyer_prompts.get(i).unwrap().id);
+    }
+    let mut found_1 = false;
+    let mut found_2 = false;
+    let mut found_3 = false;
+    for i in 0..prompt_ids.len() {
+        if prompt_ids.get(i).unwrap() == prompt_1 { found_1 = true; }
+        if prompt_ids.get(i).unwrap() == prompt_2 { found_2 = true; }
+        if prompt_ids.get(i).unwrap() == prompt_3 { found_3 = true; }
+    }
+    assert!(found_1);
+    assert!(found_2);
+    assert!(found_3);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_isolation_between_buyers() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer_a = Address::generate(&env);
+    let buyer_b = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    fund_buyer(&xlm_client, &buyer_a, &context.contract, 100_000);
+    fund_buyer(&xlm_client, &buyer_b, &context.contract, 100_000);
+    
+    client.buy_prompt(&buyer_a, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    
+    // Invariant: buyer A should have the prompt
+    assert_eq!(client.get_prompts_by_buyer(&buyer_a).len(), 1);
+    
+    // Invariant: buyer B should not have the prompt
+    assert_eq!(client.get_prompts_by_buyer(&buyer_b).len(), 0);
+    
+    client.buy_prompt(&buyer_b, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    
+    // Invariant: both buyers should now have the prompt
+    assert_eq!(client.get_prompts_by_buyer(&buyer_a).len(), 1);
+    assert_eq!(client.get_prompts_by_buyer(&buyer_b).len(), 1);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_bundle_purchase_updates_index() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let p1 = create_prompt(&env, &client, &creator, "Bundle P1", 10_000, &context.xlm);
+    let p2 = create_prompt(&env, &client, &creator, "Bundle P2", 20_000, &context.xlm);
+    
+    let ids = Vec::from_array(&env, [p1, p2]);
+    let bundle_price = 24_000i128;
+    let bundle_id = client.create_bundle(&creator, &ids, &bundle_price, &context.xlm);
+    
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.purchase_bundle(&buyer, &bundle_id, &bundle_price);
+    
+    // Invariant: buyer index should contain all prompts from bundle
+    let buyer_prompts = client.get_prompts_by_buyer(&buyer);
+    assert_eq!(buyer_prompts.len(), 2);
+    
+    let mut prompt_ids = Vec::new(&env);
+    for i in 0..buyer_prompts.len() {
+        prompt_ids.push_back(buyer_prompts.get(i).unwrap().id);
+    }
+    let mut found_p1 = false;
+    let mut found_p2 = false;
+    for i in 0..prompt_ids.len() {
+        if prompt_ids.get(i).unwrap() == p1 { found_p1 = true; }
+        if prompt_ids.get(i).unwrap() == p2 { found_p2 = true; }
+    }
+    assert!(found_p1);
+    assert!(found_p2);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_creator_not_in_buyer_index() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    // Invariant: creator should not appear in buyer index for their own prompt
+    assert_eq!(client.get_prompts_by_buyer(&creator).len(), 0);
+    
+    // Invariant: creator should have access but not via buyer index
+    assert!(client.has_access(&creator, &prompt_id));
+}
+
+#[test]
+fn test_catalog_indexes_invariant_consistency_after_complex_flow() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator_a = Address::generate(&env);
+    let creator_b = Address::generate(&env);
+    let buyer_1 = Address::generate(&env);
+    let buyer_2 = Address::generate(&env);
+    
+    let p_a1 = create_prompt(&env, &client, &creator_a, "A1", 10_000, &context.xlm);
+    let p_a2 = create_prompt(&env, &client, &creator_a, "A2", 15_000, &context.xlm);
+    let p_b1 = create_prompt(&env, &client, &creator_b, "B1", 20_000, &context.xlm);
+    
+    fund_buyer(&xlm_client, &buyer_1, &context.contract, 100_000);
+    fund_buyer(&xlm_client, &buyer_2, &context.contract, 100_000);
+    
+    // Buyer 1 purchases A1 and B1
+    client.buy_prompt(&buyer_1, &p_a1, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    client.buy_prompt(&buyer_1, &p_b1, &None::<Bytes>, &20_000i128, &None::<Bytes>);
+    
+    // Buyer 2 purchases A2
+    client.buy_prompt(&buyer_2, &p_a2, &None::<Bytes>, &15_000i128, &None::<Bytes>);
+    
+    // Invariant: creator A should have 2 prompts in index
+    assert_eq!(client.get_prompts_by_creator(&creator_a).len(), 2);
+    
+    // Invariant: creator B should have 1 prompt in index
+    assert_eq!(client.get_prompts_by_creator(&creator_b).len(), 1);
+    
+    // Invariant: buyer 1 should have 2 prompts in index
+    assert_eq!(client.get_prompts_by_buyer(&buyer_1).len(), 2);
+    
+    // Invariant: buyer 2 should have 1 prompt in index
+    assert_eq!(client.get_prompts_by_buyer(&buyer_2).len(), 1);
+    
+    // Transfer A1 from buyer 1 to buyer 2
+    fund_buyer(&xlm_client, &buyer_2, &context.contract, 100_000);
+    client.transfer_license(&buyer_1, &p_a1, &buyer_2, &25_000i128);
+    
+    // Invariant: buyer 1 should now have 1 prompt (B1 only)
+    assert_eq!(client.get_prompts_by_buyer(&buyer_1).len(), 1);
+    let buyer_1_prompts = client.get_prompts_by_buyer(&buyer_1);
+    assert_eq!(buyer_1_prompts.get(0).unwrap().id, p_b1);
+    
+    // Invariant: buyer 2 should now have 2 prompts (A2 and transferred A1)
+    assert_eq!(client.get_prompts_by_buyer(&buyer_2).len(), 2);
+    let buyer_2_prompts = client.get_prompts_by_buyer(&buyer_2);
+    let mut found_a1 = false;
+    let mut found_a2 = false;
+    for i in 0..buyer_2_prompts.len() {
+        if buyer_2_prompts.get(i).unwrap().id == p_a1 { found_a1 = true; }
+        if buyer_2_prompts.get(i).unwrap().id == p_a2 { found_a2 = true; }
+    }
+    assert!(found_a1);
+    assert!(found_a2);
+    
+    // Invariant: creator indexes should remain unchanged
+    assert_eq!(client.get_prompts_by_creator(&creator_a).len(), 2);
+    assert_eq!(client.get_prompts_by_creator(&creator_b).len(), 1);
+}
