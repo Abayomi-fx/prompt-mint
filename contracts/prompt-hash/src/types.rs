@@ -117,6 +117,10 @@ pub struct Settlement {
     pub referrer: Option<Address>,
     pub referrer_amount: i128,
     pub split_amount: i128,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SubscriptionConfig {
     pub creator: Address,
     pub duration_secs: u64,
@@ -131,6 +135,10 @@ pub struct ReferralCode {
     pub owner: Address,
     pub reward_bps: u32,
     pub active: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Subscription {
     pub creator: Address,
     pub subscriber: Address,
