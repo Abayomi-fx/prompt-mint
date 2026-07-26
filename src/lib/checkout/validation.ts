@@ -9,6 +9,10 @@ import {
   assessCheckoutXlmSufficiency,
   type CheckoutBalanceAssessment,
 } from '@/lib/checkout/xlmBalance';
+import {
+  classifyContractError,
+  formatContractErrorMessage,
+} from '@/lib/stellar/promptHashClient';
 
 export interface CheckoutValidationError {
   promptId: string;
@@ -92,10 +96,11 @@ export async function validateCheckoutItem(
       });
     }
   } catch (error) {
+    const contractError = classifyContractError(error);
     errors.push({
       promptId: cartItem.promptId,
       field: 'fetch',
-      message: 'Failed to verify listing status',
+      message: formatContractErrorMessage(contractError),
     });
   }
 
