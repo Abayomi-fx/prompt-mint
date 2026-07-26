@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, Loader2, LockKeyhole } from "lucide-react";
+import { Eye, GripVertical, Loader2, LockKeyhole } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,6 +15,7 @@ import {
 } from "@/lib/stellar/promptHashClient";
 import { formatPriceLabel, stroopsToXlmString, xlmToStroops } from "@/lib/stellar/format";
 import { unlockPromptContent } from "@/lib/prompts/unlock";
+import { getPromptOrder, setPromptOrder } from "@/lib/prompts/promptOrderClient";
 
 import { FreshnessBadge } from "@/components/FreshnessBadge";
 import { useNetworkState } from "@/hooks/useNetworkState";
@@ -97,6 +98,75 @@ const MyPrompts = ({ onCreateNew: _onCreateNew }: MyPromptsProps) => {
   });
 
   const purchasedPrompts = purchasedQuery.data ?? [];
+
+  const orderQuery = useQuery({
+    queryKey: ["prompt-order", address],
+    queryFn: () => (address ? getPromptOrder(address) : Promise.resolve([])),
+    enabled: Boolean(address),
+  });
+
+  const [localOrder, setLocalOrder] = useState<string[] | null>(null);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLocalOrder(null);
+    setDraggedId(null);
+  }, [address]);
+
+  const orderedCreatedPrompts = useMemo(() => {
+    const savedOrder = localOrder ?? orderQuery.data ?? [];
+    const byId = new Map(createdPrompts.map((prompt) => [prompt.id.toString(), prompt]));
+    const known = savedOrder.filter((id) => byId.has(id));
+    const missing = createdPrompts
+      .map((prompt) => prompt.id.toString())
+      .filter((id) => !known.includes(id));
+    return [...known, ...missing].map((id) => byId.get(id)!);
+  }, [createdPrompts, localOrder, orderQuery.data]);
+
+  const persistPromptOrder = async (order: string[]) => {
+    if (!address) return;
+    try {
+      const saved = await setPromptOrder(address, order);
+      queryClient.setQueryData(["prompt-order", address], saved);
+      setLocalOrder(null);
+    } catch (error) {
+      updateError(error instanceof Error ? error.message : "Failed to save prompt order.");
+    }
+  };
+
+  const handlePromptDragStart = (promptId: string) => (event: DragEvent) => {
+    setDraggedId(promptId);
+    event.dataTransfer.effectAllowed = "move";
+  };
+
+  const handlePromptDragOver = (event: DragEvent) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  };
+
+  const handlePromptDrop = (targetId: string) => (event: DragEvent) => {
+    event.preventDefault();
+    if (!draggedId || draggedId === targetId) {
+      setDraggedId(null);
+      return;
+    }
+
+    const currentOrder = orderedCreatedPrompts.map((prompt) => prompt.id.toString());
+    const fromIndex = currentOrder.indexOf(draggedId);
+    const toIndex = currentOrder.indexOf(targetId);
+    if (fromIndex === -1 || toIndex === -1) {
+      setDraggedId(null);
+      return;
+    }
+
+    const nextOrder = [...currentOrder];
+    nextOrder.splice(fromIndex, 1);
+    nextOrder.splice(toIndex, 0, draggedId);
+
+    setLocalOrder(nextOrder);
+    setDraggedId(null);
+    void persistPromptOrder(nextOrder);
+  };
 
   const mergedDrafts = useMemo(() => {
     return Object.fromEntries(
@@ -269,15 +339,29 @@ const MyPrompts = ({ onCreateNew: _onCreateNew }: MyPromptsProps) => {
           <div className="rounded-3xl border border-white/10 bg-white/5 p-8 text-sm text-slate-300">
             Loading created prompts...
           </div>
-        ) : createdPrompts.length === 0 ? (
+        ) : orderedCreatedPrompts.length === 0 ? (
           emptyState
         ) : (
           <div className="grid gap-6 xl:grid-cols-2">
-            {createdPrompts.map((prompt) => (
+            {orderedCreatedPrompts.map((prompt) => (
               <Card
                 key={prompt.id.toString()}
-                className="border-white/10 bg-slate-950/70 text-white"
+                draggable
+                onDragStart={handlePromptDragStart(prompt.id.toString())}
+                onDragOver={handlePromptDragOver}
+                onDrop={handlePromptDrop(prompt.id.toString())}
+                onDragEnd={() => setDraggedId(null)}
+                className={`border-white/10 bg-slate-950/70 text-white transition-opacity ${
+                  draggedId === prompt.id.toString() ? "opacity-50" : ""
+                }`}
               >
+                <div className="flex items-center gap-2 px-5 pt-4 text-slate-500">
+                  <GripVertical
+                    className="h-4 w-4 cursor-grab active:cursor-grabbing"
+                    aria-label="Drag to reorder"
+                  />
+                  <span className="text-xs uppercase tracking-[0.2em]">Drag to reorder</span>
+                </div>
                 <div className="aspect-video overflow-hidden rounded-t-xl">
                   <img
                     src={prompt.imageUrl || "/images/codeguru.png"}
