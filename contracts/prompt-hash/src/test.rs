@@ -1,6 +1,6 @@
 use crate::contract::{PromptHashContract, PromptHashContractClient};
 use crate::mock_asset::FungibleTokenContract;
-use crate::types::{Error, ListingConfig, Split};
+use crate::types::{Bundle, Discount, Error, ListingConfig, Split};
 extern crate std;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
@@ -197,14 +197,14 @@ fn test_buy_prompt_grants_access_to_multiple_buyers_and_tracks_exact_fees() {
     client.buy_prompt(
         &buyer_one,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &12_345i128,
         &None::<Bytes>,
     );
     client.buy_prompt(
         &buyer_two,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &12_345i128,
         &None::<Bytes>,
     );
@@ -251,7 +251,7 @@ fn test_fee_routing_pays_seller_and_platform_wallet_for_exact_purchase() {
     let seller_start = xlm_client.balance(&creator);
     let fee_start = xlm_client.balance(&context.fee_wallet);
 
-    client.buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
 
     let expected_fee = price * 500 / 10_000;
     let expected_seller_payout = price - expected_fee;
@@ -293,7 +293,7 @@ fn test_small_price_fee_rounding_keeps_fractional_fee_with_seller() {
     let seller_start = xlm_client.balance(&creator);
     let fee_start = xlm_client.balance(&context.fee_wallet);
 
-    client.buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
 
     assert_eq!(price * 500 / 10_000, 0);
     assert_eq!(xlm_client.balance(&creator), seller_start + price);
@@ -335,7 +335,7 @@ fn test_seller_payout_split_rounding_uses_integer_stroops() {
     let co_creator_start = xlm_client.balance(&co_creator);
     let fee_start = xlm_client.balance(&context.fee_wallet);
 
-    client.buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
 
     let expected_fee = price * 500 / 10_000;
     let expected_split = price * 333 / 10_000;
@@ -385,7 +385,7 @@ fn test_failed_purchase_does_not_grant_access_or_route_partial_payouts() {
     let result = client.try_buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &(price - 1),
         &None::<Bytes>,
     );
@@ -429,7 +429,7 @@ fn test_has_access_is_true_for_creator_and_buyer_but_not_stranger() {
     client.buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &8_000i128,
         &None::<Bytes>,
     );
@@ -454,7 +454,7 @@ fn test_get_prompts_by_creator_and_buyer() {
     client.buy_prompt(
         &buyer,
         &prompt_a,
-        &None::<Address>,
+        &None::<Bytes>,
         &8_000i128,
         &None::<Bytes>,
     );
@@ -486,7 +486,7 @@ fn test_license_owner_can_transfer_and_creator_receives_royalty() {
     client.buy_prompt(
         &seller,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &10_000i128,
         &None::<Bytes>,
     );
@@ -535,7 +535,7 @@ fn test_non_owner_cannot_transfer_license() {
     client.buy_prompt(
         &owner,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &10_000i128,
         &None::<Bytes>,
     );
@@ -553,7 +553,7 @@ fn test_non_owner_cannot_transfer_license() {
 }
 
 #[test]
-fn test_transfer_license_rejects_zero_price_and_self_transfer() {
+fn test_transfer_license_allows_zero_gift_and_rejects_self_transfer() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
@@ -575,21 +575,21 @@ fn test_transfer_license_rejects_zero_price_and_self_transfer() {
     client.buy_prompt(
         &owner,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &10_000i128,
         &None::<Bytes>,
     );
 
-    let zero_price = client.try_transfer_license(&owner, &prompt_id, &buyer, &0i128);
-    match zero_price {
-        Err(Ok(Error::InvalidPaymentAmount)) => {}
-        other => panic!(
-            "expected InvalidPaymentAmount for zero resale, got {:?}",
-            other
-        ),
-    }
+    // #271: a zero-consideration transfer is a valid gift. It moves access to the
+    // new owner and must NOT attempt a bogus royalty payment (creator balance
+    // unchanged).
+    let creator_before = xlm_client.balance(&creator);
+    client.transfer_license(&owner, &prompt_id, &buyer, &0i128);
+    assert_eq!(xlm_client.balance(&creator), creator_before);
+    assert!(!client.has_access(&owner, &prompt_id));
+    assert!(client.has_access(&buyer, &prompt_id));
 
-    let self_transfer = client.try_transfer_license(&owner, &prompt_id, &owner, &20_000i128);
+    let self_transfer = client.try_transfer_license(&buyer, &prompt_id, &buyer, &20_000i128);
     match self_transfer {
         Err(Ok(Error::InvalidLicenseTransfer)) => {}
         other => panic!(
@@ -614,7 +614,7 @@ fn test_duplicate_purchase_returns_typed_error() {
     client.buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &4_000i128,
         &None::<Bytes>,
     );
@@ -622,13 +622,87 @@ fn test_duplicate_purchase_returns_typed_error() {
     let duplicate_purchase = client.try_buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &4_000i128,
         &None::<Bytes>,
     );
     match duplicate_purchase {
         Err(Ok(error)) => assert_eq!(error, Error::AlreadyPurchased),
         other => panic!("unexpected duplicate purchase result: {:?}", other),
+    }
+}
+
+// ─── #272: Prompt Bundling ──────────────────────────────────────────────────
+
+#[test]
+fn test_create_bundle_rejects_unowned_prompts() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let other = Address::generate(&env);
+    let owned = create_prompt(&env, &client, &creator, "Owned", 10_000, &context.xlm);
+    let foreign = create_prompt(&env, &client, &other, "Foreign", 10_000, &context.xlm);
+
+    let ids = Vec::from_array(&env, [owned, foreign]);
+    let result = client.try_create_bundle(&creator, &ids, &15_000i128, &context.xlm);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for unowned prompt in bundle, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_purchase_bundle_grants_access_and_splits_payment() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let p1 = create_prompt(&env, &client, &creator, "Bundle P1", 10_000, &context.xlm);
+    let p2 = create_prompt(&env, &client, &creator, "Bundle P2", 20_000, &context.xlm);
+
+    let ids = Vec::from_array(&env, [p1, p2]);
+    let bundle_price = 24_000i128;
+    let bundle_id = client.create_bundle(&creator, &ids, &bundle_price, &context.xlm);
+
+    let stored: Bundle = client.get_bundle(&bundle_id);
+    assert_eq!(stored.price, bundle_price);
+    assert_eq!(stored.prompt_ids.len(), 2);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    let creator_before = xlm_client.balance(&creator);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+    let buyer_before = xlm_client.balance(&buyer);
+
+    client.purchase_bundle(&buyer, &bundle_id, &bundle_price);
+
+    // Access granted to every prompt in the bundle.
+    assert!(client.has_access(&buyer, &p1));
+    assert!(client.has_access(&buyer, &p2));
+
+    // Payment split: platform fee (default 500 bps) then creator remainder.
+    let fee = bundle_price * 500 / 10_000;
+    let creator_amount = bundle_price - fee;
+    assert_eq!(xlm_client.balance(&creator), creator_before + creator_amount);
+    assert_eq!(xlm_client.balance(&context.fee_wallet), fee_before + fee);
+    assert_eq!(xlm_client.balance(&buyer), buyer_before - bundle_price);
+}
+
+#[test]
+fn test_purchase_nonexistent_bundle_fails_cleanly() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let buyer = Address::generate(&env);
+    let result = client.try_purchase_bundle(&buyer, &999u128, &10_000i128);
+    match result {
+        Err(Ok(Error::BundleNotFound)) => {}
+        other => panic!("expected BundleNotFound, got {:?}", other),
     }
 }
 
@@ -651,7 +725,7 @@ fn test_creator_cannot_buy_own_prompt() {
     let result = client.try_buy_prompt(
         &creator,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &4_000i128,
         &None::<Bytes>,
     );
@@ -685,7 +759,7 @@ fn test_inactive_prompt_cannot_be_bought() {
     let result = client.try_buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &4_000i128,
         &None::<Bytes>,
     );
@@ -722,7 +796,7 @@ fn test_buy_prompt_with_zero_fee() {
     let seller_start = xlm_client.balance(&creator);
     let fee_start = xlm_client.balance(&context.fee_wallet);
 
-    client.buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
 
     assert_eq!(xlm_client.balance(&creator), seller_start + price);
     assert_eq!(xlm_client.balance(&context.fee_wallet), fee_start);
@@ -735,8 +809,10 @@ fn test_buy_prompt_with_max_fee() {
     let client = PromptHashContractClient::new(&env, &context.contract);
     let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
 
-    // Set fee to 100% (10,000 BPS)
-    client.set_fee_percentage(&10_000);
+    // Set fee to the maximum allowed: 20% (2,000 BPS). #41 hard-caps
+    // set_fee_percentage at MAX_FEE_BPS (2,000); 10,000 (100%) used to be
+    // accepted here but is now correctly rejected with FeeExceedsMaximum.
+    client.set_fee_percentage(&2_000);
 
     let creator = Address::generate(&env);
     let buyer = Address::generate(&env);
@@ -755,10 +831,29 @@ fn test_buy_prompt_with_max_fee() {
     let seller_start = xlm_client.balance(&creator);
     let fee_start = xlm_client.balance(&context.fee_wallet);
 
-    client.buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
 
-    assert_eq!(xlm_client.balance(&creator), seller_start);
-    assert_eq!(xlm_client.balance(&context.fee_wallet), fee_start + price);
+    // At the 20% cap: fee = 2,000, creator receives the remaining 8,000.
+    assert_eq!(xlm_client.balance(&creator), seller_start + 8_000);
+    assert_eq!(xlm_client.balance(&context.fee_wallet), fee_start + 2_000);
+}
+
+#[test]
+fn test_set_fee_percentage_above_max_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    // #41: 2,000 bps (20%) is a hard ceiling; anything above must be rejected.
+    let result = client.try_set_fee_percentage(&2_001);
+    match result {
+        Err(Ok(Error::FeeExceedsMaximum)) => {}
+        other => panic!("expected FeeExceedsMaximum, got {:?}", other),
+    }
+
+    // The boundary itself must still be accepted.
+    client.set_fee_percentage(&2_000);
+    assert_eq!(client.get_fee_percentage(), 2_000);
 }
 
 #[test]
@@ -800,13 +895,8 @@ fn test_buy_nonexistent_prompt_fails() {
     let client = PromptHashContractClient::new(&env, &context.contract);
     let buyer = Address::generate(&env);
 
-    let result = client.try_buy_prompt(
-        &buyer,
-        &999_999,
-        &None::<Address>,
-        &1_000i128,
-        &None::<Bytes>,
-    );
+    let result =
+        client.try_buy_prompt(&buyer, &999_999, &None::<Bytes>, &1_000i128, &None::<Bytes>);
     match result {
         Err(Ok(Error::PromptNotFound)) => {}
         other => panic!(
@@ -844,7 +934,7 @@ fn test_arithmetic_safety_for_massive_prices() {
     client.buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &massive_price,
         &None::<Bytes>,
     );
@@ -969,11 +1059,14 @@ fn test_buy_prompt_with_referrer_splits_payment_correctly() {
     let creator_start = xlm_client.balance(&creator);
     let fee_start = xlm_client.balance(&context.fee_wallet);
     let referrer_start = xlm_client.balance(&referrer);
+    let referral_code = Bytes::from_slice(&env, b"referral-secret-001");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+    client.register_referral_code(&referrer, &referral_hash);
 
     client.buy_prompt(
         &buyer,
         &prompt_id,
-        &Some(referrer.clone()),
+        &Some(referral_code),
         &price,
         &None::<Bytes>,
     );
@@ -999,6 +1092,74 @@ fn test_buy_prompt_with_referrer_splits_payment_correctly() {
     );
 }
 
+// ─── Issue #274: Referral tracking events ─────────────────────────────────────
+
+#[test]
+fn test_register_referral_code_emits_event() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    client.set_referral_percentage(&500);
+
+    let referrer = Address::generate(&env);
+    let referral_code = Bytes::from_slice(&env, b"event-ref-secret-274");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+
+    let before = env.events().all().len();
+    client.register_referral_code(&referrer, &referral_hash);
+    let after = env.events().all().len();
+
+    // register_referral_code now publishes a ReferralCodeRegistered event.
+    assert!(after > before, "expected a referral-code-registered event to be emitted");
+}
+
+#[test]
+fn test_purchase_with_referrer_emits_reward_event() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    client.set_referral_percentage(&500);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let referrer = Address::generate(&env);
+    let price: i128 = 10_000;
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Reward Event Prompt",
+        price,
+        &context.xlm,
+    );
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, price);
+
+    let referral_code = Bytes::from_slice(&env, b"reward-event-secret-274");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+    client.register_referral_code(&referrer, &referral_hash);
+
+    let before = env.events().all().len();
+    client.buy_prompt(
+        &buyer,
+        &prompt_id,
+        &Some(referral_code),
+        &price,
+        &None::<Bytes>,
+    );
+    let after = env.events().all().len();
+
+    // A purchase with a recorded referrer emits the PromptPurchased event plus a
+    // dedicated ReferralRewardPaid event.
+    assert!(
+        after >= before + 2,
+        "expected purchase + referral-reward-paid events to be emitted"
+    );
+}
+
 #[test]
 fn test_referrer_cannot_be_buyer() {
     let env: Env = Default::default();
@@ -1021,12 +1182,15 @@ fn test_referrer_cannot_be_buyer() {
     );
 
     fund_buyer(&xlm_client, &buyer, &context.contract, price);
+    let referral_code = Bytes::from_slice(&env, b"self-referral-secret");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+    client.register_referral_code(&buyer, &referral_hash);
 
     // buyer tries to refer themselves
     let result = client.try_buy_prompt(
         &buyer,
         &prompt_id,
-        &Some(buyer.clone()),
+        &Some(referral_code),
         &price,
         &None::<Bytes>,
     );
@@ -1058,12 +1222,15 @@ fn test_referrer_cannot_be_creator() {
     );
 
     fund_buyer(&xlm_client, &buyer, &context.contract, price);
+    let referral_code = Bytes::from_slice(&env, b"creator-ref-secret");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+    client.register_referral_code(&creator, &referral_hash);
 
     // creator tries to refer themselves
     let result = client.try_buy_prompt(
         &buyer,
         &prompt_id,
-        &Some(creator.clone()),
+        &Some(referral_code),
         &price,
         &None::<Bytes>,
     );
@@ -1099,7 +1266,7 @@ fn test_buy_without_referrer_no_referral_amount_paid() {
     let creator_start = xlm_client.balance(&creator);
     let fee_start = xlm_client.balance(&context.fee_wallet);
 
-    client.buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
 
     // Without referrer: creator gets price - fee only
     let expected_fee = price * 500 / 10_000;
@@ -1193,8 +1360,7 @@ fn test_buy_prompt_blocked_when_paused() {
 
     client.set_pause_status(&true);
 
-    let result =
-        client.try_buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
+    let result = client.try_buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
     match result {
         Err(Ok(Error::ContractIsPaused)) => {}
         other => panic!("expected ContractIsPaused for buy_prompt, got {:?}", other),
@@ -1282,7 +1448,7 @@ fn test_unpause_restores_operations() {
     assert!(!client.is_paused());
 
     fund_buyer(&xlm_client, &buyer, &context.contract, price);
-    client.buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
     assert!(client.has_access(&buyer, &prompt_id));
 }
 
@@ -1338,7 +1504,7 @@ fn test_bulk_purchase_blocked_when_paused() {
     let mut amounts = Vec::new(&env);
     amounts.push_back(1_000i128);
 
-    let result = client.try_buy_prompts_bulk(&buyer, &ids, &amounts, &None::<Address>);
+    let result = client.try_buy_prompts_bulk(&buyer, &ids, &amounts, &None::<Bytes>);
     match result {
         Err(Ok(Error::ContractIsPaused)) => {}
         other => panic!(
@@ -1379,7 +1545,7 @@ fn test_tip_above_price_succeeds_and_creator_receives_full_tip() {
     client.buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &total_payment,
         &None::<Bytes>,
     );
@@ -1422,7 +1588,7 @@ fn test_payment_below_price_fails() {
     let result = client.try_buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &(price - 1),
         &None::<Bytes>,
     );
@@ -1454,7 +1620,7 @@ fn test_exact_price_payment_succeeds() {
     fund_buyer(&xlm_client, &buyer, &context.contract, price);
 
     // Exact price should succeed without emitting a tip event
-    client.buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
     assert!(client.has_access(&buyer, &prompt_id));
 }
 
@@ -1496,7 +1662,7 @@ fn test_voucher_applies_discount_on_purchase() {
     client.buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &discounted_price,
         &Some(voucher_code),
     );
@@ -1549,7 +1715,7 @@ fn test_voucher_is_single_use_second_use_fails() {
     client.buy_prompt(
         &buyer_one,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &discounted_price,
         &Some(voucher_code.clone()),
     );
@@ -1558,7 +1724,7 @@ fn test_voucher_is_single_use_second_use_fails() {
     let result = client.try_buy_prompt(
         &buyer_two,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &discounted_price,
         &Some(voucher_code),
     );
@@ -1593,7 +1759,7 @@ fn test_invalid_voucher_code_fails() {
     let result = client.try_buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &price,
         &Some(wrong_code),
     );
@@ -1664,7 +1830,7 @@ fn test_creator_can_remove_voucher() {
     let result = client.try_buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &price,
         &Some(voucher_code),
     );
@@ -1709,11 +1875,14 @@ fn test_voucher_with_referrer_combined() {
     let creator_start = xlm_client.balance(&creator);
     let fee_start = xlm_client.balance(&context.fee_wallet);
     let referrer_start = xlm_client.balance(&referrer);
+    let referral_code = Bytes::from_slice(&env, b"voucher-ref-secret");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+    client.register_referral_code(&referrer, &referral_hash);
 
     client.buy_prompt(
         &buyer,
         &prompt_id,
-        &Some(referrer.clone()),
+        &Some(referral_code),
         &discounted_price,
         &Some(voucher_code),
     );
@@ -1764,7 +1933,7 @@ fn test_buy_prompt_with_non_xlm_asset() {
     let creator_start = usdc_client.balance(&creator);
     let fee_start = usdc_client.balance(&context.fee_wallet);
 
-    client.buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
 
     let expected_fee = price * 500 / 10_000;
     let expected_creator = price - expected_fee;
@@ -1819,7 +1988,7 @@ fn test_create_and_buy_different_assets() {
     client.buy_prompt(
         &buyer,
         &prompt_xlm,
-        &None::<Address>,
+        &None::<Bytes>,
         &xlm_price,
         &None::<Bytes>,
     );
@@ -1836,7 +2005,7 @@ fn test_create_and_buy_different_assets() {
     client.buy_prompt(
         &buyer,
         &prompt_usdc,
-        &None::<Address>,
+        &None::<Bytes>,
         &usdc_price,
         &None::<Bytes>,
     );
@@ -2006,7 +2175,7 @@ fn test_buy_expired_listing_fails() {
     client.buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &5_000i128,
         &None::<Bytes>,
     );
@@ -2020,7 +2189,7 @@ fn test_buy_expired_listing_fails() {
     let result = client.try_buy_prompt(
         &buyer2,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &5_000i128,
         &None::<Bytes>,
     );
@@ -2072,7 +2241,7 @@ fn test_extend_listing_pushes_expiry_and_allows_purchase() {
     client.buy_prompt(
         &buyer,
         &prompt_id,
-        &None::<Address>,
+        &None::<Bytes>,
         &5_000i128,
         &None::<Bytes>,
     );
@@ -2185,7 +2354,7 @@ fn test_buy_prompt_with_splits_distributes_correctly() {
     let co_creator_start = xlm_client.balance(&co_creator);
     let fee_start = xlm_client.balance(&context.fee_wallet);
 
-    client.buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
 
     let expected_fee = price * 500 / 10_000; // 500
     let expected_split = price * 2_000 / 10_000; // 2_000
@@ -2296,7 +2465,7 @@ fn test_multiple_splits_distribute_all_recipients() {
     let co1_start = xlm_client.balance(&co1);
     let co2_start = xlm_client.balance(&co2);
 
-    client.buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
 
     assert_eq!(
         xlm_client.balance(&creator),
@@ -2335,7 +2504,7 @@ fn test_buy_prompts_bulk_purchases_all_and_grants_access() {
     amounts.push_back(price_a);
     amounts.push_back(price_b);
 
-    client.buy_prompts_bulk(&buyer, &ids, &amounts, &None::<Address>);
+    client.buy_prompts_bulk(&buyer, &ids, &amounts, &None::<Bytes>);
 
     assert!(client.has_access(&buyer, &prompt_a));
     assert!(client.has_access(&buyer, &prompt_b));
@@ -2372,7 +2541,7 @@ fn test_buy_prompts_bulk_atomicity_one_failure_reverts_all() {
     amounts.push_back(price);
     amounts.push_back(price);
 
-    let result = client.try_buy_prompts_bulk(&buyer, &ids, &amounts, &None::<Address>);
+    let result = client.try_buy_prompts_bulk(&buyer, &ids, &amounts, &None::<Bytes>);
     match result {
         Err(Ok(Error::PromptNotFound)) => {}
         other => panic!(
@@ -2400,7 +2569,7 @@ fn test_buy_prompts_bulk_mismatched_lengths_fails() {
 
     let amounts: Vec<i128> = Vec::new(&env); // empty — mismatch
 
-    let result = client.try_buy_prompts_bulk(&buyer, &ids, &amounts, &None::<Address>);
+    let result = client.try_buy_prompts_bulk(&buyer, &ids, &amounts, &None::<Bytes>);
     match result {
         Err(Ok(Error::InvalidPrice)) => {}
         other => panic!(
@@ -2438,7 +2607,10 @@ fn test_buy_prompts_bulk_with_referrer() {
     amounts.push_back(price);
 
     let referrer_start = xlm_client.balance(&referrer);
-    client.buy_prompts_bulk(&buyer, &ids, &amounts, &Some(referrer.clone()));
+    let referral_code = Bytes::from_slice(&env, b"bulk-referral-secret");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+    client.register_referral_code(&referrer, &referral_hash);
+    client.buy_prompts_bulk(&buyer, &ids, &amounts, &Some(referral_code));
 
     // referral = 10_000 * 500 / 10_000 = 500 per prompt × 2
     let expected_referral = price * 500 / 10_000 * 2;
@@ -2494,6 +2666,140 @@ fn test_create_bundle_stores_fields_and_is_discoverable() {
 
 #[test]
 fn test_buy_bundle_grants_access_routes_fees_and_snapshots_items() {
+#[test]
+fn test_referral_rules_are_snapshotted_and_settlement_is_auditable() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let referrer = Address::generate(&env);
+    let price = 10_000i128;
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Auditable referral",
+        price,
+        &context.xlm,
+    );
+
+    client.set_referral_percentage(&500);
+    let referral_code = Bytes::from_slice(&env, b"auditable-code-secret");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+    client.register_referral_code(&referrer, &referral_hash);
+    // Registered codes retain their original rules even if the global rate changes.
+    client.set_referral_percentage(&900);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, price);
+    client.buy_prompt(
+        &buyer,
+        &prompt_id,
+        &Some(referral_code),
+        &price,
+        &None::<Bytes>,
+    );
+
+    let purchase = client.get_purchase_details(&prompt_id, &buyer);
+    assert_eq!(purchase.settlement.buyer_amount, price);
+    assert_eq!(purchase.settlement.platform_amount, 500);
+    assert_eq!(purchase.settlement.referrer, Some(referrer));
+    assert_eq!(purchase.settlement.referrer_amount, 500);
+    assert_eq!(purchase.settlement.creator_amount, 9_000);
+    assert_eq!(
+        purchase.settlement.buyer_amount,
+        purchase.settlement.creator_amount
+            + purchase.settlement.platform_amount
+            + purchase.settlement.referrer_amount
+            + purchase.settlement.split_amount
+    );
+}
+
+// ─── Issue #125: Creator catalog subscription passes ─────────────────────────
+
+#[test]
+fn test_subscription_scope_and_exclusive_expiry_boundary() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+    let creator = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let eligible = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Eligible subscription listing",
+        20_000,
+        &context.xlm,
+    );
+    let excluded = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Excluded subscription listing",
+        20_000,
+        &context.xlm,
+    );
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+    client.configure_subscription_pass(&creator, &600, &10_000, &context.xlm, &true);
+    client.set_subscription_eligibility(&creator, &eligible, &true);
+    fund_buyer(&xlm_client, &subscriber, &context.contract, 10_000);
+
+    let expires_at = client.subscribe_catalog(&subscriber, &creator, &10_000);
+    assert_eq!(expires_at, 1_600);
+    assert!(client.has_access(&subscriber, &eligible));
+    assert!(!client.has_access(&subscriber, &excluded));
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_599);
+    assert!(client.has_access(&subscriber, &eligible));
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_600);
+    assert!(!client.has_access(&subscriber, &eligible));
+}
+
+#[test]
+fn test_subscription_renewal_failure_is_atomic_and_success_preserves_time() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+    let creator = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    env.ledger().with_mut(|ledger| ledger.timestamp = 2_000);
+    client.configure_subscription_pass(&creator, &300, &10_000, &context.xlm, &true);
+    fund_buyer(&xlm_client, &subscriber, &context.contract, 30_000);
+    client.subscribe_catalog(&subscriber, &creator, &10_000);
+
+    client.configure_subscription_pass(&creator, &300, &12_000, &context.xlm, &true);
+    let wrong_price = client.try_renew_catalog_subscription(&subscriber, &creator, &10_000);
+    assert!(matches!(
+        wrong_price,
+        Err(Ok(Error::InvalidSubscriptionPrice))
+    ));
+    assert_eq!(
+        client.get_subscription(&subscriber, &creator).expires_at,
+        2_300
+    );
+
+    let renewed_until = client.renew_catalog_subscription(&subscriber, &creator, &12_000);
+    assert_eq!(renewed_until, 2_600);
+    assert_eq!(
+        client.get_subscription(&subscriber, &creator).renewal_count,
+        1
+    );
+
+    client.configure_subscription_pass(&creator, &300, &12_000, &context.xlm, &false);
+    let closed = client.try_renew_catalog_subscription(&subscriber, &creator, &12_000);
+    assert!(matches!(closed, Err(Ok(Error::SubscriptionInactive))));
+    assert_eq!(
+        client.get_subscription(&subscriber, &creator).expires_at,
+        2_600
+    );
+}
+
+#[test]
+fn test_referral_code_guessing_replay_and_cycles_are_rejected() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
@@ -2580,6 +2886,193 @@ fn test_duplicate_bundle_purchase_is_rejected() {
 
 #[test]
 fn test_creator_cannot_buy_own_bundle() {
+    let creator = Address::generate(&env);
+    let buyer_a = Address::generate(&env);
+    let buyer_b = Address::generate(&env);
+    let referrer = Address::generate(&env);
+    let price = 10_000i128;
+    let prompt_a = create_prompt(&env, &client, &creator, "Referral A", price, &context.xlm);
+    let prompt_b = create_prompt(&env, &client, &creator, "Referral B", price, &context.xlm);
+    fund_buyer(&xlm_client, &buyer_a, &context.contract, price * 2);
+    fund_buyer(&xlm_client, &buyer_b, &context.contract, price);
+
+    let short = Bytes::from_slice(&env, b"guess");
+    let unknown = client.try_buy_prompt(&buyer_a, &prompt_a, &Some(short), &price, &None::<Bytes>);
+    assert!(matches!(unknown, Err(Ok(Error::ReferralCodeTooShort))));
+
+    let code_b = Bytes::from_slice(&env, b"buyer-b-code-secret");
+    let hash_b = BytesN::from_array(&env, &env.crypto().sha256(&code_b).to_array());
+    client.register_referral_code(&buyer_b, &hash_b);
+    client.buy_prompt(&buyer_a, &prompt_a, &Some(code_b), &price, &None::<Bytes>);
+
+    let other_code = Bytes::from_slice(&env, b"other-referrer-secret");
+    let other_hash = BytesN::from_array(&env, &env.crypto().sha256(&other_code).to_array());
+    client.register_referral_code(&referrer, &other_hash);
+    let replay = client.try_buy_prompt(
+        &buyer_a,
+        &prompt_b,
+        &Some(other_code),
+        &price,
+        &None::<Bytes>,
+    );
+    assert!(matches!(replay, Err(Ok(Error::ReferralReplay))));
+
+    let code_a = Bytes::from_slice(&env, b"buyer-a-code-secret");
+    let hash_a = BytesN::from_array(&env, &env.crypto().sha256(&code_a).to_array());
+    client.register_referral_code(&buyer_a, &hash_a);
+    let circular =
+        client.try_buy_prompt(&buyer_b, &prompt_b, &Some(code_a), &price, &None::<Bytes>);
+    assert!(matches!(circular, Err(Ok(Error::CircularReferral))));
+}
+
+#[test]
+fn test_catalog_changes_transfers_and_direct_purchases_are_independent() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+    let creator = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let transferee = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Catalog changes",
+        20_000,
+        &context.xlm,
+    );
+    client.configure_subscription_pass(&creator, &600, &10_000, &context.xlm, &true);
+    client.set_subscription_eligibility(&creator, &prompt_id, &true);
+    fund_buyer(&xlm_client, &subscriber, &context.contract, 30_000);
+    client.subscribe_catalog(&subscriber, &creator, &10_000);
+    assert!(client.has_access(&subscriber, &prompt_id));
+
+    // Removing a listing revokes pass access immediately.
+    client.set_subscription_eligibility(&creator, &prompt_id, &false);
+    assert!(!client.has_access(&subscriber, &prompt_id));
+
+    // A direct purchase remains authoritative even when subscription-ineligible.
+    client.buy_prompt(
+        &subscriber,
+        &prompt_id,
+        &None::<Bytes>,
+        &20_000,
+        &None::<Bytes>,
+    );
+    assert!(client.has_access(&subscriber, &prompt_id));
+
+    fund_buyer(&xlm_client, &transferee, &context.contract, 15_000);
+    client.transfer_license(&subscriber, &prompt_id, &transferee, &15_000);
+    assert!(client.has_access(&transferee, &prompt_id));
+    assert!(!client.has_access(&subscriber, &prompt_id));
+    assert_eq!(
+        client.get_subscription(&subscriber, &creator).subscriber,
+        subscriber
+    );
+}
+
+// ─── #131: Content Classification Tests ──────────────────────────────────────
+
+#[test]
+fn test_create_prompt_default_classification() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Default Class",
+        10_000,
+        &context.xlm,
+    );
+
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(prompt.classification, String::from_str(&env, "general"));
+    assert_eq!(prompt.safety_flags.len(), 0);
+}
+
+#[test]
+fn test_set_classification_valid_values() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Class Test", 10_000, &context.xlm);
+
+    client.set_classification(
+        &creator,
+        &prompt_id,
+        &String::from_str(&env, "educational"),
+        &Vec::new(&env),
+    );
+
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(prompt.classification, String::from_str(&env, "educational"));
+
+    client.set_classification(
+        &creator,
+        &prompt_id,
+        &String::from_str(&env, "technical"),
+        &{
+            let mut v = Vec::new(&env);
+            v.push_back(String::from_str(&env, "ai-generated"));
+            v
+        },
+    );
+
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(prompt.classification, String::from_str(&env, "technical"));
+    assert_eq!(prompt.safety_flags.len(), 1);
+    assert_eq!(
+        prompt.safety_flags.get(0).unwrap(),
+        String::from_str(&env, "ai-generated")
+    );
+}
+
+#[test]
+fn test_set_classification_invalid_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Invalid Class",
+        10_000,
+        &context.xlm,
+    );
+
+    let result = client.try_set_classification(
+        &creator,
+        &prompt_id,
+        &String::from_str(&env, "invalid-category"),
+        &Vec::new(&env),
+    );
+    assert!(matches!(result, Err(Ok(Error::InvalidClassification))));
+
+    let result = client.try_set_classification(
+        &creator,
+        &prompt_id,
+        &String::from_str(&env, "educational"),
+        &{
+            let mut v = Vec::new(&env);
+            v.push_back(String::from_str(&env, "invalid-flag"));
+            v
+        },
+    );
+    assert!(matches!(result, Err(Ok(Error::InvalidDisclosureFlags))));
+}
+
+#[test]
+fn test_set_classification_unauthorized_rejected() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
@@ -2608,6 +3101,54 @@ fn test_creator_cannot_buy_own_bundle() {
 
 #[test]
 fn test_add_and_remove_bundle_item() {
+    let impostor = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Auth Class", 10_000, &context.xlm);
+
+    let result = client.try_set_classification(
+        &impostor,
+        &prompt_id,
+        &String::from_str(&env, "creative"),
+        &Vec::new(&env),
+    );
+    assert!(matches!(result, Err(Ok(Error::Unauthorized))));
+}
+
+#[test]
+fn test_get_active_classification_without_override() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Active Class",
+        10_000,
+        &context.xlm,
+    );
+
+    client.set_classification(
+        &creator,
+        &prompt_id,
+        &String::from_str(&env, "sensitive"),
+        &{
+            let mut v = Vec::new(&env);
+            v.push_back(String::from_str(&env, "political"));
+            v
+        },
+    );
+
+    // Without override, get_active_classification returns creator-set values
+    let (classification, flags) = client.get_active_classification(&prompt_id);
+    assert_eq!(classification, String::from_str(&env, "sensitive"));
+    assert_eq!(flags.len(), 1);
+    assert_eq!(flags.get(0).unwrap(), String::from_str(&env, "political"));
+}
+
+#[test]
+fn test_moderator_override_overrides_creator_classification() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
@@ -2642,6 +3183,104 @@ fn test_add_and_remove_bundle_item() {
 
 #[test]
 fn test_remove_last_item_from_bundle_fails() {
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Override Test",
+        10_000,
+        &context.xlm,
+    );
+
+    // Creator sets classification as "general"
+    client.set_classification(
+        &creator,
+        &prompt_id,
+        &String::from_str(&env, "general"),
+        &Vec::new(&env),
+    );
+
+    // Admin sets moderator address
+    client.set_moderator_address(&context.admin, &context.admin);
+
+    // Moderator overrides to "restricted"
+    client.set_moderator_override(
+        &context.admin,
+        &prompt_id,
+        &String::from_str(&env, "restricted"),
+        &{
+            let mut v = Vec::new(&env);
+            v.push_back(String::from_str(&env, "ai-generated"));
+            v.push_back(String::from_str(&env, "political"));
+            v
+        },
+        &String::from_str(&env, "Contains political content that requires restriction"),
+    );
+
+    // get_active_classification should return moderator override
+    let (classification, flags) = client.get_active_classification(&prompt_id);
+    assert_eq!(classification, String::from_str(&env, "restricted"));
+    assert_eq!(flags.len(), 2);
+
+    // get_classification should still return creator's original
+    let (creator_class, _) = client.get_classification(&prompt_id);
+    assert_eq!(creator_class, String::from_str(&env, "general"));
+}
+
+#[test]
+fn test_moderator_override_unauthorized_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let impostor = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Override Auth",
+        10_000,
+        &context.xlm,
+    );
+
+    // No moderator has been set yet
+    let result = client.try_set_moderator_override(
+        &impostor,
+        &prompt_id,
+        &String::from_str(&env, "restricted"),
+        &Vec::new(&env),
+        &String::from_str(&env, "Test override"),
+    );
+    assert!(matches!(result, Err(Ok(Error::NotModerator))));
+}
+
+#[test]
+fn test_classification_with_safety_flags_none() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Flags Test", 10_000, &context.xlm);
+
+    // "none" flag should be valid alone
+    client.set_classification(&creator, &prompt_id, &String::from_str(&env, "general"), &{
+        let mut v = Vec::new(&env);
+        v.push_back(String::from_str(&env, "none"));
+        v
+    });
+
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(prompt.safety_flags.len(), 1);
+    assert_eq!(
+        prompt.safety_flags.get(0).unwrap(),
+        String::from_str(&env, "none")
+    );
+}
+
+#[test]
+fn test_classification_missing_rejected() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
@@ -2665,6 +3304,234 @@ fn test_remove_last_item_from_bundle_fails() {
     match result {
         Err(Ok(crate::types::Error::BundleEmpty)) => {}
         other => panic!("expected BundleEmpty when removing last item, got {:?}", other),
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Missing Class",
+        10_000,
+        &context.xlm,
+    );
+
+    // Empty classification should be rejected
+    let result = client.try_set_classification(
+        &creator,
+        &prompt_id,
+        &String::from_str(&env, ""),
+        &Vec::new(&env),
+    );
+    assert!(matches!(result, Err(Ok(Error::InvalidClassification))));
+}
+
+#[test]
+fn test_classification_conflicting_change_emits_correct_values() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Conflict Test",
+        10_000,
+        &context.xlm,
+    );
+
+    // Set initial classification as "educational"
+    client.set_classification(
+        &creator,
+        &prompt_id,
+        &String::from_str(&env, "educational"),
+        &{
+            let mut v = Vec::new(&env);
+            v.push_back(String::from_str(&env, "none"));
+            v
+        },
+    );
+
+    // Change to "technical" — this should overwrite
+    client.set_classification(
+        &creator,
+        &prompt_id,
+        &String::from_str(&env, "technical"),
+        &{
+            let mut v = Vec::new(&env);
+            v.push_back(String::from_str(&env, "ai-generated"));
+            v
+        },
+    );
+
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(prompt.classification, String::from_str(&env, "technical"));
+    assert_eq!(prompt.safety_flags.len(), 1);
+    assert_eq!(
+        prompt.safety_flags.get(0).unwrap(),
+        String::from_str(&env, "ai-generated")
+    );
+    // Classification changed from "educational" to "technical" -- the latest sticks
+    assert_ne!(prompt.classification, String::from_str(&env, "educational"));
+}
+
+#[test]
+fn test_moderator_address_allows_admin() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let moderator = Address::generate(&env);
+
+    // Admin can set moderator address
+    let result = client.try_set_moderator_address(&context.admin, &moderator);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_classification_with_all_valid_categories() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "All Classes", 10_000, &context.xlm);
+
+    let valid_categories = [
+        "general",
+        "educational",
+        "professional",
+        "creative",
+        "technical",
+        "sensitive",
+        "restricted",
+    ];
+
+    for &cat in &valid_categories {
+        let result = client.try_set_classification(
+            &creator,
+            &prompt_id,
+            &String::from_str(&env, cat),
+            &Vec::new(&env),
+        );
+        assert!(
+            result.is_ok(),
+            "Expected '{}' to be a valid classification",
+            cat
+        );
+    }
+}
+
+// ─── Encryption Rotation Tests ────────────────────────────────────────────────
+
+fn create_rotation_test_prompt(
+    env: &Env,
+    client: &PromptHashContractClient,
+    creator: &Address,
+    asset: &Address,
+) -> u128 {
+    create_prompt(env, client, creator, "Rotation Test Prompt", 10_000, asset)
+}
+
+fn generate_test_payload(env: &Env, version: u8) -> (String, String, String, BytesN<32>) {
+    // `format!` needs `alloc` support this `#![no_std]` crate doesn't opt into,
+    // so each tested version gets its own literal suffix instead.
+    let (encrypted, iv, wrapped_key) = match version {
+        1 => ("encrypted-v1", "iv-v1", "wrapped-key-v1"),
+        2 => ("encrypted-v2", "iv-v2", "wrapped-key-v2"),
+        3 => ("encrypted-v3", "iv-v3", "wrapped-key-v3"),
+        4 => ("encrypted-v4", "iv-v4", "wrapped-key-v4"),
+        _ => panic!("generate_test_payload: add a literal case for version {version}"),
+    };
+    (
+        String::from_str(env, encrypted),
+        String::from_str(env, iv),
+        String::from_str(env, wrapped_key),
+        hash(env, version),
+    )
+}
+
+#[test]
+fn test_rotate_encryption_creates_new_version_and_archives_old() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    // Initial prompt should be at version 1
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(prompt.encryption_version, 1);
+
+    let (new_enc, new_iv, new_key, new_hash) = generate_test_payload(&env, 2);
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+    let new_version =
+        client.rotate_encryption(&creator, &prompt_id, &new_enc, &new_iv, &new_key, &new_hash);
+    assert_eq!(new_version, 2);
+
+    // Prompt now has v2 payload
+    let updated = client.get_prompt(&prompt_id);
+    assert_eq!(updated.encryption_version, 2);
+    assert_eq!(
+        updated.encrypted_prompt,
+        String::from_str(&env, "encrypted-v2")
+    );
+    assert_eq!(updated.encryption_iv, String::from_str(&env, "iv-v2"));
+    assert_eq!(
+        updated.wrapped_key,
+        String::from_str(&env, "wrapped-key-v2")
+    );
+    assert_eq!(updated.content_hash, hash(&env, 2));
+
+    // Archived v1 payload is retrievable
+    let archived = client.get_prompt_encryption_version(&prompt_id, &1);
+    assert_eq!(archived.version, 1);
+    assert_eq!(
+        archived.encrypted_prompt,
+        String::from_str(&env, "ciphertext")
+    );
+    assert_eq!(archived.encryption_iv, String::from_str(&env, "iv"));
+    assert_eq!(archived.wrapped_key, String::from_str(&env, "wrapped-key"));
+    assert_eq!(archived.content_hash, hash(&env, 7));
+    assert!(archived.created_at > 0);
+}
+
+#[test]
+fn test_rotate_encryption_preserves_prior_versions_on_failure_scenario() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    // Rotate to v2
+    let (v2_enc, v2_iv, v2_key, v2_hash) = generate_test_payload(&env, 2);
+    client.rotate_encryption(&creator, &prompt_id, &v2_enc, &v2_iv, &v2_key, &v2_hash);
+
+    // Rotate to v3
+    let (v3_enc, v3_iv, v3_key, v3_hash) = generate_test_payload(&env, 3);
+    client.rotate_encryption(&creator, &prompt_id, &v3_enc, &v3_iv, &v3_key, &v3_hash);
+
+    // v1 archived and accessible
+    let v1 = client.get_prompt_encryption_version(&prompt_id, &1);
+    assert_eq!(v1.version, 1);
+
+    // v2 archived and accessible
+    let v2 = client.get_prompt_encryption_version(&prompt_id, &2);
+    assert_eq!(v2.version, 2);
+    assert_eq!(v2.encrypted_prompt, String::from_str(&env, "encrypted-v2"));
+
+    // v3 is the current version
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(prompt.encryption_version, 3);
+
+    // Non-existent version returns error
+    let result = client.try_get_prompt_encryption_version(&prompt_id, &99);
+    match result {
+        Err(Ok(Error::EncryptionVersionNotFound)) => {}
+        other => panic!("expected EncryptionVersionNotFound, got {:?}", other),
     }
 }
 
@@ -2698,6 +3565,168 @@ fn test_duplicate_item_in_bundle_create_fails() {
 
 #[test]
 fn test_bundle_add_duplicate_item_fails() {
+fn test_existing_buyer_can_unlock_after_encryption_rotation() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+
+    // Buyer purchases at v1
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
+    let purchase = client.get_purchase_details(&prompt_id, &buyer);
+    assert_eq!(purchase.encryption_version, 1);
+
+    // Creator rotates encryption to v2
+    let (v2_enc, v2_iv, v2_key, v2_hash) = generate_test_payload(&env, 2);
+    client.rotate_encryption(&creator, &prompt_id, &v2_enc, &v2_iv, &v2_key, &v2_hash);
+
+    // Buyer still has access
+    assert!(client.has_access(&buyer, &prompt_id));
+
+    // Buyer can retrieve v1 payload (their purchase version)
+    let v1 = client.get_prompt_encryption_version(&prompt_id, &1);
+    assert_eq!(v1.encrypted_prompt, String::from_str(&env, "ciphertext"));
+
+    // New buyer at v2 gets v2 payload
+    let buyer2 = Address::generate(&env);
+    fund_buyer(&xlm_client, &buyer2, &context.contract, 100_000);
+    client.buy_prompt(&buyer2, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
+    let purchase2 = client.get_purchase_details(&prompt_id, &buyer2);
+    assert_eq!(purchase2.encryption_version, 2);
+}
+
+#[test]
+fn test_concurrent_buyers_at_different_encryption_versions() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer_v1 = Address::generate(&env);
+    let buyer_v2 = Address::generate(&env);
+    let buyer_v3 = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer_v1, &context.contract, 100_000);
+    fund_buyer(&xlm_client, &buyer_v2, &context.contract, 100_000);
+    fund_buyer(&xlm_client, &buyer_v3, &context.contract, 100_000);
+
+    // Buyer 1 purchases at v1
+    client.buy_prompt(
+        &buyer_v1,
+        &prompt_id,
+        &None::<Bytes>,
+        &10_000,
+        &None::<Bytes>,
+    );
+    assert_eq!(
+        client
+            .get_purchase_details(&prompt_id, &buyer_v1)
+            .encryption_version,
+        1
+    );
+
+    // Rotate to v2
+    let (v2_enc, v2_iv, v2_key, v2_hash) = generate_test_payload(&env, 2);
+    client.rotate_encryption(&creator, &prompt_id, &v2_enc, &v2_iv, &v2_key, &v2_hash);
+
+    // Buyer 2 purchases at v2
+    client.buy_prompt(
+        &buyer_v2,
+        &prompt_id,
+        &None::<Bytes>,
+        &10_000,
+        &None::<Bytes>,
+    );
+    assert_eq!(
+        client
+            .get_purchase_details(&prompt_id, &buyer_v2)
+            .encryption_version,
+        2
+    );
+
+    // Rotate to v3
+    let (v3_enc, v3_iv, v3_key, v3_hash) = generate_test_payload(&env, 3);
+    client.rotate_encryption(&creator, &prompt_id, &v3_enc, &v3_iv, &v3_key, &v3_hash);
+
+    // Buyer 3 purchases at v3
+    client.buy_prompt(
+        &buyer_v3,
+        &prompt_id,
+        &None::<Bytes>,
+        &10_000,
+        &None::<Bytes>,
+    );
+    assert_eq!(
+        client
+            .get_purchase_details(&prompt_id, &buyer_v3)
+            .encryption_version,
+        3
+    );
+
+    // All buyers have access
+    assert!(client.has_access(&buyer_v1, &prompt_id));
+    assert!(client.has_access(&buyer_v2, &prompt_id));
+    assert!(client.has_access(&buyer_v3, &prompt_id));
+
+    // Each buyer can retrieve their version's payload
+    let v1 = client.get_prompt_encryption_version(&prompt_id, &1);
+    assert_eq!(v1.encrypted_prompt, String::from_str(&env, "ciphertext"));
+    let v2 = client.get_prompt_encryption_version(&prompt_id, &2);
+    assert_eq!(v2.encrypted_prompt, String::from_str(&env, "encrypted-v2"));
+    // v3 is current: accessible both via get_prompt and get_prompt_encryption_version
+    let v3 = client.get_prompt_encryption_version(&prompt_id, &3);
+    assert_eq!(v3.encrypted_prompt, String::from_str(&env, "encrypted-v3"));
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(
+        prompt.encrypted_prompt,
+        String::from_str(&env, "encrypted-v3")
+    );
+}
+
+#[test]
+fn test_rotate_encryption_rejects_unauthorized_callers() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let attacker = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    let (enc, iv, key, hash_val) = generate_test_payload(&env, 2);
+
+    // Non-creator cannot rotate
+    let result = client.try_rotate_encryption(&attacker, &prompt_id, &enc, &iv, &key, &hash_val);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized, got {:?}", other),
+    }
+
+    // Creator can still rotate
+    let version = client.rotate_encryption(&creator, &prompt_id, &enc, &iv, &key, &hash_val);
+    assert_eq!(version, 2);
+
+    // Prompt is paused -> rotation blocked
+    client.set_pause_status(&true);
+    let (enc3, iv3, key3, hash3) = generate_test_payload(&env, 3);
+    let result = client.try_rotate_encryption(&creator, &prompt_id, &enc3, &iv3, &key3, &hash3);
+    match result {
+        Err(Ok(Error::ContractIsPaused)) => {}
+        other => panic!("expected ContractIsPaused, got {:?}", other),
+    }
+    client.set_pause_status(&false);
+}
+
+#[test]
+fn test_rotate_encryption_validates_field_lengths() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
@@ -2721,11 +3750,28 @@ fn test_bundle_add_duplicate_item_fails() {
     match result {
         Err(Ok(crate::types::Error::PromptAlreadyInBundle)) => {}
         other => panic!("expected PromptAlreadyInBundle on re-add, got {:?}", other),
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    let valid_hash = hash(&env, 9);
+
+    // Empty encrypted prompt
+    let result = client.try_rotate_encryption(
+        &creator,
+        &prompt_id,
+        &String::from_str(&env, ""),
+        &String::from_str(&env, "valid-iv"),
+        &String::from_str(&env, "valid-key"),
+        &valid_hash,
+    );
+    match result {
+        Err(Ok(Error::InvalidFieldLength)) => {}
+        other => panic!("expected InvalidFieldLength, got {:?}", other),
     }
 }
 
 #[test]
 fn test_set_bundle_active_toggles_purchasability() {
+fn test_license_transfer_preserves_encryption_version() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
@@ -2766,6 +3812,64 @@ fn test_set_bundle_active_toggles_purchasability() {
 
 #[test]
 fn test_update_bundle_price_changes_required_payment() {
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_rotation_test_prompt(&env, &client, &creator, &context.xlm);
+
+    fund_buyer(&xlm_client, &seller, &context.contract, 100_000);
+
+    // Seller purchases at v1
+    client.buy_prompt(&seller, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
+    assert_eq!(
+        client
+            .get_purchase_details(&prompt_id, &seller)
+            .encryption_version,
+        1
+    );
+
+    // Rotate to v2
+    let (v2_enc, v2_iv, v2_key, v2_hash) = generate_test_payload(&env, 2);
+    client.rotate_encryption(&creator, &prompt_id, &v2_enc, &v2_iv, &v2_key, &v2_hash);
+
+    // Transfer license to buyer
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.transfer_license(&seller, &prompt_id, &buyer, &15_000);
+
+    // New owner retains v1 encryption version (their license is at v1)
+    let transferred = client.get_purchase_details(&prompt_id, &buyer);
+    assert_eq!(transferred.encryption_version, 1);
+    assert!(client.has_access(&buyer, &prompt_id));
+}
+
+#[test]
+fn test_extend_ttl_success() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Extend TTL Prompt",
+        1_000,
+        &context.xlm,
+    );
+
+    let key = crate::types::DataKey::Prompt(prompt_id);
+    let result = client.try_extend_ttl(&key);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_extend_ttl_failure_key_not_found() {
+// ─── #275: Creator Reputation Staking ────────────────────────────────────────
+
+const SECONDS_PER_WEEK: u64 = 7 * 24 * 60 * 60;
+
+#[test]
+fn test_stake_records_balance_and_moves_tokens_into_custody() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
@@ -2866,6 +3970,324 @@ fn test_only_bundle_creator_can_modify_bundle() {
     match r2 {
         Err(Ok(crate::types::Error::Unauthorized)) => {}
         other => panic!("expected Unauthorized for deactivation by stranger, got {:?}", other),
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Staked Prompt",
+        10_000,
+        &context.xlm,
+    );
+
+    // Fund the creator so they can stake.
+    xlm_client.mint(&creator, &50_000);
+    let creator_start = xlm_client.balance(&creator);
+    let custody_start = xlm_client.balance(&context.contract);
+
+    let total = client.stake(&creator, &prompt_id, &30_000);
+    assert_eq!(total, 30_000);
+
+    // Recorded stake reflects the amount.
+    let stake = client.get_stake(&prompt_id);
+    assert_eq!(stake.amount, 30_000);
+    assert_eq!(stake.creator, creator);
+
+    // Tokens moved from creator into contract custody.
+    assert_eq!(xlm_client.balance(&creator), creator_start - 30_000);
+    assert_eq!(
+        xlm_client.balance(&context.contract),
+        custody_start + 30_000
+    );
+
+    // Additional stake accumulates.
+    let total2 = client.stake(&creator, &prompt_id, &10_000);
+    assert_eq!(total2, 40_000);
+    assert_eq!(client.get_stake(&prompt_id).amount, 40_000);
+}
+
+#[test]
+fn test_only_prompt_creator_can_stake() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Owned Prompt",
+        10_000,
+        &context.xlm,
+    );
+
+    xlm_client.mint(&stranger, &50_000);
+    let result = client.try_stake(&stranger, &prompt_id, &10_000);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!(
+            "expected Unauthorized for non-creator stake, got {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn test_slash_reduces_stake_and_forwards_to_fee_wallet() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Slashable", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &30_000);
+
+    let fee_start = xlm_client.balance(&context.fee_wallet);
+    let custody_start = xlm_client.balance(&context.contract);
+
+    // Owner (admin) slashes part of the stake. #[only_owner] gates this call;
+    // under mock_all_auths the owner authorization is satisfied automatically
+    // (see test_set_referral_percentage_only_owner for the same convention).
+    let slashed = client.slash(&prompt_id, &12_000);
+    assert_eq!(slashed, 12_000);
+    assert_eq!(client.get_stake(&prompt_id).amount, 18_000);
+
+    // Slashed stroops leave custody and land in the fee wallet.
+    assert_eq!(xlm_client.balance(&context.fee_wallet), fee_start + 12_000);
+    assert_eq!(
+        xlm_client.balance(&context.contract),
+        custody_start - 12_000
+    );
+}
+
+#[test]
+fn test_over_slash_is_clamped_to_available_stake() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Clamp", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &20_000);
+
+    // Requesting more than staked only removes what is available.
+    let slashed = client.slash(&prompt_id, &100_000);
+    assert_eq!(slashed, 20_000);
+    assert_eq!(client.get_stake(&prompt_id).amount, 0);
+
+    // A second slash on an empty stake removes nothing (clamped to zero).
+    let slashed_again = client.slash(&prompt_id, &5_000);
+    assert_eq!(slashed_again, 0);
+    assert_eq!(client.get_stake(&prompt_id).amount, 0);
+}
+
+#[test]
+fn test_slash_missing_stake_is_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let missing_key = crate::types::DataKey::Prompt(9999);
+    let result = client.try_extend_ttl(&missing_key);
+
+    match result {
+        Err(Ok(Error::KeyNotFound)) => {}
+        other => panic!("expected KeyNotFound, got {:?}", other),
+    }
+}
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "NoStake", 10_000, &context.xlm);
+
+    let result = client.try_slash(&prompt_id, &1_000);
+    match result {
+        Err(Ok(Error::StakeNotFound)) => {}
+        other => panic!("expected StakeNotFound, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_unstake_returns_remaining_stake_after_cooldown() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Reclaimable", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &30_000);
+
+    // Admin slashes part; creator should only reclaim the non-slashed remainder.
+    client.slash(&prompt_id, &10_000);
+    assert_eq!(client.get_stake(&prompt_id).amount, 20_000);
+
+    // Advance past the cooldown window.
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + SECONDS_PER_WEEK + 1);
+
+    let creator_before = xlm_client.balance(&creator);
+    let custody_before = xlm_client.balance(&context.contract);
+
+    let withdrawn = client.unstake(&creator, &prompt_id, &100_000);
+    assert_eq!(withdrawn, 20_000, "unstake clamps to remaining stake");
+    assert_eq!(client.get_stake(&prompt_id).amount, 0);
+
+    assert_eq!(xlm_client.balance(&creator), creator_before + 20_000);
+    assert_eq!(
+        xlm_client.balance(&context.contract),
+        custody_before - 20_000
+    );
+}
+
+#[test]
+fn test_unstake_before_cooldown_is_locked() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Locked", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &30_000);
+
+    // Only a little time passes — still within the cooldown.
+    env.ledger().with_mut(|l| l.timestamp = 1_000 + 100);
+
+    let result = client.try_unstake(&creator, &prompt_id, &10_000);
+    match result {
+        Err(Ok(Error::StakeLocked)) => {}
+        other => panic!("expected StakeLocked before cooldown, got {:?}", other),
+    }
+    // Stake untouched.
+    assert_eq!(client.get_stake(&prompt_id).amount, 30_000);
+}
+
+#[test]
+fn test_unstake_by_non_owner_is_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Guarded", 10_000, &context.xlm);
+
+    xlm_client.mint(&creator, &50_000);
+    client.stake(&creator, &prompt_id, &30_000);
+
+    env.ledger()
+        .with_mut(|l| l.timestamp = 1_000 + SECONDS_PER_WEEK + 1);
+
+    let result = client.try_unstake(&stranger, &prompt_id, &10_000);
+    match result {
+        Err(Ok(Error::NotStakeOwner)) => {}
+        other => panic!("expected NotStakeOwner, got {:?}", other),
+    }
+}
+
+// ─── #36: on-chain listing metadata max-length enforcement ─────────────────
+//
+// `create_prompt`'s string fields are already checked against MAX_*_LEN
+// constants in contract.rs (via `validate_len`), and `fuzz.rs` already
+// proves arbitrarily oversized input never panics. What was missing was a
+// deterministic boundary test: exactly-at-the-limit must succeed and
+// one-over-the-limit must fail with `Error::InvalidFieldLength` — for every
+// listing-metadata field, not just one. These mirror the MAX_*_LEN values
+// in contract.rs (title: 120, category: 40, preview_text: 280,
+// image_url: 512) rather than importing them, since those constants are
+// private to the `contract` module.
+
+fn build_str(env: &Env, len: usize) -> String {
+    let owned: std::string::String = "a".repeat(len);
+    String::from_str(env, owned.as_str())
+}
+
+// A macro (rather than a function) so the return type is whatever
+// `try_create_prompt` actually produces, without having to spell out its
+// exact (and slightly unusual) nested `Result` shape.
+macro_rules! try_create_prompt_with_fields {
+    ($env:expr, $client:expr, $creator:expr, $asset:expr, $image_url:expr, $title:expr, $category:expr, $preview_text:expr $(,)?) => {
+        $client.try_create_prompt(
+            $creator,
+            &$image_url,
+            &$title,
+            &$category,
+            &$preview_text,
+            &String::from_str($env, "ciphertext"),
+            &String::from_str($env, "iv"),
+            &String::from_str($env, "wrapped-key"),
+            &hash($env, 11),
+            &ListingConfig {
+                price: 10_000,
+                asset: $asset.clone(),
+                expires_at: 0,
+                splits: Vec::new($env),
+            },
+        )
+    };
+}
+
+#[test]
+fn test_create_prompt_title_at_max_length_succeeds() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let creator = Address::generate(&env);
+
+    let result = try_create_prompt_with_fields!(
+        &env,
+        client,
+        &creator,
+        &context.xlm,
+        String::from_str(&env, "https://example.com/prompt.png"),
+        build_str(&env, 120),
+        String::from_str(&env, "Software Development"),
+        String::from_str(&env, "Generate a production-ready implementation plan."),
+    );
+    assert!(
+        result.is_ok(),
+        "title at exactly MAX_TITLE_LEN must be accepted"
+    );
+}
+
+#[test]
+fn test_create_prompt_title_over_max_length_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let creator = Address::generate(&env);
+
+    let result = try_create_prompt_with_fields!(
+        &env,
+        client,
+        &creator,
+        &context.xlm,
+        String::from_str(&env, "https://example.com/prompt.png"),
+        build_str(&env, 121),
+        String::from_str(&env, "Software Development"),
+        String::from_str(&env, "Generate a production-ready implementation plan."),
+    );
+    match result {
+        Err(Ok(Error::InvalidFieldLength)) => {}
+        other => panic!("expected InvalidFieldLength, got {:?}", other),
     }
 }
 
@@ -2962,6 +4384,144 @@ fn test_create_bundle_with_empty_ids_fails() {
     match result {
         Err(Ok(crate::types::Error::BundleEmpty)) => {}
         other => panic!("expected BundleEmpty for zero-length ids, got {:?}", other),
+fn test_create_prompt_category_at_max_length_succeeds() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let creator = Address::generate(&env);
+
+    let result = try_create_prompt_with_fields!(
+        &env,
+        client,
+        &creator,
+        &context.xlm,
+        String::from_str(&env, "https://example.com/prompt.png"),
+        String::from_str(&env, "Valid Title"),
+        build_str(&env, 40),
+        String::from_str(&env, "Generate a production-ready implementation plan."),
+    );
+    assert!(
+        result.is_ok(),
+        "category at exactly MAX_CATEGORY_LEN must be accepted"
+    );
+}
+
+#[test]
+fn test_create_prompt_category_over_max_length_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let creator = Address::generate(&env);
+
+    let result = try_create_prompt_with_fields!(
+        &env,
+        client,
+        &creator,
+        &context.xlm,
+        String::from_str(&env, "https://example.com/prompt.png"),
+        String::from_str(&env, "Valid Title"),
+        build_str(&env, 41),
+        String::from_str(&env, "Generate a production-ready implementation plan."),
+    );
+    match result {
+        Err(Ok(Error::InvalidFieldLength)) => {}
+        other => panic!("expected InvalidFieldLength, got {:?}", other),
+// ─── #273: Time-based Discount Mechanics ────────────────────────────────────
+
+#[test]
+fn test_discount_applies_within_window_and_reverts_outside() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Discounted", 10_000, &context.xlm);
+
+    // Discount active for ledger sequence in [100, 200].
+    client.set_discount(&creator, &prompt_id, &4_000i128, &100u32, &200u32);
+    let stored: Option<Discount> = client.get_discount(&prompt_id);
+    assert!(stored.is_some());
+    assert_eq!(stored.unwrap().discounted_price, 4_000i128);
+
+    // Before the window -> base price.
+    env.ledger().with_mut(|l| l.sequence_number = 50);
+    let (price_before, _, is_discounted_before) = client.get_effective_price(&prompt_id);
+    assert_eq!(price_before, 10_000i128);
+    assert!(!is_discounted_before);
+
+    // Inside the window -> discounted price.
+    env.ledger().with_mut(|l| l.sequence_number = 150);
+    let (price_in, _, is_discounted_in) = client.get_effective_price(&prompt_id);
+    assert_eq!(price_in, 4_000i128);
+    assert!(is_discounted_in);
+
+    // After the window -> reverts to base price automatically.
+    env.ledger().with_mut(|l| l.sequence_number = 250);
+    let (price_after, _, is_discounted_after) = client.get_effective_price(&prompt_id);
+    assert_eq!(price_after, 10_000i128);
+    assert!(!is_discounted_after);
+}
+
+#[test]
+fn test_only_creator_can_set_discount() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Guarded", 10_000, &context.xlm);
+
+    let result = client.try_set_discount(&stranger, &prompt_id, &4_000i128, &100u32, &200u32);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_create_prompt_preview_text_at_max_length_succeeds() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let creator = Address::generate(&env);
+
+    let result = try_create_prompt_with_fields!(
+        &env,
+        client,
+        &creator,
+        &context.xlm,
+        String::from_str(&env, "https://example.com/prompt.png"),
+        String::from_str(&env, "Valid Title"),
+        String::from_str(&env, "Software Development"),
+        build_str(&env, 280),
+    );
+    assert!(
+        result.is_ok(),
+        "preview_text at exactly MAX_PREVIEW_LEN must be accepted"
+    );
+}
+
+#[test]
+fn test_create_prompt_preview_text_over_max_length_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let creator = Address::generate(&env);
+
+    let result = try_create_prompt_with_fields!(
+        &env,
+        client,
+        &creator,
+        &context.xlm,
+        String::from_str(&env, "https://example.com/prompt.png"),
+        String::from_str(&env, "Valid Title"),
+        String::from_str(&env, "Software Development"),
+        build_str(&env, 281),
+    );
+    match result {
+        Err(Ok(Error::InvalidFieldLength)) => {}
+        other => panic!("expected InvalidFieldLength, got {:?}", other),
     }
 }
 
@@ -2993,3 +4553,66 @@ fn test_bundle_item_from_different_creator_is_rejected() {
         other => panic!("expected Unauthorized for foreign prompt, got {:?}", other),
     }
 }
+fn test_create_prompt_image_url_over_max_length_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let creator = Address::generate(&env);
+
+    let result = try_create_prompt_with_fields!(
+        &env,
+        client,
+        &creator,
+        &context.xlm,
+        build_str(&env, 513),
+        String::from_str(&env, "Valid Title"),
+        String::from_str(&env, "Software Development"),
+        String::from_str(&env, "Generate a production-ready implementation plan."),
+    );
+    match result {
+        Err(Ok(Error::InvalidFieldLength)) => {}
+        other => panic!("expected InvalidFieldLength, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_create_prompt_empty_title_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let creator = Address::generate(&env);
+
+    let result = try_create_prompt_with_fields!(
+        &env,
+        client,
+        &creator,
+        &context.xlm,
+        String::from_str(&env, "https://example.com/prompt.png"),
+        String::from_str(&env, ""),
+        String::from_str(&env, "Software Development"),
+        String::from_str(&env, "Generate a production-ready implementation plan."),
+    );
+    match result {
+        Err(Ok(Error::InvalidFieldLength)) => {}
+        other => panic!("expected InvalidFieldLength, got {:?}", other),
+    }
+}
+fn test_clear_discount_removes_active_discount() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Clearable", 10_000, &context.xlm);
+
+    client.set_discount(&creator, &prompt_id, &4_000i128, &100u32, &200u32);
+    client.clear_discount(&creator, &prompt_id);
+    assert!(client.get_discount(&prompt_id).is_none());
+
+    // Inside what used to be the window, base price is charged again.
+    env.ledger().with_mut(|l| l.sequence_number = 150);
+    let (price, _, is_discounted) = client.get_effective_price(&prompt_id);
+    assert_eq!(price, 10_000i128);
+    assert!(!is_discounted);
+}
+

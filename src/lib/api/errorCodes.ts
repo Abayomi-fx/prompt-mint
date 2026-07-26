@@ -5,6 +5,9 @@
  * Sensitive backend details are never included in user-facing responses.
  */
 
+import type { ApiVersion } from "./payloadVersion";
+import { CURRENT_API_VERSION } from "./payloadVersion";
+
 export const ErrorCode = {
   // ── Request errors (4xx) ──────────────────────────────────────────────────
 
@@ -13,6 +16,9 @@ export const ErrorCode = {
 
   /** The HTTP method is not allowed on this endpoint. */
   METHOD_NOT_ALLOWED: "METHOD_NOT_ALLOWED",
+
+  /** The request input failed validation. */
+  INVALID_INPUT: "INVALID_INPUT",
 
   // ── Auth / access errors (4xx) ────────────────────────────────────────────
 
@@ -36,6 +42,14 @@ export const ErrorCode = {
   /** Too many requests from this wallet address. */
   RATE_LIMIT_WALLET: "RATE_LIMIT_WALLET",
 
+  // ── Analytics errors (4xx) ────────────────────────────────────────────────
+
+  /** The event name is not part of the registered analytics taxonomy. */
+  UNKNOWN_EVENT: "UNKNOWN_EVENT",
+
+  /** The event payload failed validation against its taxonomy schema. */
+  INVALID_EVENT_PAYLOAD: "INVALID_EVENT_PAYLOAD",
+
   // ── Server errors (5xx) ───────────────────────────────────────────────────
 
   /** The server is missing required configuration (never expose details). */
@@ -46,6 +60,12 @@ export const ErrorCode = {
 
   /** A temporary backend failure occurred. The client may retry. */
   TEMPORARY_FAILURE: "TEMPORARY_FAILURE",
+
+  /** The version requested via Accept-Version is not supported by this server. */
+  UNSUPPORTED_VERSION: "UNSUPPORTED_VERSION",
+
+  /** The input value provided in the request body or query is invalid. */
+  INVALID_INPUT: "INVALID_INPUT",
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -53,27 +73,38 @@ export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
 /**
  * Standard API error response shape.
  *
+ * Every error response — regardless of HTTP status code — carries `apiVersion`
+ * so clients can always know which schema they are parsing.
+ *
  * @example
- * { "error": "The challenge token has expired.", "code": "CHALLENGE_EXPIRED" }
+ * { "apiVersion": "2025-01-01", "error": "The challenge token has expired.", "code": "CHALLENGE_EXPIRED" }
  */
 export interface ApiErrorResponse {
+  /** Stable date-string identifying the payload schema. Always present. */
+  apiVersion: ApiVersion;
   /** Human-readable message safe to display to the user. */
   error: string;
   /** Stable machine-readable code the frontend uses for recovery logic. */
   code: ErrorCode;
-  /** ISO timestamp of when the rate limit resets (only present on 429). */
+  /** Unix ms timestamp of when the rate limit resets (only present on 429). */
   reset?: number;
 }
 
 /**
  * Build a standard error response body.
+ *
+ * @param code    - Stable ErrorCode constant.
+ * @param message - Human-readable message safe to show to the user.
+ * @param extra   - Optional overrides / extensions (e.g. `{ reset: ... }`).
+ * @param version - API version to stamp; defaults to CURRENT_API_VERSION.
  */
 export function apiError(
   code: ErrorCode,
   message: string,
-  extra?: Partial<ApiErrorResponse>,
+  extra?: Partial<Omit<ApiErrorResponse, "apiVersion" | "error" | "code">>,
+  version: ApiVersion = CURRENT_API_VERSION,
 ): ApiErrorResponse {
-  return { error: message, code, ...extra };
+  return { apiVersion: version, error: message, code, ...extra };
 }
 
 /**
@@ -83,13 +114,20 @@ export function apiError(
 export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   MISSING_FIELDS: "Some required fields are missing. Please check your request.",
   METHOD_NOT_ALLOWED: "This action is not supported.",
+  INVALID_INPUT: "The provided input is not valid. Please check your request.",
   CHALLENGE_EXPIRED: "Your session has expired. Please try again to get a new challenge.",
   CHALLENGE_INVALID: "The challenge token is invalid. Please start the unlock flow again.",
   INVALID_SIGNATURE: "Wallet signature verification failed. Please try signing again.",
   ACCESS_NOT_PURCHASED: "You have not purchased access to this prompt.",
   RATE_LIMIT_IP: "Too many requests. Please wait a moment and try again.",
   RATE_LIMIT_WALLET: "Too many unlock attempts for this wallet. Please wait and try again.",
+  UNKNOWN_EVENT: "This event type is not recognized.",
+  INVALID_EVENT_PAYLOAD: "The event payload did not match the expected shape.",
   CONFIGURATION_ERROR: "A server configuration error occurred. Please try again later.",
   INTEGRITY_FAILURE: "Prompt content could not be verified. Please contact support.",
   TEMPORARY_FAILURE: "A temporary error occurred. Please try again in a moment.",
+  UNSUPPORTED_VERSION:
+    "The API version you requested is not supported. Please use a supported version.",
+  // NOTE: INVALID_INPUT is used by image validation; keep it in sync with ErrorCode above.
+  INVALID_INPUT: "The input provided is invalid.",
 };

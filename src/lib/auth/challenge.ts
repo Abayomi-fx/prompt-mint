@@ -101,6 +101,16 @@ export function verifyChallengeToken(
   return payload;
 }
 
+/**
+ * Message signed by a moderator wallet to authenticate an admin/moderation
+ * request. Scoping by `purpose` prevents a signature captured for one
+ * moderation endpoint from being replayed against another; the timestamp lets
+ * the server reject stale signatures.
+ */
+export function buildModeratorAuthMessage(address: string, purpose: string, timestamp: number): string {
+  return `prompt-hash moderator:${address}:${purpose}:${timestamp}`;
+}
+
 export function verifyChallengeSignature(
   address: string,
   message: string,

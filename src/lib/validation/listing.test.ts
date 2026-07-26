@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildListingChecklistItems,
   validateListingForm,
+  validateListingField,
+  type ListingFormInput,
 } from "./listing";
 
 const validForm = {
@@ -43,6 +45,36 @@ describe("validateListingForm", () => {
     expect(
       validateListingForm({ ...validForm, fullPrompt: "tiny" }).fullPrompt,
     ).toMatch(/at least 10 characters/i);
+  });
+});
+
+// #269 – field-level (on-blur) validation
+const validFieldInput: ListingFormInput = {
+  imageUrl: "https://example.com/cover.png",
+  title: "Campaign launch pack",
+  category: "Marketing",
+  previewText: "Public preview text for buyers browsing the marketplace.",
+  fullPrompt: "Private prompt body with enough content for validation.",
+  priceXlm: "2.5",
+  classification: "professional",
+  safetyFlags: [],
+};
+
+describe("validateListingField", () => {
+  it("returns a message for an invalid field", () => {
+    expect(
+      validateListingField("title", { ...validFieldInput, title: "" }),
+    ).toBeDefined();
+  });
+
+  it("returns undefined for a valid field", () => {
+    expect(validateListingField("title", validFieldInput)).toBeUndefined();
+  });
+
+  it("reports only the requested field, not its siblings", () => {
+    const input = { ...validFieldInput, title: "" };
+    expect(validateListingField("priceXlm", input)).toBeUndefined();
+    expect(validateListingField("title", input)).toBeDefined();
   });
 });
 

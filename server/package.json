@@ -36,6 +36,7 @@
     "@stellar/stellar-sdk": "^14.6.1",
     "@typescript-eslint/parser": "^8.59.0",
     "ai": "^6.0.168",
+    "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-async-handler": "^1.2.0",
@@ -49,6 +50,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/cors": "^2.8.17",
     "@types/express": "^5.0.6",
     "@types/jest": "^30.0.0",
     "@types/node": "^25.6.0",
