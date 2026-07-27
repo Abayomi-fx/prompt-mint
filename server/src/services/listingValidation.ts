@@ -113,6 +113,16 @@ export function validateListingMetadata(
     errors.price = "Price must be a valid number.";
   } else if (normalized.price <= 0) {
     errors.price = "Price must be greater than zero.";
+  } else {
+    const priceStr = typeof input.price === "string" ? input.price.trim() : "";
+    if (priceStr && /[eE]/.test(priceStr)) {
+      errors.price = "Scientific notation is not allowed. Use a decimal format.";
+    } else if (priceStr) {
+      const parts = priceStr.split(".");
+      if (parts.length === 2 && parts[1].length > 7) {
+        errors.price = "Price precision exceeds 7 decimal places (maximum: 0.0000001 XLM per stoop).";
+      }
+    }
   }
 
   return { normalized, errors };
