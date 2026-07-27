@@ -474,15 +474,28 @@ export const PublishPrompt = asyncRoute(async (req, res) => {
   await connectDb();
   const { id } = req.params;
 
-  const prompt = await Prompt.findByIdAndUpdate(
-    id,
-    { listingStatus: "published", isActive: true },
-    { new: true },
-  );
-
+  const prompt = await Prompt.findById(id);
   if (!prompt) {
     throw new AppError("Prompt not found.", 404);
   }
+
+  // Validate pre-publish checklist
+  if (prompt.listingStatus !== "ready") {
+    throw new AppError("Prompt must be in 'ready' status before publishing.", 400);
+  }
+
+  const checklist = prompt.reviewChecklist || {};
+  const allChecked = Object.values(checklist).every((v) => v === true);
+  if (!allChecked) {
+    throw new AppError(
+      "Pre-publish review checklist incomplete. Please complete all review items.",
+      400,
+    );
+  }
+
+  prompt.listingStatus = "published";
+  prompt.isActive = true;
+  await prompt.save();
 
   await Promise.all([
     cacheDelPattern("prompts:list:*"),
@@ -512,6 +525,107 @@ export const ArchivePrompt = asyncRoute(async (req, res) => {
   ]);
 
   res.json({ success: true, prompt });
+});
+
+export const SubmitForReview = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { id } = req.params;
+
+  const prompt = await Prompt.findById(id);
+  if (!prompt) {
+    throw new AppError("Prompt not found.", 404);
+  }
+
+  if (prompt.listingStatus !== "draft") {
+    throw new AppError("Only draft prompts can be submitted for review.", 400);
+  }
+
+  // Automatically validate checklist items
+  const checklist = {
+    contentQuality: prompt.content && prompt.content.length >= 10,
+    imageValid: prompt.image && prompt.image.length > 0,
+    pricingSet: prompt.price !== undefined && prompt.price >= 0,
+    categoryAssigned: prompt.category && prompt.category.length > 0,
+    termsAccepted: true,
+  };
+
+  prompt.reviewChecklist = checklist;
+  prompt.listingStatus = "ready";
+  prompt.reviewedAt = new Date();
+  await prompt.save();
+
+  await Promise.all([
+    cacheDelPattern("prompts:list:*"),
+    cacheDel(CACHE_KEYS.promptDetail(id)),
+  ]);
+
+  res.json({ success: true, prompt, checklist });
+});
+
+export const UpdateReviewChecklist = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { id } = req.params;
+  const { checklist } = req.body;
+
+  const prompt = await Prompt.findById(id);
+  if (!prompt) {
+    throw new AppError("Prompt not found.", 404);
+  }
+
+  if (checklist) {
+    prompt.reviewChecklist = { ...prompt.reviewChecklist, ...checklist };
+    await prompt.save();
+  }
+
+  res.json({ success: true, checklist: prompt.reviewChecklist });
+});
+
+export const AddTags = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { id } = req.params;
+  const { tags } = req.body;
+
+  if (!Array.isArray(tags) || tags.length === 0) {
+    throw new AppError("Tags must be a non-empty array.", 400);
+  }
+
+  const prompt = await Prompt.findById(id);
+  if (!prompt) {
+    throw new AppError("Prompt not found.", 404);
+  }
+
+  const existingTags = prompt.tags || [];
+  const newTags = tags.filter((tag) => !existingTags.includes(tag) && tag.length <= 30);
+  const updatedTags = [...existingTags, ...newTags].slice(0, 10);
+
+  prompt.tags = updatedTags;
+  await prompt.save();
+
+  await cacheDel(CACHE_KEYS.promptDetail(id));
+
+  res.json({ success: true, tags: prompt.tags });
+});
+
+export const RemoveTags = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { id } = req.params;
+  const { tags } = req.body;
+
+  if (!Array.isArray(tags) || tags.length === 0) {
+    throw new AppError("Tags must be a non-empty array.", 400);
+  }
+
+  const prompt = await Prompt.findById(id);
+  if (!prompt) {
+    throw new AppError("Prompt not found.", 404);
+  }
+
+  prompt.tags = (prompt.tags || []).filter((tag) => !tags.includes(tag));
+  await prompt.save();
+
+  await cacheDel(CACHE_KEYS.promptDetail(id));
+
+  res.json({ success: true, tags: prompt.tags });
 });
 
 /* NOTIFICATION PREFERENCES CONTROLLERS */
