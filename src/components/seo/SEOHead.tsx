@@ -4,6 +4,11 @@ import {
   formatRobotsMeta,
   resolveCanonicalUrl,
 } from "../../lib/seo/robotsCanonical";
+import {
+  generateProductLD,
+  injectStructuredData,
+  clearStructuredData,
+} from "../../lib/seo/structuredData";
 
 /**
  * Represents public listing metadata suitable for Open Graph and Twitter Card tags.
@@ -143,7 +148,24 @@ export const SEOHead: React.FC<SEOHeadProps> = ({
     if (ogImage) {
       updateTwitterTag("twitter:image", ogImage);
     }
-  }, [robotsContent, canonicalUrl, ogTitle, ogDescription, ogImage, ogType]);
+
+    // Inject JSON-LD structured data for search engines (#76)
+    if (listingMetadata) {
+      const productLD = generateProductLD(
+        {
+          title: listingMetadata.title,
+          description: listingMetadata.description,
+          imageUrl: listingMetadata.imageUrl,
+          creator: listingMetadata.creator,
+          category: listingMetadata.category,
+        },
+        effectiveOrigin,
+      );
+      injectStructuredData(productLD);
+    } else {
+      clearStructuredData();
+    }
+  }, [robotsContent, canonicalUrl, ogTitle, ogDescription, ogImage, ogType, listingMetadata, effectiveOrigin]);
 
   return null;
 };

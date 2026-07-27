@@ -4,6 +4,7 @@ import { featuredPromptTemplates } from "@/data/featuredPrompts";
 import { Navigation } from "@/components/navigation";
 import { Footer } from "@/components/footer";
 import { FeaturedPrompts } from "@/components/featured-prompts";
+import { SEOHead } from "@/components/seo/SEOHead";
 import { Button } from "@/components/ui/button";
 import { MarketplaceFilters } from "@/components/MarketplaceFilters";
 import { SearchBar } from "@/components/SearchBar";
@@ -16,6 +17,10 @@ const categories = Array.from(
 const tags = ["AI", "Creative", "Product", "Sales", "Finance", "Support"];
 
 export default function BrowsePage() {
+  const defaultOG = {
+    title: "Prompt Mint Marketplace — Buy & Sell AI Prompts on Stellar",
+    description: "Discover, compare, and purchase premium AI prompt licenses. Secure wallet-verified marketplace on the Stellar blockchain.",
+  };
   const [priceRange, setPriceRange] = useState([0, 25]);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
@@ -43,6 +48,14 @@ export default function BrowsePage() {
 
   return (
     <div className="min-h-screen bg-[#020617] text-white selection:bg-emerald-500/30">
+      <SEOHead
+        listingMetadata={{
+          title: defaultOG.title,
+          description: defaultOG.description,
+          imageUrl: "/og-image.png",
+          category: "marketplace",
+        }}
+      />
       <Navigation />
 
       {/* Marketplace Header */}
