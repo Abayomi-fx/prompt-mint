@@ -1,6 +1,8 @@
 import React, { useState, useContext, useEffect, useRef } from "react";
 import { WalletContext } from "../../providers/WalletProvider";
 import { useAsyncTransaction } from "../../components/useAsyncTransaction";
+import { estimateSingleFee, type FeeEstimate } from "@/lib/checkout/feeEstimation";
+import { FeeEstimateBanner } from "@/components/FeeEstimateBanner";
 import { PromptHashClient } from "../../lib/stellar/promptHashClient";
 import { unlockPrompt } from "../../lib/prompts/unlock";
 import { Skeleton } from "../../components/Skeleton";
@@ -262,6 +264,8 @@ export const PromptModal: React.FC<PromptModalProps> = ({
   }>({ visible: false, success: false, message: "" });
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [showGiftModal, setShowGiftModal] = useState(false);
+  const [feeEstimate, setFeeEstimate] = useState<FeeEstimate | null>(null);
+  const [isEstimatingFee, setIsEstimatingFee] = useState(false);
 
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
@@ -323,6 +327,15 @@ export const PromptModal: React.FC<PromptModalProps> = ({
         .finally(() => setIsCheckingAccess(false));
     }
   }, [isOpen, itemId, wallet?.address]);
+
+  useEffect(() => {
+    if (isOpen && status === "IDLE") {
+      setIsEstimatingFee(true);
+      estimateSingleFee()
+        .then(setFeeEstimate)
+        .finally(() => setIsEstimatingFee(false));
+    }
+  }, [isOpen, status]);
 
   // Only fire once per modal open per prompt — wallet.address changing mid-session
   // (e.g. account switch) shouldn't re-fire a view event, so it's read via a ref
@@ -594,6 +607,10 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                       status="error"
                       message={translateError(purchaseError.message)}
                     />
+                  )}
+
+                  {status === "IDLE" && (
+                    <FeeEstimateBanner fee={feeEstimate} isLoading={isEstimatingFee} />
                   )}
 
                   <div className="flex flex-wrap gap-3">
