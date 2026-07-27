@@ -38,6 +38,8 @@ import {
 } from "@/lib/validation/listing";
 import { useNetworkState } from "@/hooks/useNetworkState";
 import { translateError } from "@/lib/i18n-errors";
+import { usePrivacyLinter } from "@/hooks/usePrivacyLinter";
+import { PrivacyLinterPanel } from "@/components/sell/PrivacyLinterPanel";
 
 const limits = {
   ...LISTING_LIMITS,
@@ -121,6 +123,18 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
   const encryptedSizeRatio = encryptedSizeEstimate / limits.encryptedPrompt;
 
   const checklistHasFailures = checklistItems.some((i) => i.status === "fail");
+
+  const linterInput = useMemo(
+    () => ({
+      title: formData.title,
+      preview: formData.previewText,
+      description: formData.previewText,
+      tags: formData.safetyFlags,
+      imageUrl: formData.imageUrl,
+    }),
+    [formData],
+  );
+  const { hasBlocking: hasLinterBlockers } = usePrivacyLinter(linterInput);
 
   const persistDraft = (nextFormData: FormData = formData) => {
     if (!draftStorageKey) {
@@ -786,6 +800,8 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
         ) : null}
       </div>
 
+      <PrivacyLinterPanel input={linterInput} />
+
       {showChecklist ? (
         <ListingQualityChecklist items={checklistItems} />
       ) : null}
@@ -825,7 +841,8 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
           isSubmitting ||
           !networkState.canTrustConfirmation ||
           !isFormValid ||
-          (showChecklist && checklistHasFailures)
+          (showChecklist && checklistHasFailures) ||
+          hasLinterBlockers
         }
         onClick={handleSubmit}
       >

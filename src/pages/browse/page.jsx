@@ -10,6 +10,7 @@ import { MarketplaceFilters } from "@/components/MarketplaceFilters";
 import { SearchBar } from "@/components/SearchBar";
 import FetchAllPrompts from "./FetchAllPrompts";
 import { HeroAnimation } from "./HeroAnimation";
+import { ComparisonTray } from "./ComparisonTray";
 
 const categories = Array.from(
   new Set(featuredPromptTemplates.map((prompt) => prompt.category)),
@@ -206,6 +207,7 @@ export default function BrowsePage() {
         </div>
       )}
 
+      <ComparisonTray />
       <Footer />
     </div>
   );

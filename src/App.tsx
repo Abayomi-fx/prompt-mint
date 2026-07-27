@@ -15,6 +15,8 @@ const StatusPage = lazy(() => import("./pages/status/page.tsx"));
 const ModerationPage = lazy(() => import("./pages/Moderation.tsx"));
 const ApiKeysPage = lazy(() => import("./pages/settings/ApiKeys.tsx"));
 const TransactionHistoryPage = lazy(() => import("./pages/history/page.tsx"));
+const FavoritesPage = lazy(() => import("./pages/favorites/page.tsx"));
+const CollectionDetailPage = lazy(() => import("./pages/collections/page.tsx"));
 const CreatorAnalyticsPage = lazy(() => import("./pages/analytics/page.tsx"));
 
 const AppLayout = () => (
@@ -129,6 +131,22 @@ function App() {
                 element={
                   <ErrorBoundary routeName="Transaction History">
                     <TransactionHistoryPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/favorites"
+                element={
+                  <ErrorBoundary routeName="Favorites">
+                    <FavoritesPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/collections/:id"
+                element={
+                  <ErrorBoundary routeName="Collection Detail">
+                    <CollectionDetailPage />
                   </ErrorBoundary>
                 }
               />
