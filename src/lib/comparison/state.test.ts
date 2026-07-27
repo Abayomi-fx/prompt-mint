@@ -8,6 +8,8 @@ import {
   canView,
   MAX_COMPARE,
   MIN_COMPARE,
+  encodeComparisonShare,
+  decodeComparisonShare,
   type ComparisonPrompt,
 } from "./state";
 
@@ -65,5 +67,54 @@ describe("comparison selection state", () => {
     expect(canView([makePrompt("1")])).toBe(false);
     expect(canView([makePrompt("1"), makePrompt("2")])).toBe(true);
     expect(MIN_COMPARE).toBe(2);
+  });
+});
+
+describe("comparison share URL encoding", () => {
+  it("encodes ids into a shareable query string", () => {
+    const encoded = encodeComparisonShare(["1", "2", "3"]);
+    expect(encoded).toContain("?compare=");
+    expect(encoded.length).toBeGreaterThan(10);
+  });
+
+  it("round-trips ids through encode and decode", () => {
+    const ids = ["prompt-1", "prompt-2", "prompt-3"];
+    const encoded = encodeComparisonShare(ids);
+    const decoded = decodeComparisonShare(encoded);
+    expect(decoded.sort()).toEqual(ids.sort());
+  });
+
+  it("returns empty string for empty ids", () => {
+    expect(encodeComparisonShare([])).toBe("");
+  });
+
+  it("returns empty array for missing compare param", () => {
+    expect(decodeComparisonShare("")).toEqual([]);
+    expect(decodeComparisonShare("?other=value")).toEqual([]);
+  });
+
+  it("handles malformed base64 gracefully", () => {
+    expect(decodeComparisonShare("?compare=not-base64!")).toEqual([]);
+  });
+
+  it("deduplicates ids in decoded output", () => {
+    const encoded = encodeComparisonShare(["a", "b", "a"]);
+    const decoded = decodeComparisonShare(encoded);
+    expect(decoded).toEqual(["a", "b"]);
+  });
+
+  it("encodes without wallet or private info", () => {
+    const encoded = encodeComparisonShare(["1"]);
+    expect(encoded).not.toContain("wallet");
+    expect(encoded).not.toContain("address");
+    expect(encoded).not.toContain("rating");
+    expect(encoded).not.toContain("price");
+    expect(encoded).not.toContain("G");
+  });
+
+  it("handles single id", () => {
+    const encoded = encodeComparisonShare(["only-one"]);
+    const decoded = decodeComparisonShare(encoded);
+    expect(decoded).toEqual(["only-one"]);
   });
 });

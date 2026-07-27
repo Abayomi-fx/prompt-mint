@@ -6,6 +6,7 @@ import {
   buildChecklistItems,
 } from "@/components/sell/ListingQualityChecklist";
 import { CreatorOnboarding } from "@/components/sell/CreatorOnboarding";
+import { useBeforeUnloadWarning } from "@/hooks/useBeforeUnloadWarning";
 import { featuredPromptTemplates } from "@/data/featuredPrompts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,6 +22,7 @@ import { useWallet } from "@/hooks/useWallet";
 import { unlockPublicKey } from "@/lib/env";
 import {
   encryptPromptPlaintext,
+  estimateEncryptedPayloadSize,
   wrapPromptKey,
 } from "@/lib/crypto/promptCrypto";
 import { browserStellarConfig } from "@/lib/stellar/browserConfig";
@@ -37,10 +39,11 @@ import {
 } from "@/lib/validation/listing";
 import { useNetworkState } from "@/hooks/useNetworkState";
 import { translateError } from "@/lib/i18n-errors";
+import { usePrivacyLinter } from "@/hooks/usePrivacyLinter";
+import { PrivacyLinterPanel } from "@/components/sell/PrivacyLinterPanel";
 
 const limits = {
   ...LISTING_LIMITS,
-  encrypted: 4096,
   wrappedKey: 256,
 };
 
@@ -61,6 +64,7 @@ interface FormData {
 
 interface CreatePromptFormProps {
   onCreated?: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const DRAFT_STORAGE_PREFIX = "prompt-hash:create-draft:";
@@ -76,7 +80,21 @@ const createEmptyFormData = (): FormData => ({
   safetyFlags: [],
 });
 
-export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
+const computeIsDirty = (formData: FormData): boolean => {
+  const empty = createEmptyFormData();
+  return (
+    formData.imageUrl !== empty.imageUrl ||
+    formData.title !== empty.title ||
+    formData.category !== empty.category ||
+    formData.previewText !== empty.previewText ||
+    formData.fullPrompt !== empty.fullPrompt ||
+    formData.priceXlm !== empty.priceXlm ||
+    formData.classification !== empty.classification ||
+    formData.safetyFlags.length !== empty.safetyFlags.length
+  );
+};
+
+export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormProps) {
   const navigate = useNavigate();
   const { address, signTransaction } = useWallet();
   const draftStorageKey = address ? `${DRAFT_STORAGE_PREFIX}${address}` : null;
@@ -96,6 +114,17 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
   const [imagePreviewState, setImagePreviewState] = useState<"idle" | "loading" | "valid" | "invalid">("idle");
   const [imagePreviewMessage, setImagePreviewMessage] = useState<string | null>(null);
 
+  const isDirty = computeIsDirty(formData);
+
+  useBeforeUnloadWarning(
+    isDirty && !isSubmitting,
+    "You have unsaved changes. Are you sure you want to leave?",
+  );
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
   const isConfigured = useMemo(
     () =>
       Boolean(
@@ -111,7 +140,28 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
     [formData],
   );
 
+  // #61 – real-time feedback on the *encrypted* payload size (base64 AES-GCM
+  // ciphertext), which is what the on-chain MAX_ENCRYPTED_PROMPT_LEN limit
+  // actually gates — not the plaintext character count shown while typing.
+  const encryptedSizeEstimate = useMemo(
+    () => estimateEncryptedPayloadSize(formData.fullPrompt),
+    [formData.fullPrompt],
+  );
+  const encryptedSizeRatio = encryptedSizeEstimate / limits.encryptedPrompt;
+
   const checklistHasFailures = checklistItems.some((i) => i.status === "fail");
+
+  const linterInput = useMemo(
+    () => ({
+      title: formData.title,
+      preview: formData.previewText,
+      description: formData.previewText,
+      tags: formData.safetyFlags,
+      imageUrl: formData.imageUrl,
+    }),
+    [formData],
+  );
+  const { hasBlocking: hasLinterBlockers } = usePrivacyLinter(linterInput);
 
   const persistDraft = (nextFormData: FormData = formData) => {
     if (!draftStorageKey) {
@@ -394,7 +444,7 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
       const encrypted = await encryptPromptPlaintext(formData.fullPrompt);
       const wrappedKey = await wrapPromptKey(encrypted.keyBytes, unlockPublicKey);
 
-      if (encrypted.encryptedPrompt.length > limits.encrypted) {
+      if (encrypted.encryptedPrompt.length > limits.encryptedPrompt) {
         throw new Error(
           "Encrypted payload is too large for the current on-chain limit. Shorten the full prompt and try again.",
         );
@@ -744,8 +794,26 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
           placeholder="This plaintext is encrypted in the browser, then only encrypted fields are sent on-chain."
           className={fieldClass("fullPrompt")}
           aria-invalid={!!errors.fullPrompt}
-          aria-describedby={errors.fullPrompt ? "fullPrompt-error" : undefined}
+          aria-describedby={
+            errors.fullPrompt ? "fullPrompt-error" : "fullPrompt-encrypted-size"
+          }
         />
+        <p
+          id="fullPrompt-encrypted-size"
+          className={`text-xs ${
+            encryptedSizeRatio > 1
+              ? "text-red-400"
+              : encryptedSizeRatio > 0.9
+                ? "text-amber-400"
+                : "text-slate-400"
+          }`}
+        >
+          Encrypted size: {encryptedSizeEstimate.toLocaleString()} /{" "}
+          {limits.encryptedPrompt.toLocaleString()} bytes
+          {encryptedSizeRatio > 1
+            ? " — too large once encrypted, shorten the prompt"
+            : ""}
+        </p>
         {errors.fullPrompt ? (
           <p id="fullPrompt-error" className="flex items-center gap-1 text-sm text-red-400">
             <AlertCircle className="h-3.5 w-3.5" />
@@ -758,6 +826,8 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
           </p>
         ) : null}
       </div>
+
+      <PrivacyLinterPanel input={linterInput} />
 
       {showChecklist ? (
         <ListingQualityChecklist items={checklistItems} />
@@ -798,7 +868,8 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
           isSubmitting ||
           !networkState.canTrustConfirmation ||
           !isFormValid ||
-          (showChecklist && checklistHasFailures)
+          (showChecklist && checklistHasFailures) ||
+          hasLinterBlockers
         }
         onClick={handleSubmit}
       >

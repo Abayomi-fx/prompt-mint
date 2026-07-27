@@ -110,11 +110,27 @@ describe("Wallet Connection States", () => {
       status: "reconnecting",
       connect: vi.fn(),
       disconnect: vi.fn(),
+      reconnect: vi.fn(),
     };
 
     renderWithProviders(<WalletButton />, { wallet: mockWallet });
 
     expect(screen.getByText(/restoring session/i)).toBeInTheDocument();
+  });
+
+  it("shows disconnected state when wallet is disconnected", () => {
+    const mockWallet: Partial<WalletContextType> = {
+      address: undefined,
+      status: "disconnected",
+      error: "Wallet is locked",
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      reconnect: vi.fn(),
+    };
+
+    renderWithProviders(<WalletButton />, { wallet: mockWallet });
+
+    expect(screen.getByText(/reconnect/i)).toBeInTheDocument();
   });
 
   it("only lists wallets the kit reports as available", async () => {

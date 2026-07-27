@@ -163,4 +163,96 @@ describe("create listing integration coverage", () => {
     expect(createPromptMock).toHaveBeenCalledTimes(1);
     expect(await screen.findByText("Prompt #17 created successfully.")).toBeInTheDocument();
   });
+
+  it("does not warn on beforeunload when the form is empty", () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+
+    renderWithProviders(<CreatePromptForm />);
+
+    const beforeunloadCalls = addSpy.mock.calls.filter(
+      ([event]) => event === "beforeunload",
+    );
+
+    expect(beforeunloadCalls.length).toBe(0);
+  });
+
+  it("warns on beforeunload when the form has unsaved changes", async () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+
+    renderWithProviders(<CreatePromptForm />);
+
+    fireEvent.change(
+      screen.getByLabelText(/title/i),
+      { target: { value: "Unsaved title" } },
+    );
+
+    const beforeunloadCalls = addSpy.mock.calls.filter(
+      ([event]) => event === "beforeunload",
+    );
+
+    expect(beforeunloadCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("clears the beforeunload warning after a successful submission", async () => {
+    const addSpy = vi.spyOn(window, "addEventListener");
+    const removeSpy = vi.spyOn(window, "removeEventListener");
+
+    encryptPromptPlaintextMock.mockResolvedValue({
+      encryptedPrompt: "encrypted-prompt",
+      encryptionIv: "encryption-iv",
+      contentHash: "b".repeat(64),
+      keyBytes: new Uint8Array([1, 2, 3, 4]),
+    });
+    wrapPromptKeyMock.mockResolvedValue("wrapped-key");
+    createPromptMock.mockResolvedValue({
+      promptId: 1n,
+      txHash: "tx-hash-123",
+    });
+
+    const signTransaction = vi.fn().mockResolvedValue({
+      signedTxXdr: "signed-transaction-xdr",
+    });
+
+    renderWithProviders(<CreatePromptForm />, {
+      wallet: {
+        address: "GCREATORACCOUNT1234567890ABCDEFGH1234567890ABCDEFGH1234567890",
+        signTransaction,
+      },
+    });
+
+    (validateListingForm as any).mockReturnValue({});
+
+    fireEvent.change(
+      screen.getByLabelText(/image url/i),
+      { target: { value: "https://example.com/new-cover.png" } }
+    );
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: "Campaign launch pack" } });
+    await selectCategory("Marketing");
+    fireEvent.change(
+      screen.getByLabelText(/preview text/i),
+      { target: { value: "Public preview for the integration test listing." } }
+    );
+    fireEvent.change(
+      screen.getByLabelText(/full prompt/i),
+      { target: { value: "Private prompt body that will be encrypted before submission." } }
+    );
+    fireEvent.change(
+      screen.getByLabelText(/price in xlm/i),
+      { target: { value: "1" } }
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /create prompt listing/i }),
+    );
+
+    await waitFor(() => {
+      expect(createPromptMock).toHaveBeenCalledTimes(1);
+    });
+
+    expect(removeSpy).toHaveBeenCalledWith(
+      "beforeunload",
+      expect.any(Function),
+    );
+  });
 });
+
