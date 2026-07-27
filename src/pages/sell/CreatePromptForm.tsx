@@ -6,6 +6,7 @@ import {
   buildChecklistItems,
 } from "@/components/sell/ListingQualityChecklist";
 import { CreatorOnboarding } from "@/components/sell/CreatorOnboarding";
+import { useBeforeUnloadWarning } from "@/hooks/useBeforeUnloadWarning";
 import { featuredPromptTemplates } from "@/data/featuredPrompts";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -63,6 +64,7 @@ interface FormData {
 
 interface CreatePromptFormProps {
   onCreated?: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const DRAFT_STORAGE_PREFIX = "prompt-hash:create-draft:";
@@ -78,7 +80,21 @@ const createEmptyFormData = (): FormData => ({
   safetyFlags: [],
 });
 
-export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
+const computeIsDirty = (formData: FormData): boolean => {
+  const empty = createEmptyFormData();
+  return (
+    formData.imageUrl !== empty.imageUrl ||
+    formData.title !== empty.title ||
+    formData.category !== empty.category ||
+    formData.previewText !== empty.previewText ||
+    formData.fullPrompt !== empty.fullPrompt ||
+    formData.priceXlm !== empty.priceXlm ||
+    formData.classification !== empty.classification ||
+    formData.safetyFlags.length !== empty.safetyFlags.length
+  );
+};
+
+export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormProps) {
   const navigate = useNavigate();
   const { address, signTransaction } = useWallet();
   const draftStorageKey = address ? `${DRAFT_STORAGE_PREFIX}${address}` : null;
@@ -97,6 +113,17 @@ export function CreatePromptForm({ onCreated }: CreatePromptFormProps) {
   const [isFirstListing] = useState(true);
   const [imagePreviewState, setImagePreviewState] = useState<"idle" | "loading" | "valid" | "invalid">("idle");
   const [imagePreviewMessage, setImagePreviewMessage] = useState<string | null>(null);
+
+  const isDirty = computeIsDirty(formData);
+
+  useBeforeUnloadWarning(
+    isDirty && !isSubmitting,
+    "You have unsaved changes. Are you sure you want to leave?",
+  );
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
 
   const isConfigured = useMemo(
     () =>
