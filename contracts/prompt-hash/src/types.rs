@@ -4,6 +4,23 @@ use soroban_sdk::{contracterror, contracttype, Address, Bytes, BytesN, Env, Stri
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Error {
+    // NB: Soroban's contract spec format caps a single `#[contracterror]`
+    // enum at 50 cases. Several independently-merged features (#42 upgrade
+    // authorization, #272 bundling, #275 staking) each grabbed overlapping
+    // discriminants and re-declared variants that already existed elsewhere
+    // in the enum, so this had drifted to 53 distinct names with duplicate
+    // values. Fixed by:
+    //  - dropping `InvalidRotation` (never returned by any code path —
+    //    encryption-rotation validation already goes through
+    //    `VersionMismatch`/`EncryptionVersionNotFound`),
+    //  - merging `InvalidSubscriptionDuration` + `InvalidSubscriptionPrice`
+    //    into one `InvalidSubscriptionConfig` (same consolidation pattern as
+    //    `InvalidFieldLength` below — neither had a test pinned to its exact
+    //    variant name),
+    //  - merging `SubscriptionConfigNotFound` into `SubscriptionNotFound`
+    //    (both "no subscription state for this creator" lookups; neither
+    //    was asserted by name in any test).
+    // Back to exactly 50, sequentially numbered.
     Unauthorized = 1,
     PromptNotFound = 2,
     CreatorCannotBuy = 3,
@@ -27,57 +44,48 @@ pub enum Error {
     InvalidReferralPercentage = 17,
     InvalidDiscountPercentage = 18,
     MaxSupplyReached = 19,
-    InvalidAsset = 20,
     // #50 – revenue splits
-    InvalidSplits = 21,
+    InvalidSplits = 20,
     // #49 – time-bound listing expiry
-    ListingExpired = 28,
-    LicenseNotFound = 29,
-    InvalidLicenseTransfer = 30,
-    ReferralCodeNotFound = 31,
-    ReferralCodeAlreadyExists = 32,
-    ReferralCodeTooShort = 33,
-    ReferralReplay = 34,
-    CircularReferral = 35,
-    // NB: these previously reused discriminants 31–35 (duplicating the
-    // Referral* variants above), which is an E0081 compile error. Renumbered to
-    // unique values so the enum compiles; kept contiguous after the staking
-    // variants below.
-    SubscriptionConfigNotFound = 54,
-    SubscriptionInactive = 55,
-    InvalidSubscriptionDuration = 56,
-    InvalidSubscriptionPrice = 57,
-    SubscriptionNotFound = 58,
-    ListingNotEligible = 36,
+    ListingExpired = 21,
+    LicenseNotFound = 22,
+    InvalidLicenseTransfer = 23,
+    ReferralCodeNotFound = 24,
+    ReferralCodeAlreadyExists = 25,
+    ReferralCodeTooShort = 26,
+    ReferralReplay = 27,
+    CircularReferral = 28,
+    SubscriptionNotFound = 29,
+    SubscriptionInactive = 30,
+    InvalidSubscriptionConfig = 31,
     // #131 – content classification
-    InvalidClassification = 36,
-    InvalidDisclosureFlags = 37,
-    InvalidContentFlagsLength = 38,
-    ClassificationAlreadyReviewed = 39,
-    NotModerator = 40,
-    InvalidSafetyFlagsLength = 41,
+    InvalidClassification = 32,
+    InvalidDisclosureFlags = 33,
+    NotModerator = 34,
     // Promotional pricing
-    InvalidPromotionTime = 42,
-    PromotionOverlap = 43,
-    PromotionNotFound = 44,
-    UnauthorizedPromotion = 45,
+    InvalidPromotionTime = 35,
+    PromotionOverlap = 36,
+    PromotionNotFound = 37,
+    UnauthorizedPromotion = 38,
     // Encryption rotation
-    EncryptionVersionNotFound = 46,
-    InvalidRotation = 47,
+    EncryptionVersionNotFound = 39,
     // Also used to guard schema migrations: reused for a stored schema
     // version newer than what the running contract code understands.
-    VersionMismatch = 48,
+    VersionMismatch = 40,
+    // #41 – platform fee safeguard
+    FeeExceedsMaximum = 41,
+    // #42 – two-step upgrade authorization
+    UpgradeAlreadyProposed = 42,
+    UpgradeNotProposed = 43,
+    UpgradeCooldownNotElapsed = 44,
     // #272 – prompt bundling
-    BundleNotFound = 49,
-    EncryptionVersionNotFound = 47,
-    InvalidRotation = 48,
-    VersionMismatch = 49,
-    KeyNotFound = 50,
+    BundleNotFound = 45,
+    KeyNotFound = 46,
     // #275 – creator reputation staking
-    StakeNotFound = 50,
-    StakeLocked = 51,
-    InvalidStakeAmount = 52,
-    NotStakeOwner = 53,
+    StakeNotFound = 47,
+    StakeLocked = 48,
+    InvalidStakeAmount = 49,
+    NotStakeOwner = 50,
 }
 
 #[contracttype]
@@ -117,6 +125,12 @@ pub enum DataKey {
     SchemaVersion,
     // #273 – time-based discount schedule per prompt
     Discount(u128),
+    // #275 – creator reputation staking, keyed by prompt id
+    CreatorStake(u128),
+    // #42 – two-step upgrade authorization
+    PendingUpgrade,
+    UpgradeProposer,
+    UpgradeProposedAt,
 }
 
 /// #273 – Time-based discount schedule for a prompt.
@@ -132,8 +146,6 @@ pub struct Discount {
     pub discounted_price: i128,
     pub start_ledger: u32,
     pub end_ledger: u32,
-    // #275 – creator reputation staking, keyed by prompt id
-    CreatorStake(u128),
 }
 
 /// A moderator-overridden classification that takes precedence
@@ -575,7 +587,8 @@ pub trait PromptHashTrait {
         safety_flags: Vec<String>,
         reason: String,
     ) -> Result<(), Error>;
-    fn get_active_classification(env: Env, prompt_id: u128) -> Result<(String, Vec<String>), Error>;
+    fn get_active_classification(env: Env, prompt_id: u128)
+        -> Result<(String, Vec<String>), Error>;
     fn get_moderator_override(env: Env, prompt_id: u128) -> Result<ClassificationOverride, Error>;
     fn set_moderator_address(env: Env, admin: Address, moderator: Address) -> Result<(), Error>;
 
@@ -590,11 +603,7 @@ pub trait PromptHashTrait {
         asset: Address,
     ) -> Result<u128, Error>;
 
-    fn cancel_promotion(
-        env: Env,
-        creator: Address,
-        prompt_id: u128,
-    ) -> Result<(), Error>;
+    fn cancel_promotion(env: Env, creator: Address, prompt_id: u128) -> Result<(), Error>;
 
     fn get_active_promotion(env: Env, prompt_id: u128) -> Result<Option<Promotion>, Error>;
 
