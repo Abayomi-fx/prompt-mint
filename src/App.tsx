@@ -8,8 +8,16 @@ const BrowsePage = lazy(() => import("./pages/browse/page.jsx"));
 const SellPage = lazy(() => import("./pages/sell/page.tsx"));
 const ChatHome = lazy(() => import("./pages/chat/page.tsx"));
 const ProfilePage = lazy(() => import("./pages/profile/page.tsx"));
+const PromptDetailPage = lazy(() => import("./pages/prompt/page.tsx"));
+const CreatorSharePage = lazy(() => import("./pages/creator/page.tsx"));
+const ComparePage = lazy(() => import("./pages/compare/page.tsx"));
 const StatusPage = lazy(() => import("./pages/status/page.tsx"));
 const ModerationPage = lazy(() => import("./pages/Moderation.tsx"));
+const ApiKeysPage = lazy(() => import("./pages/settings/ApiKeys.tsx"));
+const TransactionHistoryPage = lazy(() => import("./pages/history/page.tsx"));
+const FavoritesPage = lazy(() => import("./pages/favorites/page.tsx"));
+const CollectionDetailPage = lazy(() => import("./pages/collections/page.tsx"));
+const CreatorAnalyticsPage = lazy(() => import("./pages/analytics/page.tsx"));
 
 const AppLayout = () => (
   <main className="min-h-screen bg-slate-950 text-white pb-16 sm:pb-0">
@@ -47,6 +55,30 @@ function App() {
                 }
               />
               <Route
+                path="/prompt/:id"
+                element={
+                  <ErrorBoundary routeName="Prompt Detail">
+                    <PromptDetailPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/creator/:address"
+                element={
+                  <ErrorBoundary routeName="Creator">
+                    <CreatorSharePage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/compare"
+                element={
+                  <ErrorBoundary routeName="Compare">
+                    <ComparePage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
                 path="/sell"
                 element={
                   <ErrorBoundary routeName="Sell">
@@ -79,10 +111,50 @@ function App() {
                 }
               />
               <Route
+                path="/settings/api-keys"
+                element={
+                  <ErrorBoundary routeName="API Keys">
+                    <ApiKeysPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
                 path="/moderation"
                 element={
                   <ErrorBoundary routeName="Moderation">
                     <ModerationPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/history"
+                element={
+                  <ErrorBoundary routeName="Transaction History">
+                    <TransactionHistoryPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/favorites"
+                element={
+                  <ErrorBoundary routeName="Favorites">
+                    <FavoritesPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/collections/:id"
+                element={
+                  <ErrorBoundary routeName="Collection Detail">
+                    <CollectionDetailPage />
+                  </ErrorBoundary>
+                }
+              />
+              <Route
+                path="/analytics"
+                element={
+                  <ErrorBoundary routeName="Creator Analytics">
+                    <CreatorAnalyticsPage />
                   </ErrorBoundary>
                 }
               />

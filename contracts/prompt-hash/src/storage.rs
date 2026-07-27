@@ -1,5 +1,7 @@
-use super::types::{DataKey, Error, Prompt, Purchase, ReferralCode, Settlement};
-use super::types::{DataKey, Error, Prompt, Purchase, Subscription, SubscriptionConfig};
+use super::types::{
+    Bundle, ClassificationOverride, DataKey, Discount, Error, Prompt, PromptEncryptedPayload,
+    Purchase, ReferralCode, Settlement, Stake, Subscription, SubscriptionConfig,
+};
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
 
 pub const DAY_IN_LEDGERS: u32 = 17280;
@@ -276,10 +278,56 @@ impl Storage {
             last_transferred_at: 0,
             expires_at,
             settlement,
+            encryption_version: prompt.encryption_version,
         };
         env.storage().persistent().set(&key, &purchase);
         Self::extend_key_ttl(env, &key);
         Self::add_prompt_to_buyer(env, buyer, prompt.id);
+    }
+
+    // ─── Encryption Rotation ──────────────────────────────────────────────
+
+    /// Save an archived encrypted payload for a given version.
+    pub fn save_encryption_version(
+        env: &Env,
+        prompt_id: u128,
+        version: u32,
+        payload: &PromptEncryptedPayload,
+    ) {
+        let key = DataKey::PromptEncryptedPayload(prompt_id, version);
+        env.storage().persistent().set(&key, payload);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    /// Retrieve an archived encrypted payload for a given version.
+    pub fn get_encryption_version(
+        env: &Env,
+        prompt_id: u128,
+        version: u32,
+    ) -> Option<PromptEncryptedPayload> {
+        let key = DataKey::PromptEncryptedPayload(prompt_id, version);
+        let payload: Option<PromptEncryptedPayload> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        payload
+    }
+
+    /// Get the current encryption version counter for a prompt.
+    pub fn get_encryption_version_counter(env: &Env, prompt_id: u128) -> u32 {
+        let key = DataKey::PromptEncryptionVersion(prompt_id);
+        let counter: Option<u32> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        counter.unwrap_or(0)
+    }
+
+    /// Set (increment) the encryption version counter for a prompt.
+    pub fn set_encryption_version_counter(env: &Env, prompt_id: u128, version: u32) {
+        let key = DataKey::PromptEncryptionVersion(prompt_id);
+        env.storage().persistent().set(&key, &version);
+        Self::extend_key_ttl(env, &key);
     }
 
     pub fn set_fee_percentage(env: &Env, fee_percentage: &u32) {
@@ -435,7 +483,11 @@ impl Storage {
 
     // ─── #131: Content Classification ───────────────────────────────────────
 
-    pub fn set_moderator_override(env: &Env, prompt_id: u128, override_entry: &ClassificationOverride) {
+    pub fn set_moderator_override(
+        env: &Env,
+        prompt_id: u128,
+        override_entry: &ClassificationOverride,
+    ) {
         let key = DataKey::ClassificationOverride(prompt_id);
         env.storage().persistent().set(&key, override_entry);
         Self::extend_key_ttl(env, &key);
@@ -465,6 +517,38 @@ impl Storage {
         addr
     }
 
+    // ─── #272: Prompt Bundles ──────────────────────────────────────────────
+
+    pub fn get_bundle_counter(env: &Env) -> u128 {
+        let key = DataKey::BundleCounter;
+        let count = env.storage().persistent().get(&key).unwrap_or(0);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        count
+    }
+
+    pub fn save_bundle(env: &Env, bundle: &Bundle) -> Result<(), Error> {
+        let key = DataKey::Bundle(bundle.id);
+        env.storage().persistent().set(&key, bundle);
+        Self::extend_key_ttl(env, &key);
+
+        let counter_key = DataKey::BundleCounter;
+        let next_id = bundle.id.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        env.storage().persistent().set(&counter_key, &next_id);
+        Self::extend_key_ttl(env, &counter_key);
+        Ok(())
+    }
+
+    pub fn get_bundle(env: &Env, bundle_id: u128) -> Option<Bundle> {
+        let key = DataKey::Bundle(bundle_id);
+        let bundle = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        bundle
+    }
+
     // ─── Promotional Pricing ──────────────────────────────────────────────
 
     pub fn set_active_promotion(env: &Env, prompt_id: u128, promotion: &super::types::Promotion) {
@@ -487,7 +571,11 @@ impl Storage {
         env.storage().persistent().remove(&key);
     }
 
-    pub fn add_promotion_to_history(env: &Env, prompt_id: u128, promotion: &super::types::Promotion) {
+    pub fn add_promotion_to_history(
+        env: &Env,
+        prompt_id: u128,
+        promotion: &super::types::Promotion,
+    ) {
         let key = DataKey::PromotionHistory(prompt_id);
         let mut history: Vec<super::types::Promotion> = env
             .storage()
@@ -514,7 +602,123 @@ impl Storage {
 
     pub fn get_promotion_counter(env: &Env) -> u128 {
         let key = DataKey::PromptCounter; // Reuse prompt counter for promotion IDs
-        let count = env.storage().persistent().get(&key).unwrap_or(0);
-        count
+        env.storage().persistent().get(&key).unwrap_or(0)
+    }
+
+    // ─── #275: Creator Reputation Staking ─────────────────────────────────
+
+    pub fn get_stake(env: &Env, prompt_id: u128) -> Option<Stake> {
+        let key = DataKey::CreatorStake(prompt_id);
+        let stake = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        stake
+    }
+
+    pub fn save_stake(env: &Env, stake: &Stake) {
+        let key = DataKey::CreatorStake(stake.prompt_id);
+        env.storage().persistent().set(&key, stake);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    // ─── Upgrade Authorization (#42) ──────────────────────────────────────
+
+    pub fn set_pending_upgrade(env: &Env, wasm_hash: &BytesN<32>) {
+        let key = DataKey::PendingUpgrade;
+        env.storage().persistent().set(&key, wasm_hash);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_pending_upgrade(env: &Env) -> Option<BytesN<32>> {
+        let key = DataKey::PendingUpgrade;
+        let hash: Option<BytesN<32>> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        hash
+    }
+
+    pub fn clear_pending_upgrade(env: &Env) {
+        let key = DataKey::PendingUpgrade;
+        env.storage().persistent().remove(&key);
+    }
+
+    pub fn set_upgrade_proposer(env: &Env, proposer: &Address) {
+        let key = DataKey::UpgradeProposer;
+        env.storage().persistent().set(&key, proposer);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_upgrade_proposer(env: &Env) -> Option<Address> {
+        let key = DataKey::UpgradeProposer;
+        let proposer: Option<Address> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        proposer
+    }
+
+    pub fn clear_upgrade_proposer(env: &Env) {
+        let key = DataKey::UpgradeProposer;
+        env.storage().persistent().remove(&key);
+    }
+
+    pub fn set_upgrade_proposed_at(env: &Env, timestamp: u64) {
+        let key = DataKey::UpgradeProposedAt;
+        env.storage().persistent().set(&key, &timestamp);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_upgrade_proposed_at(env: &Env) -> Option<u64> {
+        let key = DataKey::UpgradeProposedAt;
+        let ts: Option<u64> = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        ts
+    }
+
+    pub fn clear_upgrade_proposed_at(env: &Env) {
+        let key = DataKey::UpgradeProposedAt;
+        env.storage().persistent().remove(&key);
+    }
+
+    // ─── Contract State Versioning ─────────────────────────────────────────
+
+    /// Schema version stored on-chain. `0` means the key was never written,
+    /// which covers contract state that predates this versioning scheme.
+    pub fn get_schema_version(env: &Env) -> u32 {
+        env.storage()
+            .instance()
+            .get(&DataKey::SchemaVersion)
+            .unwrap_or(0)
+    }
+
+    pub fn set_schema_version(env: &Env, version: u32) {
+        env.storage()
+            .instance()
+            .set(&DataKey::SchemaVersion, &version);
+    }
+    // ─── #273: Time-based Discounts ────────────────────────────────────────
+
+    pub fn set_discount(env: &Env, discount: &Discount) {
+        let key = DataKey::Discount(discount.prompt_id);
+        env.storage().persistent().set(&key, discount);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_discount(env: &Env, prompt_id: u128) -> Option<Discount> {
+        let key = DataKey::Discount(prompt_id);
+        let discount = env.storage().persistent().get(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        discount
+    }
+
+    pub fn clear_discount(env: &Env, prompt_id: u128) {
+        let key = DataKey::Discount(prompt_id);
+        env.storage().persistent().remove(&key);
     }
 }

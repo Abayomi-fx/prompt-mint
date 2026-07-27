@@ -6,4 +6,11 @@
  */
 
 export { PromptHashClient } from "./client.js";
-export type { PromptInfo, PurchaseResult, ClientConfig } from "./types.js";
+export type {
+  PromptInfo,
+  PurchaseResult,
+  ClientConfig,
+  VoteResult,
+  VersionedApiResponse,
+  WebhookDelivery,
+} from "./types.js";

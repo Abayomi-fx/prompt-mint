@@ -1,4 +1,30 @@
 import { xlmToStroops } from "@/lib/stellar/format";
+import { estimateEncryptedPayloadSize } from "@/lib/crypto/promptCrypto";
+
+function validatePricePrecision(priceStr: string): string | null {
+  const trimmed = priceStr.trim();
+
+  if (!trimmed) return null;
+
+  if (/[eE]/.test(trimmed)) {
+    return "Scientific notation (e.g., 2e3) is not allowed. Enter a decimal number.";
+  }
+
+  if (!/^(\d+\.?\d*|\.\d+)$/.test(trimmed)) {
+    return "Enter a valid decimal number.";
+  }
+
+  const parts = trimmed.split(".");
+  if (parts.length > 2) {
+    return "Invalid price format.";
+  }
+
+  if (parts.length === 2 && parts[1].length > 7) {
+    return "Price precision exceeds 7 decimal places (maximum: 0.0000001 XLM per stoop).";
+  }
+
+  return null;
+}
 
 // #131 – Canonical content classification taxonomy
 export const CONTENT_CLASSIFICATIONS = [
@@ -27,6 +53,9 @@ export const LISTING_LIMITS = {
   category: 40,
   preview: 280,
   fullPrompt: 50_000,
+  // On-chain MAX_ENCRYPTED_PROMPT_LEN (contracts/prompt-hash/src/contract.rs)
+  // — the encrypted+base64-encoded payload, not the plaintext character count.
+  encryptedPrompt: 4096,
 } as const;
 
 export type ListingFormInput = {
@@ -110,21 +139,28 @@ export function validateListingForm(
       "Add at least 10 characters of prompt content so buyers receive meaningful value.";
   } else if (fullPrompt.length > LISTING_LIMITS.fullPrompt) {
     errors.fullPrompt = `Shorten the prompt to ${LISTING_LIMITS.fullPrompt.toLocaleString()} characters or fewer.`;
+  } else if (estimateEncryptedPayloadSize(fullPrompt) > LISTING_LIMITS.encryptedPrompt) {
+    errors.fullPrompt = `Encrypted payload is too large for the on-chain limit (${LISTING_LIMITS.encryptedPrompt.toLocaleString()} bytes once encrypted). Shorten the prompt.`;
   }
 
   if (!priceXlm) {
     errors.priceXlm = "Enter a price in XLM — use a value greater than zero.";
   } else {
-    try {
-      const price = xlmToStroops(priceXlm);
-      if (price <= 0n) {
-        errors.priceXlm = "Set a price greater than zero XLM.";
+    const precisionError = validatePricePrecision(priceXlm);
+    if (precisionError) {
+      errors.priceXlm = precisionError;
+    } else {
+      try {
+        const price = xlmToStroops(priceXlm);
+        if (price <= 0n) {
+          errors.priceXlm = "Set a price greater than zero XLM.";
+        }
+      } catch (error) {
+        errors.priceXlm =
+          error instanceof Error
+            ? error.message
+            : "Enter a valid XLM amount with up to 7 decimal places.";
       }
-    } catch (error) {
-      errors.priceXlm =
-        error instanceof Error
-          ? error.message
-          : "Enter a valid XLM amount with up to 7 decimal places.";
     }
   }
 
@@ -146,6 +182,18 @@ export function validateListingForm(
   }
 
   return errors;
+}
+
+/**
+ * #269 – Validate a single field for inline (on-blur) feedback.
+ * Reuses {@link validateListingForm} so field rules never drift from the
+ * submit-time rules, and returns just that field's message (or undefined).
+ */
+export function validateListingField(
+  field: keyof ListingFormInput,
+  input: ListingFormInput,
+): string | undefined {
+  return validateListingForm(input)[field];
 }
 
 export async function validateImageMetadata(url: string): Promise<string | null> {

@@ -1,12 +1,17 @@
 import React, { useState, useContext, useEffect, useRef } from "react";
 import { WalletContext } from "../../providers/WalletProvider";
 import { useAsyncTransaction } from "../../components/useAsyncTransaction";
+import { estimateSingleFee, type FeeEstimate } from "@/lib/checkout/feeEstimation";
+import { FeeEstimateBanner } from "@/components/FeeEstimateBanner";
 import { PromptHashClient } from "../../lib/stellar/promptHashClient";
 import { unlockPrompt } from "../../lib/prompts/unlock";
 import { Skeleton } from "../../components/Skeleton";
 import { StatusBanner } from "../../components/StatusBanner";
 import { UnlockExplainer } from "../../components/UnlockExplainer";
 import { copyToClipboard } from "../../lib/clipboard/secureClipboard";
+import { MarkdownPreview } from "../../components/MarkdownPreview";
+import { WatermarkedPreview } from "../../components/WatermarkedPreview";
+import { CopyButton } from "../../components/CopyButton";
 import {
   CheckCircle,
   Loader2,
@@ -24,7 +29,11 @@ import {
   Hash,
   AlertTriangle,
   Info,
+  Gift,
+  Link2,
+  ShoppingCart,
 } from "lucide-react";
+import { Link } from "react-router-dom";
 import { ReviewForm } from "../../components/prompts/ReviewForm";
 import { ReviewList } from "../../components/prompts/ReviewList";
 import { StarRating } from "../../components/prompts/StarRating";
@@ -36,10 +45,18 @@ import { detectNetworkMismatch } from "../../lib/wallet/networkDetection";
 import { CurrencyPrice } from "../../components/CurrencyPrice";
 import { useNetworkState } from "@/hooks/useNetworkState";
 import { useAddToCart } from "@/hooks/useAddToCart";
-import { ShoppingCart } from "lucide-react";
-import { GiftPrompt, type GiftPromptData } from "../../components/GiftPrompt";
+import { GiftPrompt } from "../../components/GiftPrompt";
 import { trackEventWithWallet } from "../../lib/analytics/track";
 import { useTrackPromptView } from "@/hooks/useRecentlyViewed";
+import { SEOHead } from "../../components/seo/SEOHead";
+import {
+  buildCreatorSharePath,
+  buildPromptShareUrl,
+} from "@/lib/marketplace/shareUrls";
+import { translateError } from "../../lib/i18n-errors";
+import { createFocusTrapKeydownHandler } from "@/lib/a11y/focusTrap";
+import { explorerTxUrl } from "../../lib/stellar/explorer";
+import { recordTransaction } from "../../lib/history/transactions";
 
 export type BuyerStatus =
   | "IDLE"
@@ -79,14 +96,21 @@ const PromptMetadataSection: React.FC<{ itemId: string; status: BuyerStatus }> =
   if (!prompt) return null;
 
   const isPurchased = status === "PURCHASED_LOCKED" || status === "SUCCESS";
+  let creatorHref: string | null = null;
+  try {
+    creatorHref = buildCreatorSharePath(prompt.creator);
+  } catch {
+    // Invalid creator addresses stay as plain text.
+  }
 
   return (
     <div className="mb-6 space-y-4">
-      {/* Preview Content */}
-      <div className="p-4 rounded-xl bg-white/5 border border-white/5">
-        <p className="text-xs uppercase tracking-wider text-slate-400 mb-2">Preview</p>
-        <p className="text-sm text-slate-300 leading-relaxed">{prompt.previewText}</p>
-      </div>
+      {/* Preview Content – rendered as markdown, watermarked for non-owners */}
+      <WatermarkedPreview
+        content={prompt.previewText}
+        hasAccess={isPurchased}
+        previewLength={200}
+      />
 
       {/* Metadata Grid */}
       <div className="grid grid-cols-2 gap-3">
@@ -95,9 +119,26 @@ const PromptMetadataSection: React.FC<{ itemId: string; status: BuyerStatus }> =
             <User className="h-3 w-3 text-slate-400" />
             <p className="text-xs text-slate-400">Creator</p>
           </div>
-          <p className="text-xs font-mono text-white truncate" title={prompt.creator}>
-            {prompt.creator.slice(0, 8)}...{prompt.creator.slice(-4)}
-          </p>
+          <div className="flex items-center gap-1.5">
+            {creatorHref ? (
+              <Link
+                to={creatorHref}
+                className="text-xs font-mono text-cyan-200 truncate hover:text-cyan-100 underline-offset-2 hover:underline"
+                title={prompt.creator}
+              >
+                {prompt.creator.slice(0, 8)}...{prompt.creator.slice(-4)}
+              </Link>
+            ) : (
+              <p className="text-xs font-mono text-white truncate" title={prompt.creator}>
+                {prompt.creator.slice(0, 8)}...{prompt.creator.slice(-4)}
+              </p>
+            )}
+            <CopyButton
+              value={prompt.creator}
+              label="creator address"
+              variant="inline"
+            />
+          </div>
         </div>
 
         <div className="p-3 rounded-lg bg-white/5 border border-white/5">
@@ -121,9 +162,16 @@ const PromptMetadataSection: React.FC<{ itemId: string; status: BuyerStatus }> =
             <Hash className="h-3 w-3 text-slate-400" />
             <p className="text-xs text-slate-400">Content Hash</p>
           </div>
-          <p className="text-xs font-mono text-white truncate" title={prompt.contentHash}>
-            {prompt.contentHash.slice(0, 8)}...
-          </p>
+          <div className="flex items-center gap-1.5">
+            <p className="text-xs font-mono text-white truncate" title={prompt.contentHash}>
+              {prompt.contentHash.slice(0, 8)}...
+            </p>
+            <CopyButton
+              value={prompt.contentHash}
+              label="content hash"
+              variant="inline"
+            />
+          </div>
         </div>
 
         {/* #131 – Classification */}
@@ -216,18 +264,20 @@ export const PromptModal: React.FC<PromptModalProps> = ({
   }>({ visible: false, success: false, message: "" });
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [showGiftModal, setShowGiftModal] = useState(false);
+  const [feeEstimate, setFeeEstimate] = useState<FeeEstimate | null>(null);
+  const [isEstimatingFee, setIsEstimatingFee] = useState(false);
 
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
   const lastActiveElementRef = useRef<HTMLElement | null>(null);
 
-  // Fetch prompt data for gift modal
+  // Fetch prompt data for gift modal and OG metadata generation
   const { data: promptData } = useQuery({
     queryKey: ["prompt-detail", itemId],
     queryFn: async () => {
       return await PromptHashClient.getPrompt(browserStellarConfig, BigInt(itemId));
     },
-    enabled: isOpen && showGiftModal,
+    enabled: isOpen,
   });
   // Track this prompt view in recently viewed (privacy-controlled)
   useTrackPromptView(wallet?.address ?? null, itemId, isOpen);
@@ -252,37 +302,11 @@ export const PromptModal: React.FC<PromptModalProps> = ({
       lastActiveElementRef.current = document.activeElement as HTMLElement;
       setTimeout(() => closeButtonRef.current?.focus(), 0);
 
-      const handleKeyDown = (e: KeyboardEvent) => {
-        if (e.key === "Escape") {
-          onClose();
-          return;
-        }
-
-        if (e.key === "Tab") {
-          if (!modalRef.current) return;
-          const focusableElements = modalRef.current.querySelectorAll(
-            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-          );
-          if (focusableElements.length === 0) return;
-
-          const firstElement = focusableElements[0] as HTMLElement;
-          const lastElement = focusableElements[focusableElements.length - 1] as HTMLElement;
-
-          if (e.shiftKey) {
-            // Shift + Tab
-            if (document.activeElement === firstElement) {
-              lastElement.focus();
-              e.preventDefault();
-            }
-          } else {
-            // Tab
-            if (document.activeElement === lastElement) {
-              firstElement.focus();
-              e.preventDefault();
-            }
-          }
-        }
-      };
+      // #270 – shared, unit-tested focus-trap + Escape handler.
+      const handleKeyDown = createFocusTrapKeydownHandler({
+        container: () => modalRef.current,
+        onEscape: onClose,
+      });
 
       document.addEventListener("keydown", handleKeyDown);
       return () => {
@@ -303,6 +327,15 @@ export const PromptModal: React.FC<PromptModalProps> = ({
         .finally(() => setIsCheckingAccess(false));
     }
   }, [isOpen, itemId, wallet?.address]);
+
+  useEffect(() => {
+    if (isOpen && status === "IDLE") {
+      setIsEstimatingFee(true);
+      estimateSingleFee()
+        .then(setFeeEstimate)
+        .finally(() => setIsEstimatingFee(false));
+    }
+  }, [isOpen, status]);
 
   // Only fire once per modal open per prompt — wallet.address changing mid-session
   // (e.g. account switch) shouldn't re-fire a view event, so it's read via a ref
@@ -382,6 +415,21 @@ export const PromptModal: React.FC<PromptModalProps> = ({
         setStatus("UNLOCKING");
         onRefresh?.();
         trackEventWithWallet("prompt_purchase_completed", wallet?.address, { promptId: itemId });
+        if (wallet?.address) {
+          const hash = data.txHash || txHash;
+          recordTransaction(wallet.address, {
+            id: hash || `purchase-${itemId}-${Date.now()}`,
+            txHash: hash || undefined,
+            type: "purchase",
+            status: "success",
+            timestamp: Date.now(),
+            promptId: itemId,
+            title: promptData?.title,
+            amountStroops: promptData?.priceStroops
+              ? String(promptData.priceStroops)
+              : undefined,
+          });
+        }
         runUnlock(data.txHash || txHash).catch(() => {});
       },
       onError: () => {
@@ -414,10 +462,61 @@ export const PromptModal: React.FC<PromptModalProps> = ({
     }, 3000);
   };
 
+  const handleCopyShareLink = async () => {
+    if (copyTimeoutRef.current) {
+      clearTimeout(copyTimeoutRef.current);
+    }
+
+    let shareUrl: string;
+    try {
+      shareUrl = buildPromptShareUrl(itemId);
+    } catch (error) {
+      setCopyFeedback({
+        visible: true,
+        success: false,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unable to build a shareable link for this listing.",
+      });
+      copyTimeoutRef.current = setTimeout(() => {
+        setCopyFeedback((prev) => ({ ...prev, visible: false }));
+      }, 3000);
+      return;
+    }
+
+    const result = await copyToClipboard(shareUrl);
+    setCopyFeedback({
+      visible: true,
+      success: result.success,
+      message: result.success
+        ? "Link copied"
+        : result.error || "Failed to copy link",
+    });
+
+    copyTimeoutRef.current = setTimeout(() => {
+      setCopyFeedback((prev) => ({ ...prev, visible: false }));
+    }, 3000);
+  };
+
   if (!isOpen) return null;
 
+  // Prepare listing metadata for OG tags: only public fields (not gated content)
+  const listingMetadata =
+    promptData && promptData.active
+      ? {
+          title: promptData.title,
+          description: promptData.previewText, // public teaser, not gated prompt body
+          imageUrl: promptData.imageUrl,
+          creator: promptData.creator,
+          category: promptData.category,
+        }
+      : null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-md sm:p-4">
+    <>
+      <SEOHead promptId={itemId} listingMetadata={listingMetadata} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-3 backdrop-blur-md sm:p-4">
       <div
         ref={modalRef}
         className="relative max-h-[94vh] w-full max-w-lg overflow-y-auto rounded-[28px] border border-white/10 bg-slate-900 shadow-2xl sm:rounded-[32px]"
@@ -440,12 +539,31 @@ export const PromptModal: React.FC<PromptModalProps> = ({
 
         <div className="p-5 sm:p-8">
           <div className="mb-6 sm:mb-8">
-            <h2 id="prompt-modal-title" className="mb-2 text-2xl font-bold text-white">
-              Acquire License
-            </h2>
-            <p id="prompt-modal-description" className="text-sm text-slate-400">
-              Unlock high-quality prompt content via Stellar smart contract.
-            </p>
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-3 pr-10">
+              <div>
+                <h2 id="prompt-modal-title" className="mb-2 text-2xl font-bold text-white">
+                  Acquire License
+                </h2>
+                <p id="prompt-modal-description" className="text-sm text-slate-400">
+                  Unlock high-quality prompt content via Stellar smart contract.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleCopyShareLink()}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/15 bg-white/[0.03] px-3 text-xs font-semibold text-white transition-colors hover:bg-white/10"
+                aria-label="Copy shareable listing link"
+              >
+                {copyFeedback.visible &&
+                copyFeedback.success &&
+                copyFeedback.message === "Link copied" ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-300" />
+                ) : (
+                  <Link2 className="h-3.5 w-3.5" />
+                )}
+                Copy link
+              </button>
+            </div>
           </div>
 
           {/* Prompt Metadata Section */}
@@ -487,11 +605,15 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                   {status === "ERROR" && purchaseError && (
                     <StatusBanner
                       status="error"
-                      message={purchaseError.message}
+                      message={translateError(purchaseError.message)}
                     />
                   )}
 
-                  <div className="flex gap-3">
+                  {status === "IDLE" && (
+                    <FeeEstimateBanner fee={feeEstimate} isLoading={isEstimatingFee} />
+                  )}
+
+                  <div className="flex flex-wrap gap-3">
                     <button
                       onClick={() => runPurchase().catch(() => {})}
                       disabled={
@@ -522,6 +644,8 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                           Add to Cart
                         </>
                       )}
+                    </button>
+                    <button
                       onClick={() => setShowGiftModal(true)}
                       disabled={
                         !wallet?.address ||
@@ -555,8 +679,23 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                     message="Broadcasting to Stellar..."
                   />
                   {txHash && (
+                    <div className="mt-6 flex items-center gap-2">
+                      <a
+                        href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-2 text-xs text-slate-500 hover:text-emerald-400 font-mono transition-colors"
+                      >
+                        View Transaction <ExternalLink className="h-3 w-3" />
+                      </a>
+                      <CopyButton
+                        value={txHash}
+                        label="transaction hash"
+                        variant="icon"
+                      />
+                    </div>
                     <a
-                      href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+                      href={explorerTxUrl(txHash)}
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-2 mt-6 text-xs text-slate-500 hover:text-emerald-400 font-mono transition-colors"
@@ -591,7 +730,7 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                   {unlockError && (
                     <StatusBanner
                       status="error"
-                      message={unlockError.message}
+                      message={translateError(unlockError.message)}
                     />
                   )}
 
@@ -786,5 +925,6 @@ export const PromptModal: React.FC<PromptModalProps> = ({
         </div>
       )}
     </div>
+    </>
   );
 };

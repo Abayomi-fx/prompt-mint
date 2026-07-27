@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   useQueries,
   useQuery,
@@ -10,6 +11,8 @@ import {
   ChevronRight,
   PackageSearch,
   Loader2,
+  BookmarkCheck,
+  Heart,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useWallet } from "@/hooks/useWallet";
@@ -34,7 +37,12 @@ import {
 import { stroopsToXlmString } from "@/lib/stellar/format";
 import { PromptCard } from "./PromptCard";
 import { PromptModal } from "./PromptModal";
+import { ComparisonTray } from "./ComparisonTray";
 import { invalidateAllPromptQueries } from "@/hooks/useContractSync";
+import { parsePromptIdParam } from "@/lib/marketplace/shareUrls";
+import { PromptCardSkeleton } from "@/components/MarketplaceSkeletons";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { useFavorites } from "@/hooks/useFavorites";
 
 const ITEMS_PER_PAGE = 9;
 const ENABLE_INFINITE_SCROLL = true;
@@ -68,14 +76,19 @@ const FetchAllPrompts = ({
   const queryClient = useQueryClient();
   const { address } = useWallet();
   const networkState = useNetworkState();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedPrompt, setSelectedPrompt] = useState<PromptRecord | null>(
     null,
   );
+  const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const [savingPromptId, setSavingPromptId] = useState<string | null>(null);
   const [cacheNotice, setCacheNotice] = useState<string | null>(null);
   const [cachedEntry, setCachedEntry] = useState(() => readMarketplaceReadCache());
+  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+
+  const favorites = useFavorites(address);
 
   const promptsQuery = useQuery({
     queryKey: ["marketplace-prompts"],
@@ -236,9 +249,27 @@ const FetchAllPrompts = ({
     }
   };
 
+  const handleToggleFavorite = (prompt: PromptRecord) => {
+    favorites.toggle(prompt.id.toString());
+  };
+
+  const isFavorited = (promptId: string) => favorites.isFavorite(promptId);
+
+  const favoritePromptIds = useMemo(() => new Set(favorites.favorites), [favorites.favorites]);
+
   const filteredPrompts = useMemo(() => {
     const normalizedSearch = searchQuery.trim().toLowerCase();
-    const prompts = (promptsQuery.data ?? []).filter((prompt) => {
+    const allPrompts = promptsQuery.data ?? [];
+
+    // When favorites-only is active, show ALL favorited prompts (including inactive)
+    if (showFavoritesOnly && address) {
+      const favIds = favorites.favorites;
+      return allPrompts
+        .filter((prompt) => favIds.includes(prompt.id.toString()))
+        .sort((a, b) => Number(b.id - a.id));
+    }
+
+    const prompts = allPrompts.filter((prompt) => {
       const promptPrice = parseXlmNumber(prompt.priceStroops);
       const matchesCategory =
         !selectedCategory || prompt.category === selectedCategory;
@@ -253,6 +284,7 @@ const FetchAllPrompts = ({
         prompt.category.toLowerCase().includes(normalizedSearch) ||
         prompt.previewText.toLowerCase().includes(normalizedSearch) ||
         (prompt.description ?? "").toLowerCase().includes(normalizedSearch) ||
+        prompt.creator.toLowerCase().includes(normalizedSearch) ||
         prompt.tags?.some((tag) => tag.toLowerCase().includes(normalizedSearch));
       const matchesPrice =
         promptPrice >= priceRange[0] && promptPrice <= priceRange[1];
@@ -271,10 +303,18 @@ const FetchAllPrompts = ({
         );
       case "sales":
         return [...prompts].sort((a, b) => b.salesCount - a.salesCount);
+      case "bookmarked":
+        // Bookmarked (saved) prompts first, newest-first within each group.
+        return [...prompts].sort((a, b) => {
+          const aSaved = savedPromptIds.has(a.id.toString()) ? 1 : 0;
+          const bSaved = savedPromptIds.has(b.id.toString()) ? 1 : 0;
+          if (aSaved !== bSaved) return bSaved - aSaved;
+          return Number(b.id - a.id);
+        });
       default:
         return [...prompts].sort((a, b) => Number(b.id - a.id));
     }
-  }, [priceRange, promptsQuery.data, searchQuery, selectedCategory, sortBy]);
+  }, [priceRange, promptsQuery.data, searchQuery, selectedCategory, sortBy, savedPromptIds]);
 
   const totalPages = Math.max(
     1,
@@ -293,14 +333,73 @@ const FetchAllPrompts = ({
     setCurrentPage(1);
   }, [priceRange, searchQuery, selectedCategory, selectedTag, sortBy]);
 
+  useEffect(() => {
+    if (!promptsQuery.data) return;
+
+    const params = new URLSearchParams(window.location.search);
+    const promptId = params.get("promptId");
+    if (!promptId) return;
+
+    const match = promptsQuery.data.find((prompt) => prompt.id.toString() === promptId);
+    if (match) {
+      setSelectedPrompt(match);
+    }
+  }, [promptsQuery.data]);
+  // Support shareable browse deep links: /browse?prompt=<id>
+  useEffect(() => {
+    const promptParam = searchParams.get("prompt");
+    if (!promptParam) {
+      setDeepLinkError(null);
+      return;
+    }
+
+    const parsed = parsePromptIdParam(promptParam);
+    if (!parsed.ok) {
+      setDeepLinkError(parsed.error);
+      setSelectedPrompt(null);
+      return;
+    }
+
+    const prompts = promptsQuery.data;
+    if (!prompts) {
+      return;
+    }
+
+    const match = prompts.find((prompt) => prompt.id.toString() === parsed.promptId);
+    if (!match) {
+      setDeepLinkError(
+        `Prompt #${parsed.promptId} was not found in the current marketplace catalog.`,
+      );
+      setSelectedPrompt(null);
+      return;
+    }
+
+    setDeepLinkError(null);
+    setSelectedPrompt(match);
+  }, [promptsQuery.data, searchParams]);
+
+  const openPromptModal = (prompt: PromptRecord) => {
+    setDeepLinkError(null);
+    setSelectedPrompt(prompt);
+    const next = new URLSearchParams(searchParams);
+    next.set("prompt", prompt.id.toString());
+    setSearchParams(next, { replace: true });
+  };
+
+  const closePromptModal = () => {
+    setSelectedPrompt(null);
+    if (searchParams.has("prompt")) {
+      const next = new URLSearchParams(searchParams);
+      next.delete("prompt");
+      setSearchParams(next, { replace: true });
+    }
+  };
+
   if (promptsQuery.isLoading) {
     return (
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2 xl:grid-cols-3">
         {[...Array(6)].map((_, i) => (
-          <div
-            key={i}
-            className="h-[400px] rounded-3xl border border-white/5 bg-white/[0.02] animate-pulse"
-          />
+          <PromptCardSkeleton key={i} />
         ))}
       </div>
     );
@@ -342,6 +441,27 @@ const FetchAllPrompts = ({
             </div>
           )}
         </div>
+        {address && (
+          <button
+            onClick={() => setShowFavoritesOnly((prev) => !prev)}
+            className={`inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg border transition-colors ${
+              showFavoritesOnly
+                ? "bg-rose-500/20 border-rose-500/40 text-rose-300"
+                : "bg-slate-500/10 border-slate-500/20 text-slate-400 hover:text-white"
+            }`}
+            aria-label={showFavoritesOnly ? "Show all prompts" : "Show favorites only"}
+            aria-pressed={showFavoritesOnly}
+          >
+            <Heart className={`h-3.5 w-3.5 ${showFavoritesOnly ? "fill-rose-400 text-rose-400" : ""}`} />
+            {favorites.count > 0 ? `${favorites.count} favorited` : "Favorites"}
+          </button>
+        )}
+        {savedPromptIds.size > 0 && !showFavoritesOnly && (
+          <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-300 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-lg">
+            <BookmarkCheck className="h-3.5 w-3.5" />
+            {savedPromptIds.size} bookmarked
+          </div>
+        )}
         {!networkState.canTrustConfirmation && (
           <div className="text-xs font-semibold text-rose-300 bg-rose-500/10 border border-rose-500/20 px-3 py-1.5 rounded-lg">
             Read-Only Mode — On-chain actions disabled until network connection is stable
@@ -356,19 +476,36 @@ const FetchAllPrompts = ({
         </div>
       )}
 
+      {deepLinkError && (
+        <div
+          role="alert"
+          className="mb-8 rounded-2xl border border-rose-500/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-200"
+        >
+          {deepLinkError}
+        </div>
+      )}
+
       {filteredPrompts.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center space-y-4">
-          <div className="p-4 rounded-full bg-slate-900 border border-white/5">
-            <PackageSearch className="h-8 w-8 text-slate-500" />
-          </div>
-          <div className="space-y-1">
-            <h3 className="text-lg font-semibold">No prompts found</h3>
-            <p className="text-slate-500 max-w-[280px]">
-              Try adjusting your filters or search terms to find what you're
-              looking for.
+        showFavoritesOnly ? (
+          <div className="flex flex-col items-center justify-center p-12 text-center">
+            <Heart className="h-12 w-12 text-rose-400/50 mb-4" />
+            <h3 className="text-lg font-semibold text-white mb-2">No favorites yet</h3>
+            <p className="text-sm text-slate-400 max-w-md">
+              Browse the marketplace and click the heart icon on prompts you'd like to save.
+              Your favorites follow your wallet across devices.
             </p>
           </div>
-        </div>
+        ) : (
+        <EmptyState
+          variant={searchQuery || selectedCategory || selectedTag ? "search-empty" : "no-results"}
+          title={searchQuery || selectedCategory || selectedTag ? "No matching prompts" : "No prompts found"}
+          description={
+            searchQuery || selectedCategory || selectedTag
+              ? "Try adjusting your filters or search terms to find what you're looking for."
+              : "The marketplace has no active listings at the moment. Check back soon."
+          }
+          size="lg"
+        />
       ) : (
         <>
           <div className="grid grid-cols-1 gap-8 md:grid-cols-2 xl:grid-cols-3">
@@ -377,10 +514,12 @@ const FetchAllPrompts = ({
                 key={prompt.id.toString()}
                 prompt={prompt}
                 hasAccess={accessMap.get(prompt.id.toString()) ?? false}
-                openModal={setSelectedPrompt}
+                openModal={openPromptModal}
                 isSaved={savedPromptIds.has(prompt.id.toString())}
                 isSaving={savingPromptId === prompt.id.toString()}
                 onToggleSave={handleToggleSave}
+                isFavorited={isFavorited(prompt.id.toString())}
+                onToggleFavorite={Boolean(address) ? handleToggleFavorite : undefined}
               />
             ))}
           </div>
@@ -440,10 +579,13 @@ const FetchAllPrompts = ({
         <PromptModal
           itemId={selectedPrompt.id.toString()}
           isOpen={!!selectedPrompt}
-          onClose={() => setSelectedPrompt(null)}
+          onClose={closePromptModal}
           onRefresh={() => invalidateAllPromptQueries(queryClient)}
         />
       )}
+
+      {/* #277 – floating comparison tray */}
+      <ComparisonTray />
     </>
   );
 };

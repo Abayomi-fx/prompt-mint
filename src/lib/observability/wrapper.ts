@@ -5,6 +5,40 @@ import { metrics } from "./metrics";
 // eslint-disable-next-line no-unused-vars
 export type ApiHandler = (_req: any, _res: any) => Promise<void> | void;
 
+/**
+ * Apply security headers to response
+ */
+function applySecurityHeaders(req: any, res: any): void {
+  // Prevent MIME type sniffing
+  res.setHeader("X-Content-Type-Options", "nosniff");
+
+  // Prevent clickjacking attacks
+  res.setHeader("X-Frame-Options", "DENY");
+
+  // Enable XSS protection
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+
+  // Control referrer information
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+
+  // Restrict browser features
+  res.setHeader("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+
+  // HSTS (only in production with HTTPS)
+  if (process.env.NODE_ENV === "production" && (req.headers["x-forwarded-proto"] === "https" || req.secure)) {
+    res.setHeader(
+      "Strict-Transport-Security",
+      "max-age=31536000; includeSubDomains; preload"
+    );
+  }
+
+  // Content Security Policy (basic implementation for API endpoints)
+  res.setHeader(
+    "Content-Security-Policy",
+    "default-src 'none'; frame-ancestors 'none';"
+  );
+}
+
 export function withObservability(handler: ApiHandler, name: string): ApiHandler {
   return async (req, res) => {
     const requestId = uuidv4();
@@ -24,6 +58,9 @@ export function withObservability(handler: ApiHandler, name: string): ApiHandler
       // Inject logger into request if needed, or just use the childLogger
       req.logger = childLogger;
       req.requestId = requestId;
+
+      // Apply security headers before handler execution
+      applySecurityHeaders(req, res);
 
       await handler(req, res);
 
@@ -46,6 +83,8 @@ export function withObservability(handler: ApiHandler, name: string): ApiHandler
       metrics.emit("api_request_error_total", 1, { path: name, error: message });
 
       if (!res.writableEnded) {
+        // Ensure security headers are applied even on error responses
+        applySecurityHeaders(req, res);
         res.status(500).json({
           error: "Internal server error",
           requestId,

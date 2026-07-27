@@ -40,6 +40,7 @@ export interface PromptRecord {
   encryptedPrompt?: string;
   encryptionIv?: string;
   wrappedKey?: string;
+  encryptionVersion?: number;
   // #131 – content classification and safety disclosures
   classification?: string;
   safetyFlags?: string[];
@@ -47,6 +48,29 @@ export interface PromptRecord {
   activePromotion?: Promotion;
   effectivePrice?: bigint;
   isPromotional?: boolean;
+}
+
+/** Archived encryption payload for a prompt at a specific version. */
+export interface PromptEncryptedPayload {
+  promptId: bigint;
+  version: number;
+  encryptedPrompt: string;
+  encryptionIv: string;
+  wrappedKey: string;
+  contentHash: string;
+  createdAt: number;
+}
+
+export interface PurchaseDetails {
+  promptId: bigint;
+  originalCreator: string;
+  owner: string;
+  originalPrice: bigint;
+  lastTransferPrice: bigint;
+  transferCount: number;
+  lastTransferredAt: number;
+  expiresAt: number;
+  encryptionVersion: number;
 }
 
 export interface Promotion {
@@ -73,6 +97,110 @@ export interface BulkPurchaseResult {
     txHash?: string;
     error?: string;
   }[];
+}
+
+export const CONTRACT_ERROR_CODES = {
+  CONTRACT_PAUSED: "CONTRACT_PAUSED",
+  PROMPT_NOT_FOUND: "PROMPT_NOT_FOUND",
+  UNAUTHORIZED: "UNAUTHORIZED",
+  INVALID_PRICE: "INVALID_PRICE",
+  ALREADY_PURCHASED: "ALREADY_PURCHASED",
+  LISTING_EXPIRED: "LISTING_EXPIRED",
+  UNKNOWN: "UNKNOWN",
+} as const;
+
+export type ContractErrorCode = (typeof CONTRACT_ERROR_CODES)[keyof typeof CONTRACT_ERROR_CODES];
+
+export interface ContractErrorDetails {
+  code: ContractErrorCode;
+  message: string;
+  isUserActionable: boolean;
+  raw: string;
+}
+
+function normalizeContractErrorText(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return "Unknown contract error";
+}
+
+export function classifyContractError(error: unknown): ContractErrorDetails {
+  const raw = normalizeContractErrorText(error).trim();
+  const normalized = raw.toLowerCase();
+
+  if (normalized.includes("paused") || normalized.includes("contractispaused")) {
+    return {
+      code: CONTRACT_ERROR_CODES.CONTRACT_PAUSED,
+      message: "The marketplace is temporarily paused. Please try again shortly.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("promptnotfound") || normalized.includes("not found") || normalized.includes("prompt #")) {
+    return {
+      code: CONTRACT_ERROR_CODES.PROMPT_NOT_FOUND,
+      message: "The requested prompt could not be found.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("unauthorized") || normalized.includes("not authorized")) {
+    return {
+      code: CONTRACT_ERROR_CODES.UNAUTHORIZED,
+      message: "You are not authorized to perform this action.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("alreadypurchased") || normalized.includes("already purchased")) {
+    return {
+      code: CONTRACT_ERROR_CODES.ALREADY_PURCHASED,
+      message: "You already have access to this prompt.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("listingexpired") || normalized.includes("expired")) {
+    return {
+      code: CONTRACT_ERROR_CODES.LISTING_EXPIRED,
+      message: "This listing is no longer available for purchase.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("invalidprice") || normalized.includes("invalid price")) {
+    return {
+      code: CONTRACT_ERROR_CODES.INVALID_PRICE,
+      message: "The requested price is invalid.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  return {
+    code: CONTRACT_ERROR_CODES.UNKNOWN,
+    message: "The marketplace could not complete that action. Please try again later.",
+    isUserActionable: true,
+    raw,
+  };
+}
+
+export function formatContractErrorMessage(error: unknown | ContractErrorDetails): string {
+  if (typeof error === "object" && error !== null && "code" in error && "message" in error) {
+    const details = error as ContractErrorDetails;
+    return details.message;
+  }
+
+  return classifyContractError(error).message;
 }
 
 export class PromptHashClient {
@@ -313,6 +441,30 @@ export class PromptHashClient {
     warnMockUse();
     return { price: 0n, asset: "", isPromotional: false };
   }
+
+  /**
+   * Gets the purchase details for a buyer on a specific prompt.
+   */
+  static async getPurchaseDetails(
+    _config: PromptHashConfig,
+    _promptId: bigint,
+    _buyer: string,
+  ): Promise<PurchaseDetails | null> {
+    warnMockUse();
+    return null;
+  }
+
+  /**
+   * Retrieves an archived encrypted payload for a specific version.
+   */
+  static async getPromptEncryptionVersion(
+    _config: PromptHashConfig,
+    _promptId: bigint,
+    _version: number,
+  ): Promise<PromptEncryptedPayload> {
+    warnMockUse();
+    throw new Error("Encryption version not found (mock)");
+  }
 }
 
 // --- Standalone exports to satisfy existing UI component imports ---
@@ -372,3 +524,13 @@ export const updatePromptPrice = async (
     promptId,
     newPrice,
   );
+export const getPurchaseDetails = async (
+  config: PromptHashConfig,
+  promptId: bigint,
+  buyer: string,
+) => PromptHashClient.getPurchaseDetails(config, promptId, buyer);
+export const getPromptEncryptionVersion = async (
+  config: PromptHashConfig,
+  promptId: bigint,
+  version: number,
+) => PromptHashClient.getPromptEncryptionVersion(config, promptId, version);

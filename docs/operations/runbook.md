@@ -1,5 +1,11 @@
 # Runbook: Operating Unlock Services
 
+## Unlock key loss and recovery
+
+For backup, escrow, rotation duties, operator-approved recovery verification, and
+compromise / permanent loss / rollback procedures, see
+[Unlock key recovery](./unlock-key-recovery.md).
+
 ## Production-like load tests
 
 Use the [load-testing runbook](./load-testing.md) for browse, challenge, unlock,

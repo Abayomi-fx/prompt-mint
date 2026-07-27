@@ -1,89 +1,162 @@
-import { Request, Response } from "express";
 import { randomBytes } from "crypto";
 import connectDb from "../db/connectDb";
 import WebhookSubscription from "../models/WebhookSubscription";
+import WebhookDelivery from "../models/WebhookDelivery";
+import { AppError } from "../lib/AppError";
+import { asyncRoute } from "../lib/asyncRoute";
+import { validateWebhookUrl } from "../lib/validateWebhookUrl";
+import { sendTestEvent } from "../services/webhookDispatcher";
 
-export const RegisterWebhook = async (req: Request, res: Response): Promise<Response> => {
-  try {
-    await connectDb();
-    const { walletAddress, url, events } = req.body;
+/**
+ * Real contract events a creator can subscribe a webhook to (issue #23:
+ * "listing sales, transfers, disputes, and version updates").
+ */
+const ALLOWED_EVENTS = [
+  "PromptPurchased", // listing sales
+  "LicenseTransferred", // transfers
+  "DisputeOpened", // disputes
+  "DisputeResolved", // disputes
+  "EncryptionRotated", // version updates
+];
 
-    if (!walletAddress || !url) {
-      return res.status(400).json({ error: "walletAddress and url are required." });
-    }
+export const RegisterWebhook = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { walletAddress, url, events } = req.body;
 
-    try {
-      new URL(url);
-    } catch {
-      return res.status(400).json({ error: "url must be a valid URL." });
-    }
-
-    const secret = randomBytes(32).toString("hex");
-    const allowedEvents = ["PromptPurchased"];
-    const resolvedEvents = Array.isArray(events)
-      ? events.filter((e: string) => allowedEvents.includes(e))
-      : ["PromptPurchased"];
-
-    const existing = await WebhookSubscription.findOne({
-      walletAddress: walletAddress.toLowerCase(),
-    });
-
-    if (existing) {
-      existing.url = url;
-      existing.events = resolvedEvents;
-      existing.active = true;
-      existing.failureCount = 0;
-      await existing.save();
-      return res.status(200).json({ message: "Webhook updated.", id: existing._id, secret });
-    }
-
-    const sub = new WebhookSubscription({
-      walletAddress: walletAddress.toLowerCase(),
-      url,
-      secret,
-      events: resolvedEvents,
-    });
-    await sub.save();
-
-    return res.status(201).json({ message: "Webhook registered.", id: sub._id, secret });
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  if (!walletAddress || !url) {
+    throw new AppError("walletAddress and url are required.", 400, "MISSING_FIELDS");
   }
-};
 
-export const GetWebhook = async (req: Request, res: Response): Promise<Response> => {
-  try {
-    await connectDb();
-    const { walletAddress } = req.query;
-
-    if (!walletAddress) {
-      return res.status(400).json({ error: "walletAddress query param is required." });
-    }
-
-    const sub = await WebhookSubscription.findOne({
-      walletAddress: String(walletAddress).toLowerCase(),
-    }).select("-secret");
-
-    if (!sub) return res.status(404).json({ error: "No webhook registered for this wallet." });
-
-    return res.json(sub);
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  const urlCheck = await validateWebhookUrl(url);
+  if (!urlCheck.valid) {
+    throw new AppError(urlCheck.reason ?? "url is not allowed.", 400, "INVALID_INPUT");
   }
-};
 
-export const DeleteWebhook = async (req: Request, res: Response): Promise<Response> => {
-  try {
-    await connectDb();
-    const { walletAddress } = req.body;
+  const secret = randomBytes(32).toString("hex");
+  const resolvedEvents = Array.isArray(events)
+    ? events.filter((e: string) => ALLOWED_EVENTS.includes(e))
+    : ["PromptPurchased"];
 
-    if (!walletAddress) {
-      return res.status(400).json({ error: "walletAddress is required." });
-    }
+  const existing = await WebhookSubscription.findOne({
+    walletAddress: walletAddress.toLowerCase(),
+  });
 
-    await WebhookSubscription.deleteOne({ walletAddress: walletAddress.toLowerCase() });
-    return res.status(200).json({ message: "Webhook removed." });
-  } catch (err) {
-    return res.status(500).json({ error: (err as Error).message });
+  if (existing) {
+    existing.url = url;
+    existing.events = resolvedEvents;
+    existing.active = true;
+    existing.failureCount = 0;
+    await existing.save();
+    res.status(200).json({ message: "Webhook updated.", id: existing._id, secret });
+    return;
   }
-};
+
+  const sub = new WebhookSubscription({
+    walletAddress: walletAddress.toLowerCase(),
+    url,
+    secret,
+    events: resolvedEvents,
+  });
+  await sub.save();
+
+  res.status(201).json({ message: "Webhook registered.", id: sub._id, secret });
+});
+
+export const GetWebhook = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { walletAddress } = req.query;
+
+  if (!walletAddress) {
+    throw new AppError("walletAddress query param is required.", 400, "MISSING_FIELDS");
+  }
+
+  const sub = await WebhookSubscription.findOne({
+    walletAddress: String(walletAddress).toLowerCase(),
+  }).select("-secret");
+
+  if (!sub) {
+    throw new AppError("No webhook registered for this wallet.", 404, "NOT_FOUND");
+  }
+
+  res.json(sub);
+});
+
+export const DeleteWebhook = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { walletAddress } = req.body;
+
+  if (!walletAddress) {
+    throw new AppError("walletAddress is required.", 400, "MISSING_FIELDS");
+  }
+
+  await WebhookSubscription.deleteOne({ walletAddress: walletAddress.toLowerCase() });
+  res.status(200).json({ message: "Webhook removed." });
+});
+
+/** Rotates the HMAC secret for a wallet's webhook. The old secret stops working immediately. */
+export const RotateWebhookSecret = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { walletAddress } = req.body;
+
+  if (!walletAddress) {
+    throw new AppError("walletAddress is required.", 400, "MISSING_FIELDS");
+  }
+
+  const sub = await WebhookSubscription.findOne({
+    walletAddress: walletAddress.toLowerCase(),
+  });
+  if (!sub) {
+    throw new AppError("No webhook registered for this wallet.", 404, "NOT_FOUND");
+  }
+
+  const secret = randomBytes(32).toString("hex");
+  sub.secret = secret;
+  await sub.save();
+
+  res.status(200).json({ message: "Secret rotated.", secret });
+});
+
+/** Sends a synthetic test event to the registered endpoint and reports the outcome inline. */
+export const TestWebhook = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { walletAddress } = req.body;
+
+  if (!walletAddress) {
+    throw new AppError("walletAddress is required.", 400, "MISSING_FIELDS");
+  }
+
+  const sub = await WebhookSubscription.findOne({
+    walletAddress: walletAddress.toLowerCase(),
+  });
+  if (!sub) {
+    throw new AppError("No webhook registered for this wallet.", 404, "NOT_FOUND");
+  }
+
+  const result = await sendTestEvent(sub);
+  res.status(200).json(result);
+});
+
+/** Lists recent delivery attempts for a wallet's webhook so creators can inspect history. */
+export const GetWebhookDeliveries = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { walletAddress } = req.query;
+
+  if (!walletAddress) {
+    throw new AppError("walletAddress query param is required.", 400, "MISSING_FIELDS");
+  }
+
+  const sub = await WebhookSubscription.findOne({
+    walletAddress: String(walletAddress).toLowerCase(),
+  });
+  if (!sub) {
+    throw new AppError("No webhook registered for this wallet.", 404, "NOT_FOUND");
+  }
+
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const deliveries = await WebhookDelivery.find({ subscriptionId: sub._id })
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .lean();
+
+  res.json(deliveries);
+});

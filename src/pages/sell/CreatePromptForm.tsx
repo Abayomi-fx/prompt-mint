@@ -1,6 +1,6 @@
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import {
   ListingQualityChecklist,
   buildChecklistItems,
@@ -22,6 +22,7 @@ import { useWallet } from "@/hooks/useWallet";
 import { unlockPublicKey } from "@/lib/env";
 import {
   encryptPromptPlaintext,
+  estimateEncryptedPayloadSize,
   wrapPromptKey,
 } from "@/lib/crypto/promptCrypto";
 import { browserStellarConfig } from "@/lib/stellar/browserConfig";
@@ -30,15 +31,19 @@ import { createPrompt } from "@/lib/stellar/promptHashClient";
 import {
   LISTING_LIMITS,
   validateListingForm,
+  validateListingField,
   validateImageMetadata,
   CONTENT_CLASSIFICATIONS,
   SAFETY_DISCLOSURE_FLAGS,
+  type ListingFormInput,
 } from "@/lib/validation/listing";
 import { useNetworkState } from "@/hooks/useNetworkState";
+import { translateError } from "@/lib/i18n-errors";
+import { usePrivacyLinter } from "@/hooks/usePrivacyLinter";
+import { PrivacyLinterPanel } from "@/components/sell/PrivacyLinterPanel";
 
 const limits = {
   ...LISTING_LIMITS,
-  encrypted: 4096,
   wrappedKey: 256,
 };
 
@@ -97,6 +102,7 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
   const skipNextAutosaveRef = useRef(false);
   const [formData, setFormData] = useState<FormData>(createEmptyFormData);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
@@ -105,6 +111,8 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
   const [lastSavedAt, setLastSavedAt] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(true);
   const [isFirstListing] = useState(true);
+  const [imagePreviewState, setImagePreviewState] = useState<"idle" | "loading" | "valid" | "invalid">("idle");
+  const [imagePreviewMessage, setImagePreviewMessage] = useState<string | null>(null);
 
   const isDirty = computeIsDirty(formData);
 
@@ -132,7 +140,48 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
     [formData],
   );
 
+  // #61 – real-time feedback on the *encrypted* payload size (base64 AES-GCM
+  // ciphertext), which is what the on-chain MAX_ENCRYPTED_PROMPT_LEN limit
+  // actually gates — not the plaintext character count shown while typing.
+  const encryptedSizeEstimate = useMemo(
+    () => estimateEncryptedPayloadSize(formData.fullPrompt),
+    [formData.fullPrompt],
+  );
+  const encryptedSizeRatio = encryptedSizeEstimate / limits.encryptedPrompt;
+
   const checklistHasFailures = checklistItems.some((i) => i.status === "fail");
+
+  const linterInput = useMemo(
+    () => ({
+      title: formData.title,
+      preview: formData.previewText,
+      description: formData.previewText,
+      tags: formData.safetyFlags,
+      imageUrl: formData.imageUrl,
+    }),
+    [formData],
+  );
+  const { hasBlocking: hasLinterBlockers } = usePrivacyLinter(linterInput);
+
+  const persistDraft = (nextFormData: FormData = formData) => {
+    if (!draftStorageKey) {
+      return;
+    }
+
+    try {
+      const savedAt = new Date().toISOString();
+      window.localStorage.setItem(
+        draftStorageKey,
+        JSON.stringify({
+          savedAt,
+          formData: nextFormData,
+        }),
+      );
+      setLastSavedAt(savedAt);
+    } catch {
+      setSubmitError("Unable to save your draft locally. Your browser storage may be unavailable.");
+    }
+  };
 
   const clearDraft = () => {
     if (draftStorageKey) {
@@ -193,18 +242,20 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
     }
 
     const timeout = window.setTimeout(() => {
-      const savedAt = new Date().toISOString();
-      window.localStorage.setItem(
-        draftStorageKey,
-        JSON.stringify({
-          savedAt,
-          formData,
-        }),
-      );
-      setLastSavedAt(savedAt);
+      persistDraft(formData);
     }, 500);
 
     return () => window.clearTimeout(timeout);
+  }, [draftStorageKey, formData, isSubmitting]);
+
+  useEffect(() => {
+    return () => {
+      if (!draftStorageKey || isSubmitting) {
+        return;
+      }
+
+      persistDraft(formData);
+    };
   }, [draftStorageKey, formData, isSubmitting]);
 
   const handleChange = (
@@ -217,10 +268,20 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
       delete next[name];
       return next;
     });
+
+    if (name === "imageUrl") {
+      setImagePreviewState("idle");
+      setImagePreviewMessage(null);
+      if (!value.trim()) {
+        setImagePreviewState("invalid");
+        setImagePreviewMessage("Add an image URL to preview your listing cover.");
+      }
+    }
   };
 
   const handleCategoryChange = (value: string) => {
     setFormData((previous) => ({ ...previous, category: value }));
+    setTouched((previous) => ({ ...previous, category: true }));
     setErrors((previous) => {
       const next = { ...previous };
       delete next.category;
@@ -228,11 +289,101 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
     });
   };
 
+  // #269 – order used to auto-focus the first invalid field on a failed submit
+  const FIELD_ORDER: (keyof ListingFormInput)[] = [
+    "imageUrl",
+    "title",
+    "category",
+    "previewText",
+    "priceXlm",
+    "classification",
+    "fullPrompt",
+  ];
+
   const validateForm = () => {
     const nextErrors = validateListingForm(formData);
     setErrors(nextErrors);
-    return Object.keys(nextErrors).length === 0;
+    if (Object.keys(nextErrors).length > 0) {
+      // Auto-focus the first invalid field so the user lands on the problem.
+      const firstInvalid = FIELD_ORDER.find((field) => nextErrors[field]);
+      if (firstInvalid) {
+        requestAnimationFrame(() =>
+          document.getElementById(firstInvalid)?.focus(),
+        );
+      }
+      return false;
+    }
+    return true;
   };
+
+  // #269 – validate a single field on blur so feedback is inline and real-time.
+  const handleBlur = (name: keyof ListingFormInput) => {
+    setTouched((prev) => ({ ...prev, [name]: true }));
+    const message = validateListingField(name, formData);
+    setErrors((prev) => {
+      const next = { ...prev };
+      if (message) {
+        next[name] = message;
+      } else {
+        delete next[name];
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (!formData.imageUrl.trim()) {
+      return;
+    }
+
+    const isLikelyUrl = /^https?:\/\/.+/i.test(formData.imageUrl.trim());
+    if (!isLikelyUrl) {
+      setImagePreviewState("invalid");
+      setImagePreviewMessage("Use a full http:// or https:// URL to preview the image.");
+      return;
+    }
+
+    let active = true;
+    setImagePreviewState("loading");
+    setImagePreviewMessage("Checking image URL...");
+
+    validateImageMetadata(formData.imageUrl.trim())
+      .then((error) => {
+        if (!active) return;
+        if (error) {
+          setImagePreviewState("invalid");
+          setImagePreviewMessage(error);
+          return;
+        }
+        setImagePreviewState("valid");
+        setImagePreviewMessage("Preview available.");
+      })
+      .catch(() => {
+        if (!active) return;
+        setImagePreviewState("invalid");
+        setImagePreviewMessage("Unable to validate the image URL right now.");
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [formData.imageUrl]);
+  // #269 – a field is "success" once touched and passing validation.
+  const isFieldValid = (name: keyof ListingFormInput) =>
+    Boolean(touched[name]) && !validateListingField(name, formData);
+
+  const fieldClass = (name: keyof ListingFormInput) =>
+    errors[name]
+      ? "border-red-500"
+      : isFieldValid(name)
+        ? "border-emerald-500 focus-visible:ring-emerald-500/30"
+        : "";
+
+  // #269 – submit stays disabled until every required field is valid.
+  const isFormValid = useMemo(
+    () => Object.keys(validateListingForm(formData)).length === 0,
+    [formData],
+  );
 
   const networkState = useNetworkState();
   const submittingGuardRef = useRef(false);
@@ -258,6 +409,8 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
     if (!validateForm()) {
       return;
     }
+
+    persistDraft(formData);
 
     setIsSubmitting(true);
     const imageError = await validateImageMetadata(formData.imageUrl);
@@ -291,7 +444,7 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
       const encrypted = await encryptPromptPlaintext(formData.fullPrompt);
       const wrappedKey = await wrapPromptKey(encrypted.keyBytes, unlockPublicKey);
 
-      if (encrypted.encryptedPrompt.length > limits.encrypted) {
+      if (encrypted.encryptedPrompt.length > limits.encryptedPrompt) {
         throw new Error(
           "Encrypted payload is too large for the current on-chain limit. Shorten the full prompt and try again.",
         );
@@ -328,7 +481,7 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
       }
     } catch (error) {
       setSubmitError(
-        error instanceof Error ? error.message : "Failed to create prompt.",
+        translateError(error instanceof Error ? error.message : "Failed to create prompt.")
       );
     } finally {
       setIsSubmitting(false);
@@ -362,10 +515,11 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
             name="imageUrl"
             value={formData.imageUrl}
             onChange={handleChange}
+            onBlur={() => handleBlur("imageUrl")}
             type="url"
             autoComplete="url"
             placeholder="https://example.com/prompt-cover.png"
-            className={errors.imageUrl ? "border-red-500" : ""}
+            className={fieldClass("imageUrl")}
             aria-invalid={!!errors.imageUrl}
             aria-describedby={errors.imageUrl ? "imageUrl-error" : undefined}
           />
@@ -374,6 +528,39 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
               <AlertCircle className="h-3.5 w-3.5" />
               {errors.imageUrl}
             </p>
+          ) : isFieldValid("imageUrl") ? (
+            <p className="flex items-center gap-1 text-sm text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Looks good
+            </p>
+          ) : null}
+          {formData.imageUrl.trim() ? (
+            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Image preview</p>
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${imagePreviewState === "valid" ? "bg-emerald-500/15 text-emerald-300" : imagePreviewState === "loading" ? "bg-cyan-500/15 text-cyan-300" : "bg-red-500/15 text-red-300"}`}>
+                  {imagePreviewState === "valid" ? "Ready" : imagePreviewState === "loading" ? "Checking" : "Needs attention"}
+                </span>
+              </div>
+              {imagePreviewState === "loading" ? (
+                <p className="text-sm text-slate-300">{imagePreviewMessage}</p>
+              ) : (
+                <>
+                  <div className="overflow-hidden rounded-lg border border-white/10 bg-slate-950/60">
+                    <img
+                      src={formData.imageUrl.trim()}
+                      alt="Listing cover preview"
+                      className="h-40 w-full object-cover"
+                      onError={() => {
+                        setImagePreviewState("invalid");
+                        setImagePreviewMessage("The image could not be loaded. Try another URL.");
+                      }}
+                    />
+                  </div>
+                  <p className="mt-2 text-sm text-slate-300">{imagePreviewMessage}</p>
+                </>
+              )}
+            </div>
           ) : null}
         </div>
         <div className="space-y-2">
@@ -385,9 +572,10 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
             name="title"
             value={formData.title}
             onChange={handleChange}
+            onBlur={() => handleBlur("title")}
             autoComplete="off"
             placeholder="Board-ready launch plan"
-            className={errors.title ? "border-red-500" : ""}
+            className={fieldClass("title")}
             aria-invalid={!!errors.title}
             aria-describedby={errors.title ? "title-error" : undefined}
           />
@@ -398,6 +586,11 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
             <p id="title-error" className="flex items-center gap-1 text-sm text-red-400">
               <AlertCircle className="h-3.5 w-3.5" />
               {errors.title}
+            </p>
+          ) : isFieldValid("title") ? (
+            <p className="flex items-center gap-1 text-sm text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Looks good
             </p>
           ) : null}
         </div>
@@ -413,10 +606,9 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
             name="previewText"
             value={formData.previewText}
             onChange={handleChange}
+            onBlur={() => handleBlur("previewText")}
             placeholder="Brief description of the prompt. This will be publicly visible."
-            className={`min-h-[120px] resize-none ${
-              errors.previewText ? "border-red-500" : ""
-            }`}
+            className={`min-h-[120px] resize-none ${fieldClass("previewText")}`}
             aria-invalid={!!errors.previewText}
             aria-describedby={errors.previewText ? "previewText-error" : undefined}
           />
@@ -428,6 +620,11 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
               <AlertCircle className="h-3.5 w-3.5" />
               {errors.previewText}
             </p>
+          ) : isFieldValid("previewText") ? (
+            <p className="flex items-center gap-1 text-sm text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Looks good
+            </p>
           ) : null}
         </div>
         <div className="space-y-2">
@@ -437,7 +634,7 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
           <Select value={formData.category} onValueChange={handleCategoryChange}>
             <SelectTrigger
               id="category"
-              className={errors.category ? "border-red-500" : ""}
+              className={fieldClass("category")}
             >
               <SelectValue placeholder="Select category" />
             </SelectTrigger>
@@ -464,10 +661,11 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
             name="priceXlm"
             value={formData.priceXlm}
             onChange={handleChange}
+            onBlur={() => handleBlur("priceXlm")}
             type="number"
             min="1"
             step="1"
-            className={errors.priceXlm ? "border-red-500" : ""}
+            className={fieldClass("priceXlm")}
             aria-invalid={!!errors.priceXlm}
             aria-describedby={errors.priceXlm ? "priceXlm-error" : undefined}
           />
@@ -475,6 +673,11 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
             <p id="priceXlm-error" className="flex items-center gap-1 text-sm text-red-400">
               <AlertCircle className="h-3.5 w-3.5" />
               {errors.priceXlm}
+            </p>
+          ) : isFieldValid("priceXlm") ? (
+            <p className="flex items-center gap-1 text-sm text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              Looks good
             </p>
           ) : null}
         </div>
@@ -493,6 +696,7 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
             value={formData.classification}
             onValueChange={(value) => {
               setFormData((prev) => ({ ...prev, classification: value }));
+              setTouched((prev) => ({ ...prev, classification: true }));
               setErrors((prev) => {
                 const next = { ...prev };
                 delete next.classification;
@@ -502,7 +706,7 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
           >
             <SelectTrigger
               id="classification"
-              className={errors.classification ? "border-red-500" : ""}
+              className={fieldClass("classification")}
             >
               <SelectValue placeholder="Select classification" />
             </SelectTrigger>
@@ -584,18 +788,46 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
           name="fullPrompt"
           value={formData.fullPrompt}
           onChange={handleChange}
+          onBlur={() => handleBlur("fullPrompt")}
           autoComplete="off"
           rows={12}
           placeholder="This plaintext is encrypted in the browser, then only encrypted fields are sent on-chain."
-          className={errors.fullPrompt ? "border-red-500" : ""}
+          className={fieldClass("fullPrompt")}
+          aria-invalid={!!errors.fullPrompt}
+          aria-describedby={
+            errors.fullPrompt ? "fullPrompt-error" : "fullPrompt-encrypted-size"
+          }
         />
+        <p
+          id="fullPrompt-encrypted-size"
+          className={`text-xs ${
+            encryptedSizeRatio > 1
+              ? "text-red-400"
+              : encryptedSizeRatio > 0.9
+                ? "text-amber-400"
+                : "text-slate-400"
+          }`}
+        >
+          Encrypted size: {encryptedSizeEstimate.toLocaleString()} /{" "}
+          {limits.encryptedPrompt.toLocaleString()} bytes
+          {encryptedSizeRatio > 1
+            ? " — too large once encrypted, shorten the prompt"
+            : ""}
+        </p>
         {errors.fullPrompt ? (
-          <p className="flex items-center gap-1 text-sm text-red-400">
+          <p id="fullPrompt-error" className="flex items-center gap-1 text-sm text-red-400">
             <AlertCircle className="h-3.5 w-3.5" />
             {errors.fullPrompt}
           </p>
+        ) : isFieldValid("fullPrompt") ? (
+          <p className="flex items-center gap-1 text-sm text-emerald-400">
+            <CheckCircle2 className="h-3.5 w-3.5" />
+            Looks good
+          </p>
         ) : null}
       </div>
+
+      <PrivacyLinterPanel input={linterInput} />
 
       {showChecklist ? (
         <ListingQualityChecklist items={checklistItems} />
@@ -632,7 +864,13 @@ export function CreatePromptForm({ onCreated, onDirtyChange }: CreatePromptFormP
 
       <Button
         className="w-full bg-emerald-400 text-slate-950 hover:bg-emerald-300"
-        disabled={isSubmitting || !networkState.canTrustConfirmation || (showChecklist && checklistHasFailures)}
+        disabled={
+          isSubmitting ||
+          !networkState.canTrustConfirmation ||
+          !isFormValid ||
+          (showChecklist && checklistHasFailures) ||
+          hasLinterBlockers
+        }
         onClick={handleSubmit}
       >
         {isSubmitting ? (

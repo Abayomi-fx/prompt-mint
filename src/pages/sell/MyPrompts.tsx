@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, Loader2, LockKeyhole } from "lucide-react";
+import { Eye, GripVertical, Loader2, LockKeyhole } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { CreatorDashboard } from "@/components/sell/CreatorDashboard";
+import { TransactionHistoryPanel } from "@/components/dashboard/TransactionHistoryPanel";
 import { useWallet } from "@/hooks/useWallet";
 import { browserStellarConfig } from "@/lib/stellar/browserConfig";
 import {
@@ -15,10 +16,13 @@ import {
 } from "@/lib/stellar/promptHashClient";
 import { formatPriceLabel, stroopsToXlmString, xlmToStroops } from "@/lib/stellar/format";
 import { unlockPromptContent } from "@/lib/prompts/unlock";
+import { getPromptOrder, setPromptOrder } from "@/lib/prompts/promptOrderClient";
 
 import { FreshnessBadge } from "@/components/FreshnessBadge";
 import { useNetworkState } from "@/hooks/useNetworkState";
 import { type PromptRecord } from "@/lib/stellar/promptHashClient";
+import { useMultiSelect } from "@/hooks/useMultiSelect";
+import { runBatchOperation } from "@/lib/marketplace/batchOperations";
 
 const emptyState = (
   <div className="rounded-3xl border border-white/10 bg-white/5 p-8 text-sm text-slate-300">
@@ -64,6 +68,14 @@ const MyPrompts = ({ onCreateNew: _onCreateNew }: MyPromptsProps) => {
   const [busyPromptId, setBusyPromptId] = useState<string | null>(null);
   const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
   const [unlockedPrompts, setUnlockedPrompts] = useState<Record<string, string>>({});
+  const selection = useMultiSelect();
+  const [bulkPrice, setBulkPrice] = useState("");
+  const [batchProgress, setBatchProgress] = useState<{
+    running: boolean;
+    completed: number;
+    total: number;
+    label: string;
+  } | null>(null);
 
   const createdQuery = useQuery({
     queryKey: ["created-prompts", address],
@@ -97,6 +109,75 @@ const MyPrompts = ({ onCreateNew: _onCreateNew }: MyPromptsProps) => {
   });
 
   const purchasedPrompts = purchasedQuery.data ?? [];
+
+  const orderQuery = useQuery({
+    queryKey: ["prompt-order", address],
+    queryFn: () => (address ? getPromptOrder(address) : Promise.resolve([])),
+    enabled: Boolean(address),
+  });
+
+  const [localOrder, setLocalOrder] = useState<string[] | null>(null);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLocalOrder(null);
+    setDraggedId(null);
+  }, [address]);
+
+  const orderedCreatedPrompts = useMemo(() => {
+    const savedOrder = localOrder ?? orderQuery.data ?? [];
+    const byId = new Map(createdPrompts.map((prompt) => [prompt.id.toString(), prompt]));
+    const known = savedOrder.filter((id) => byId.has(id));
+    const missing = createdPrompts
+      .map((prompt) => prompt.id.toString())
+      .filter((id) => !known.includes(id));
+    return [...known, ...missing].map((id) => byId.get(id)!);
+  }, [createdPrompts, localOrder, orderQuery.data]);
+
+  const persistPromptOrder = async (order: string[]) => {
+    if (!address) return;
+    try {
+      const saved = await setPromptOrder(address, order);
+      queryClient.setQueryData(["prompt-order", address], saved);
+      setLocalOrder(null);
+    } catch (error) {
+      updateError(error instanceof Error ? error.message : "Failed to save prompt order.");
+    }
+  };
+
+  const handlePromptDragStart = (promptId: string) => (event: DragEvent) => {
+    setDraggedId(promptId);
+    event.dataTransfer.effectAllowed = "move";
+  };
+
+  const handlePromptDragOver = (event: DragEvent) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+  };
+
+  const handlePromptDrop = (targetId: string) => (event: DragEvent) => {
+    event.preventDefault();
+    if (!draggedId || draggedId === targetId) {
+      setDraggedId(null);
+      return;
+    }
+
+    const currentOrder = orderedCreatedPrompts.map((prompt) => prompt.id.toString());
+    const fromIndex = currentOrder.indexOf(draggedId);
+    const toIndex = currentOrder.indexOf(targetId);
+    if (fromIndex === -1 || toIndex === -1) {
+      setDraggedId(null);
+      return;
+    }
+
+    const nextOrder = [...currentOrder];
+    nextOrder.splice(fromIndex, 1);
+    nextOrder.splice(toIndex, 0, draggedId);
+
+    setLocalOrder(nextOrder);
+    setDraggedId(null);
+    void persistPromptOrder(nextOrder);
+  };
 
   const mergedDrafts = useMemo(() => {
     return Object.fromEntries(
@@ -200,6 +281,85 @@ const MyPrompts = ({ onCreateNew: _onCreateNew }: MyPromptsProps) => {
     }
   };
 
+  const canMutate = () => {
+    if (!networkState.canTrustConfirmation) {
+      updateError("Network connection lost or degraded. Batch actions are disabled.");
+      return false;
+    }
+    if (!address || !signTransaction) {
+      updateError("Connect a wallet before running batch actions.");
+      return false;
+    }
+    return true;
+  };
+
+  const runBatch = async (
+    label: string,
+    operation: (promptId: string) => Promise<void>,
+  ) => {
+    const ids = selection.selectedIds;
+    if (ids.length === 0 || !canMutate()) return;
+
+    setBatchProgress({ running: true, completed: 0, total: ids.length, label });
+    try {
+      const summary = await runBatchOperation(ids, operation, (progress) => {
+        setBatchProgress({
+          running: true,
+          completed: progress.completed,
+          total: progress.total,
+          label,
+        });
+      });
+      await refreshPromptLists();
+      if (summary.failureCount === 0) {
+        updateStatus(`${label}: ${summary.successCount} listing(s) updated.`);
+        selection.clear();
+      } else {
+        updateError(
+          `${label}: ${summary.successCount} succeeded, ${summary.failureCount} failed.`,
+        );
+      }
+    } finally {
+      setBatchProgress(null);
+    }
+  };
+
+  const handleBatchUpdatePrice = async () => {
+    if (!bulkPrice.trim()) {
+      updateError("Enter a price to apply to the selected listings.");
+      return;
+    }
+    let nextPrice: bigint;
+    try {
+      nextPrice = xlmToStroops(bulkPrice);
+    } catch {
+      updateError("Invalid price. Enter a valid XLM amount.");
+      return;
+    }
+    await runBatch("Bulk price update", async (promptId) => {
+      await updatePromptPrice(
+        browserStellarConfig,
+        { signTransaction: signTransaction! },
+        address!,
+        promptId,
+        nextPrice.toString(),
+      );
+    });
+  };
+
+  const handleBatchSetActive = async (active: boolean) => {
+    const label = active ? "Bulk reactivate" : "Bulk delist";
+    await runBatch(label, async (promptId) => {
+      await setPromptSaleStatus(
+        browserStellarConfig,
+        { signTransaction: signTransaction! },
+        address!,
+        promptId,
+        active,
+      );
+    });
+  };
+
   const handleUnlock = async (promptId: bigint) => {
     if (!address || !signMessage) {
       updateError("Connect a wallet with SEP-43 message signing to unlock prompts.");
@@ -238,6 +398,16 @@ const MyPrompts = ({ onCreateNew: _onCreateNew }: MyPromptsProps) => {
         onRefresh={refreshPromptLists}
       />
 
+      {address ? (
+        <TransactionHistoryPanel
+          walletAddress={address}
+          role="creator"
+          title="Sales history"
+          description="Recent purchases of your listings, sourced from indexed on-chain events and recorded license claims."
+          emptyMessage="No sales recorded yet. When buyers purchase your prompts, transactions appear here."
+        />
+      ) : null}
+
       {statusMessage ? (
         <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
           {statusMessage}
@@ -265,19 +435,128 @@ const MyPrompts = ({ onCreateNew: _onCreateNew }: MyPromptsProps) => {
           />
         </div>
 
+        {createdPrompts.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm">
+            <label className="flex items-center gap-2 text-slate-200">
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-emerald-400"
+                aria-label="Select all listings"
+                checked={selection.isAllSelected(
+                  createdPrompts.map((p) => p.id.toString()),
+                )}
+                onChange={(event) => {
+                  if (event.target.checked) {
+                    selection.selectAll(createdPrompts.map((p) => p.id.toString()));
+                  } else {
+                    selection.clear();
+                  }
+                }}
+              />
+              Select all
+            </label>
+            <span className="text-slate-400">
+              {selection.selectedCount} selected
+            </span>
+          </div>
+        ) : null}
+
+        {selection.selectedCount > 0 ? (
+          <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-emerald-400/20 bg-emerald-500/10 px-4 py-3">
+            <span className="text-sm font-medium text-emerald-100">
+              Batch actions ({selection.selectedCount})
+            </span>
+            <div className="flex items-center gap-2">
+              <Input
+                value={bulkPrice}
+                onChange={(event) => setBulkPrice(event.target.value)}
+                placeholder="New price (XLM)"
+                className="w-36 border-white/10 bg-white/5 text-slate-100"
+                aria-label="Bulk price in XLM"
+              />
+              <Button
+                size="sm"
+                className="bg-emerald-400 text-slate-950 hover:bg-emerald-300"
+                onClick={() => void handleBatchUpdatePrice()}
+                disabled={batchProgress?.running || !networkState.canTrustConfirmation}
+              >
+                Apply price
+              </Button>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"
+              onClick={() => void handleBatchSetActive(false)}
+              disabled={batchProgress?.running || !networkState.canTrustConfirmation}
+            >
+              Delist selected
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-white/10 bg-white/5 text-slate-100 hover:bg-white/10"
+              onClick={() => void handleBatchSetActive(true)}
+              disabled={batchProgress?.running || !networkState.canTrustConfirmation}
+            >
+              Reactivate selected
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-slate-300 hover:text-white"
+              onClick={() => selection.clear()}
+              disabled={batchProgress?.running}
+            >
+              Clear
+            </Button>
+            {batchProgress?.running ? (
+              <span className="flex items-center gap-2 text-xs text-emerald-200">
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {batchProgress.label}: {batchProgress.completed}/{batchProgress.total}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
         {createdQuery.isLoading ? (
           <div className="rounded-3xl border border-white/10 bg-white/5 p-8 text-sm text-slate-300">
             Loading created prompts...
           </div>
-        ) : createdPrompts.length === 0 ? (
+        ) : orderedCreatedPrompts.length === 0 ? (
           emptyState
         ) : (
           <div className="grid gap-6 xl:grid-cols-2">
-            {createdPrompts.map((prompt) => (
+            {orderedCreatedPrompts.map((prompt) => (
               <Card
                 key={prompt.id.toString()}
-                className="border-white/10 bg-slate-950/70 text-white"
+                draggable
+                onDragStart={handlePromptDragStart(prompt.id.toString())}
+                onDragOver={handlePromptDragOver}
+                onDrop={handlePromptDrop(prompt.id.toString())}
+                onDragEnd={() => setDraggedId(null)}
+                className={`border-white/10 bg-slate-950/70 text-white transition-opacity ${
+                  draggedId === prompt.id.toString() ? "opacity-50" : ""
+                }`}
               >
+                <div className="flex items-center gap-2 px-5 pt-4 text-slate-500">
+                  <GripVertical
+                    className="h-4 w-4 cursor-grab active:cursor-grabbing"
+                    aria-label="Drag to reorder"
+                  />
+                  <span className="text-xs uppercase tracking-[0.2em]">Drag to reorder</span>
+                </div>
+                className="relative border-white/10 bg-slate-950/70 text-white"
+              >
+                <label className="absolute left-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-lg border border-white/20 bg-slate-950/70 backdrop-blur">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-emerald-400"
+                    aria-label={`Select ${prompt.title}`}
+                    checked={selection.isSelected(prompt.id.toString())}
+                    onChange={() => selection.toggle(prompt.id.toString())}
+                  />
+                </label>
                 <div className="aspect-video overflow-hidden rounded-t-xl">
                   <img
                     src={prompt.imageUrl || "/images/codeguru.png"}
