@@ -27,8 +27,36 @@ describe("validateListingForm", () => {
       /greater than zero/i,
     );
     expect(validateListingForm({ ...validForm, priceXlm: "2e3" }).priceXlm).toMatch(
-      /valid XLM amount/i,
+      /scientific notation/i,
     );
+  });
+
+  it("enforces maximum 7 decimal places for price precision", () => {
+    expect(validateListingForm({ ...validForm, priceXlm: "1.12345678" }).priceXlm).toMatch(
+      /decimal places/i,
+    );
+    expect(validateListingForm({ ...validForm, priceXlm: "0.0000001" }).priceXlm).toBeUndefined();
+    expect(validateListingForm({ ...validForm, priceXlm: "0.00000001" }).priceXlm).toMatch(
+      /decimal places/i,
+    );
+  });
+
+  it("rejects scientific notation and other invalid price formats", () => {
+    expect(validateListingForm({ ...validForm, priceXlm: "1e10" }).priceXlm).toMatch(
+      /scientific notation/i,
+    );
+    expect(validateListingForm({ ...validForm, priceXlm: "5.5E2" }).priceXlm).toMatch(
+      /scientific notation/i,
+    );
+    expect(validateListingForm({ ...validForm, priceXlm: "1.2.3" }).priceXlm).toBeDefined();
+    expect(validateListingForm({ ...validForm, priceXlm: "abc" }).priceXlm).toBeDefined();
+  });
+
+  it("accepts valid decimal price formats with varying precision", () => {
+    expect(validateListingForm({ ...validForm, priceXlm: "1" }).priceXlm).toBeUndefined();
+    expect(validateListingForm({ ...validForm, priceXlm: "1.5" }).priceXlm).toBeUndefined();
+    expect(validateListingForm({ ...validForm, priceXlm: "0.1234567" }).priceXlm).toBeUndefined();
+    expect(validateListingForm({ ...validForm, priceXlm: ".5" }).priceXlm).toBeUndefined();
   });
 
   it("requires http(s) image URLs", () => {
