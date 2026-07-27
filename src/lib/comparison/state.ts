@@ -26,12 +26,49 @@ export interface ComparisonPrompt {
   licenseType?: string;
   isOwned?: boolean;
   preview?: string;
+  /**
+   * Price unit for normalized display (e.g. "XLM", "USD"). Defaults to "XLM"
+   * when omitted.
+   */
+  priceUnit?: string;
+  /** Human-readable creator name (falls back to the address if absent). */
+  creatorName?: string;
 }
 
 /** Maximum prompts that can be compared at once. */
 export const MAX_COMPARE = 4;
 /** Minimum prompts required before the comparison view is meaningful. */
 export const MIN_COMPARE = 2;
+
+/**
+ * Encodes the selected comparison prompt ids into a shareable URL query string.
+ * Only includes stable public identifiers — no wallet info, no ratings data.
+ * Returns a string like "?compare=cHJvbXB0LTEscHJvbXB0LTI=" (base64-encoded,
+ * comma-separated ids).
+ */
+export function encodeComparisonShare(ids: string[]): string {
+  if (ids.length === 0) return "";
+  const encoded = btoa(ids.join(","));
+  return `?compare=${encoded}`;
+}
+
+/**
+ * Decodes a shareable comparison query string back into prompt ids.
+ * Returns an empty array when the parameter is missing, malformed, or empty.
+ */
+export function decodeComparisonShare(search: string): string[] {
+  if (!search) return [];
+  const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
+  const raw = params.get("compare");
+  if (!raw) return [];
+  try {
+    const decoded = atob(raw);
+    const ids = decoded.split(",").filter(Boolean);
+    return Array.from(new Set(ids));
+  } catch {
+    return [];
+  }
+}
 
 /**
  * Adds a prompt to the selection.

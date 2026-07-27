@@ -1,18 +1,33 @@
-import { Link } from "react-router-dom";
+import { useEffect, useMemo } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { ArrowLeft, GitCompare } from "lucide-react";
 import { Navigation } from "@/components/navigation";
 import { Footer } from "@/components/footer";
 import { Button } from "@/components/ui/button";
 import { PromptComparisonView } from "@/pages/browse/PromptComparisonView";
 import { useComparison } from "@/hooks/useComparison";
-import { MIN_COMPARE } from "@/lib/comparison/state";
+import { MIN_COMPARE, decodeComparisonShare } from "@/lib/comparison/state";
 
-/**
- * #277 – Side-by-side prompt comparison page.
- * Route: /compare (selection persisted via useComparison / localStorage).
- */
 export default function ComparePage() {
   const { selected, remove, clear, canView } = useComparison();
+  const [searchParams] = useSearchParams();
+
+  const sharedIds = useMemo(
+    () => decodeComparisonShare(searchParams.toString()),
+    [searchParams],
+  );
+
+  useEffect(() => {
+    if (sharedIds.length > 0 && selected.length === 0) {
+      const params = new URLSearchParams(searchParams.toString());
+      params.delete("compare");
+      const newSearch = params.toString();
+      const newUrl = newSearch
+        ? `${window.location.pathname}?${newSearch}`
+        : window.location.pathname;
+      window.history.replaceState(null, "", newUrl);
+    }
+  }, [sharedIds, selected.length, searchParams]);
 
   return (
     <div className="min-h-screen bg-[#020617] text-white">
@@ -40,7 +55,20 @@ export default function ComparePage() {
           </Button>
         </div>
 
-        {!canView ? (
+        {sharedIds.length > 0 && selected.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-white/15 p-12 text-center">
+            <p className="text-slate-300">
+              Shared comparison link loaded. Select prompts matching the shared
+              IDs from the browse page to see them side by side.
+            </p>
+            <p className="mt-1 text-sm text-slate-500">
+              IDs: {sharedIds.join(", ")}
+            </p>
+            <Button asChild className="mt-6 bg-emerald-500 font-bold text-slate-950 hover:bg-emerald-400">
+              <Link to="/browse">Browse prompts</Link>
+            </Button>
+          </div>
+        ) : !canView ? (
           <div className="rounded-xl border border-dashed border-white/15 p-12 text-center">
             <p className="text-slate-300">
               Select at least {MIN_COMPARE} prompts to compare.

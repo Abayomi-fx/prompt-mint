@@ -7,10 +7,13 @@ import {
   toggleBookmark,
   bookmarkCount,
   clearBookmarks,
-  BOOKMARKS_STORAGE_KEY,
+  BOOKMARKS_STORAGE_PREFIX,
 } from "@/lib/bookmarks/bookmarks";
 
-describe("bookmarks storage (#284)", () => {
+const WALLET_A = "GABCDEF1234567890ABCDEF1234567890ABCDEF1234567890ABC";
+const WALLET_B = "GZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ";
+
+describe("bookmarks storage (#284) — anonymous (no wallet)", () => {
   beforeEach(() => {
     localStorage.clear();
   });
@@ -57,8 +60,7 @@ describe("bookmarks storage (#284)", () => {
   it("persists across reads (round-trip through localStorage)", () => {
     addBookmark("a");
     addBookmark("b");
-    // Simulate a fresh read from storage
-    const raw = localStorage.getItem(BOOKMARKS_STORAGE_KEY);
+    const raw = localStorage.getItem(`${BOOKMARKS_STORAGE_PREFIX}`);
     expect(raw).toBeTruthy();
     expect(listBookmarks().sort()).toEqual(["a", "b"]);
   });
@@ -72,9 +74,74 @@ describe("bookmarks storage (#284)", () => {
   });
 
   it("tolerates corrupted storage gracefully", () => {
-    localStorage.setItem(BOOKMARKS_STORAGE_KEY, "{not json");
+    localStorage.setItem(`${BOOKMARKS_STORAGE_PREFIX}`, "{not json");
     expect(listBookmarks()).toEqual([]);
     addBookmark("1");
     expect(listBookmarks()).toEqual(["1"]);
+  });
+});
+
+describe("bookmarks — wallet-scoped", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("scopes bookmarks per wallet address", () => {
+    addBookmark("1", WALLET_A);
+    addBookmark("2", WALLET_B);
+    expect(bookmarkCount(WALLET_A)).toBe(1);
+    expect(bookmarkCount(WALLET_B)).toBe(1);
+    expect(listBookmarks(WALLET_A)).toEqual(["1"]);
+    expect(listBookmarks(WALLET_B)).toEqual(["2"]);
+  });
+
+  it("wallets do not see each other's bookmarks", () => {
+    addBookmark("secret-prompt", WALLET_A);
+    expect(isBookmarked("secret-prompt", WALLET_B)).toBe(false);
+    expect(isBookmarked("secret-prompt")).toBe(false);
+  });
+
+  it("adds wallet-scoped bookmark idempotently", () => {
+    addBookmark("1", WALLET_A);
+    addBookmark("1", WALLET_A);
+    expect(listBookmarks(WALLET_A)).toEqual(["1"]);
+  });
+
+  it("removes wallet-scoped bookmark", () => {
+    addBookmark("1", WALLET_A);
+    addBookmark("2", WALLET_A);
+    removeBookmark("1", WALLET_A);
+    expect(listBookmarks(WALLET_A)).toEqual(["2"]);
+  });
+
+  it("anonymous storage is separate from wallet-scoped", () => {
+    addBookmark("anon-1");
+    addBookmark("wallet-1", WALLET_A);
+    expect(listBookmarks()).toEqual(["anon-1"]);
+    expect(listBookmarks(WALLET_A)).toEqual(["wallet-1"]);
+  });
+
+  it("clears only the specified wallet's bookmarks", () => {
+    addBookmark("1", WALLET_A);
+    addBookmark("2", WALLET_B);
+    clearBookmarks(WALLET_A);
+    expect(bookmarkCount(WALLET_A)).toBe(0);
+    expect(bookmarkCount(WALLET_B)).toBe(1);
+  });
+
+  it("wallet switching — new wallet has empty state after switching", () => {
+    addBookmark("old", WALLET_A);
+    expect(listBookmarks(WALLET_A)).toEqual(["old"]);
+    expect(listBookmarks(WALLET_B)).toEqual([]);
+  });
+
+  it("tolerates corrupted storage per wallet", () => {
+    localStorage.setItem(
+      `${BOOKMARKS_STORAGE_PREFIX}:${WALLET_A}`,
+      "{not json",
+    );
+    expect(listBookmarks(WALLET_A)).toEqual([]);
+    addBookmark("1", WALLET_A);
+    expect(listBookmarks(WALLET_A)).toEqual(["1"]);
   });
 });
