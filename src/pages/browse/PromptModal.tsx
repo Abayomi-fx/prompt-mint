@@ -663,7 +663,7 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                   {txHash && (
                     <div className="mt-6 flex items-center gap-2">
                       <a
-                        href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+                        href={explorerTxUrl(txHash)}
                         target="_blank"
                         rel="noreferrer"
                         className="inline-flex items-center gap-2 text-xs text-slate-500 hover:text-emerald-400 font-mono transition-colors"
@@ -676,14 +676,6 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                         variant="icon"
                       />
                     </div>
-                    <a
-                      href={explorerTxUrl(txHash)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-2 mt-6 text-xs text-slate-500 hover:text-emerald-400 font-mono transition-colors"
-                    >
-                      View Transaction <ExternalLink className="h-3 w-3" />
-                    </a>
                   )}
                 </div>
               )}

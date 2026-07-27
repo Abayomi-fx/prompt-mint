@@ -31,6 +31,7 @@
     "src/debug",
     "src/contracts",
     "src/pages/Debugger.tsx",
-    "src/components/GuessTheNumber.tsx"
+    "src/components/GuessTheNumber.tsx",
+    "src/test/e2e"
   ]
 }

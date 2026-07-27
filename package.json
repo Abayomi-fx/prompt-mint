@@ -17,6 +17,8 @@
     "test": "vitest run",
     "test:frontend": "vitest run",
     "test:frontend:watch": "vitest",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui",
     "test:contract": "cargo test -p prompt-hash",
     "preview": "vite preview",
     "lint": "eslint .",
@@ -68,6 +70,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.0",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
