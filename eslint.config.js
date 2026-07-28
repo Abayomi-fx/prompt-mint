@@ -13,6 +13,7 @@ export default tseslint.config(
     "dist",
     "packages",
     "server",
+    "src/test/e2e",
     "src/debug/**",
     "src/pages/Debugger.tsx",
     "src/contracts/*",
