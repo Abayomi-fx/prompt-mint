@@ -158,6 +158,33 @@ export const GetPrompts = asyncRoute(async (req, res) => {
   res.json(prompts);
 });
 
+export const GetPromptDetail = asyncRoute(async (req, res) => {
+  await connectDb();
+
+  const id = String(req.params.id);
+
+  const cacheKey = CACHE_KEYS.promptDetail(id);
+  const cached = await cacheGet(cacheKey);
+  if (cached) return res.json(JSON.parse(cached));
+
+  const prompt = await Prompt.findOne({
+    _id: id,
+    listingStatus: "published",
+    isActive: true,
+  }).populate("owner", "username walletAddress");
+
+  if (!prompt) {
+    throw new AppError("Prompt not found.", 404, "NOT_FOUND");
+  }
+
+  // Every mutation that touches this prompt (publish/archive/tags/update)
+  // already busts CACHE_KEYS.promptDetail(id) on write — see the cacheDel
+  // calls elsewhere in this file — so a short TTL here is just a backstop.
+  await cacheSet(cacheKey, JSON.stringify(prompt), 60);
+
+  res.json(prompt);
+});
+
 /* USER CONTROLLERS */
 
 export const CreateUser = asyncRoute(async (req, res) => {
