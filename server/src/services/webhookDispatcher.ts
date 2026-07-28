@@ -1,6 +1,7 @@
 import { createHmac, randomUUID } from "crypto";
 import WebhookSubscription from "../models/WebhookSubscription";
 import WebhookDelivery from "../models/WebhookDelivery";
+import WebhookDeadLetter from "../models/WebhookDeadLetter";
 import { WEBHOOK_SCHEMA_VERSION } from "../../../src/lib/api/payloadVersion";
 
 const MAX_RETRIES = 3;
@@ -11,18 +12,19 @@ const MAX_FAILURES_BEFORE_DISABLE = 10;
 /** Current webhook payload schema version. Bump on any breaking change to the envelope shape. */
 export const WEBHOOK_PAYLOAD_VERSION = 1;
 
-export interface WebhookPayload {
-  version: number;
 /**
  * Shape of every outbound webhook POST body.
  *
  * `schemaVersion` is a stable date-string (matching WEBHOOK_SCHEMA_VERSION)
  * that receiver implementations can use to branch on payload shape without
- * relying on field-presence checks.  It is separate from the REST API version
+ * relying on field-presence checks. It is separate from the REST API version
  * because webhook deliveries are push-based and not subject to Accept-Version
  * negotiation — receivers must handle the version they subscribed under.
+ * `version` is the older numeric envelope version, kept alongside it for
+ * receivers that already branch on `X-PromptHash-Version` / `payload.version`.
  *
  * Current version: 2025-01-01
+ *   - version      — numeric envelope version (WEBHOOK_PAYLOAD_VERSION)
  *   - event        — event type name (e.g. "PromptPurchased")
  *   - deliveryId   — UUID, unique per delivery attempt
  *   - timestamp    — ISO-8601 string, UTC
@@ -30,6 +32,9 @@ export interface WebhookPayload {
  *   - data         — event-specific payload (see docs/payload-versioning.md)
  */
 export interface WebhookPayload {
+  /** Numeric envelope version. Optional only so hand-built test fixtures that
+   * predate this field can still satisfy the type; buildWebhookPayload always sets it. */
+  version?: number;
   /** Stable date-string identifying the webhook payload schema. */
   schemaVersion: typeof WEBHOOK_SCHEMA_VERSION;
   event: string;
@@ -99,6 +104,30 @@ async function logDeliveryAttempt(params: {
   }
 }
 
+async function recordDeadLetter(params: {
+  subscriptionId: string;
+  event: string;
+  payload: WebhookPayload;
+  attempts: number;
+  lastError?: string | null;
+  lastStatusCode?: number | null;
+}): Promise<void> {
+  try {
+    await WebhookDeadLetter.create({
+      subscriptionId: params.subscriptionId,
+      event: params.event,
+      payload: params.payload,
+      attempts: params.attempts,
+      lastError: params.lastError ?? null,
+      lastStatusCode: params.lastStatusCode ?? null,
+    });
+  } catch (err) {
+    // Same fail-open rationale as logDeliveryAttempt: recording the dead
+    // letter must never throw back into the delivery loop.
+    console.error("[webhookDispatcher] Failed to record dead letter:", err);
+  }
+}
+
 async function deliverWithRetry(
   subscriptionId: string,
   url: string,
@@ -139,6 +168,20 @@ async function deliverWithRetry(
         continue;
       }
 
+      // Every retry is exhausted and the event is still unprocessable —
+      // persist the full payload as a dead letter (issue #97) so it can
+      // be inspected or replayed later. Without this, the event data
+      // itself is lost; only the pass/fail history in WebhookDelivery
+      // survives.
+      await recordDeadLetter({
+        subscriptionId,
+        event: payload.event,
+        payload,
+        attempts: attempt + 1,
+        lastError: message,
+        lastStatusCode: statusCode,
+      });
+
       const updated = await WebhookSubscription.findByIdAndUpdate(
         subscriptionId,
         { $inc: { failureCount: 1 } },
@@ -161,6 +204,7 @@ async function deliverWithRetry(
 export function buildWebhookPayload(event: string, data: Record<string, unknown>): WebhookPayload {
   return {
     version: WEBHOOK_PAYLOAD_VERSION,
+    schemaVersion: WEBHOOK_SCHEMA_VERSION,
     event,
     deliveryId: randomUUID(),
     timestamp: new Date().toISOString(),
@@ -180,13 +224,6 @@ export async function dispatchEvent(
   });
 
   const payload = buildWebhookPayload(event, data);
-  const payload: WebhookPayload = {
-    schemaVersion: WEBHOOK_SCHEMA_VERSION,
-    event,
-    deliveryId: randomUUID(),
-    timestamp: new Date().toISOString(),
-    data,
-  };
 
   await Promise.allSettled(
     subscriptions.map((sub) => deliverWithRetry(String(sub._id), sub.url, sub.secret, payload)),
@@ -228,6 +265,61 @@ export async function sendTestEvent(
       statusCode: statusCode ?? null,
       error: message,
     });
+    return { success: false, statusCode, error: message };
+  }
+}
+
+/**
+ * Re-attempts delivery of a single dead-lettered event (issue #97). On
+ * success the dead letter is marked resolved; on failure it's left
+ * unresolved with its error/attempt count updated so it can be retried
+ * again later, and it is NOT re-queued into the automatic retry loop —
+ * replay is an explicit, one-shot operator action.
+ */
+export async function replayDeadLetter(
+  deadLetterId: string,
+): Promise<{ success: boolean; statusCode?: number; error?: string }> {
+  const deadLetter = await WebhookDeadLetter.findById(deadLetterId);
+  if (!deadLetter) {
+    throw new Error(`Dead letter ${deadLetterId} not found`);
+  }
+
+  const subscription = await WebhookSubscription.findById(deadLetter.subscriptionId);
+  if (!subscription) {
+    throw new Error(`Subscription ${deadLetter.subscriptionId} for dead letter ${deadLetterId} not found`);
+  }
+
+  const payload = deadLetter.payload as WebhookPayload;
+
+  try {
+    await deliverOnce(subscription.url, subscription.secret, payload);
+    await logDeliveryAttempt({
+      subscriptionId: String(subscription._id),
+      deliveryId: payload.deliveryId,
+      event: payload.event,
+      attempt: deadLetter.attempts,
+      success: true,
+    });
+    deadLetter.resolved = true;
+    deadLetter.resolvedAt = new Date();
+    await deadLetter.save();
+    return { success: true };
+  } catch (err) {
+    const statusCode = (err as { statusCode?: number }).statusCode;
+    const message = err instanceof Error ? err.message : String(err);
+    await logDeliveryAttempt({
+      subscriptionId: String(subscription._id),
+      deliveryId: payload.deliveryId,
+      event: payload.event,
+      attempt: deadLetter.attempts,
+      success: false,
+      statusCode: statusCode ?? null,
+      error: message,
+    });
+    deadLetter.attempts += 1;
+    deadLetter.lastError = message;
+    deadLetter.lastStatusCode = statusCode ?? null;
+    await deadLetter.save();
     return { success: false, statusCode, error: message };
   }
 }

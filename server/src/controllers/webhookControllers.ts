@@ -2,10 +2,12 @@ import { randomBytes } from "crypto";
 import connectDb from "../db/connectDb";
 import WebhookSubscription from "../models/WebhookSubscription";
 import WebhookDelivery from "../models/WebhookDelivery";
+import WebhookDeadLetter from "../models/WebhookDeadLetter";
 import { AppError } from "../lib/AppError";
 import { asyncRoute } from "../lib/asyncRoute";
 import { validateWebhookUrl } from "../lib/validateWebhookUrl";
-import { sendTestEvent } from "../services/webhookDispatcher";
+import { sendTestEvent, replayDeadLetter } from "../services/webhookDispatcher";
+import { isValidAdminToken } from "../services/adminAuth";
 
 /**
  * Real contract events a creator can subscribe a webhook to (issue #23:
@@ -159,4 +161,63 @@ export const GetWebhookDeliveries = asyncRoute(async (req, res) => {
     .lean();
 
   res.json(deliveries);
+});
+
+/**
+ * Lists events that exhausted every delivery retry for a wallet's webhook
+ * (issue #97), so a creator can see which contract events their endpoint
+ * never actually received and decide whether to replay them.
+ */
+export const GetWebhookDeadLetters = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { walletAddress } = req.query;
+
+  if (!walletAddress) {
+    throw new AppError("walletAddress query param is required.", 400, "MISSING_FIELDS");
+  }
+
+  const sub = await WebhookSubscription.findOne({
+    walletAddress: String(walletAddress).toLowerCase(),
+  });
+  if (!sub) {
+    throw new AppError("No webhook registered for this wallet.", 404, "NOT_FOUND");
+  }
+
+  const onlyUnresolved = req.query.resolved !== "true";
+  const limit = Math.min(Number(req.query.limit) || 50, 200);
+  const deadLetters = await WebhookDeadLetter.find({
+    subscriptionId: sub._id,
+    ...(onlyUnresolved ? { resolved: false } : {}),
+  })
+    .sort({ createdAt: -1 })
+    .limit(limit)
+    .lean();
+
+  res.json(deadLetters);
+});
+
+/**
+ * Re-attempts delivery of a single dead-lettered event. Admin-token gated
+ * (rather than wallet-scoped like the other webhook endpoints) since it
+ * triggers an outbound HTTP call on demand, same trust boundary as the
+ * other admin-only actions in this codebase (see GetPromptReports).
+ */
+export const ReplayWebhookDeadLetter = asyncRoute(async (req, res) => {
+  await connectDb();
+
+  if (!isValidAdminToken(req.headers.authorization, process.env.ADMIN_API_TOKEN)) {
+    throw new AppError("Unauthorized: a valid admin token is required", 401);
+  }
+
+  const { id } = req.params;
+  if (!id) {
+    throw new AppError("Dead letter id is required.", 400, "MISSING_FIELDS");
+  }
+
+  try {
+    const result = await replayDeadLetter(id);
+    res.status(200).json(result);
+  } catch (err) {
+    throw new AppError(err instanceof Error ? err.message : "Replay failed.", 404, "NOT_FOUND");
+  }
 });

@@ -2,6 +2,7 @@ import express from "express";
 import {
   CreatePrompt,
   GetPrompts,
+  GetPromptDetail,
   GetOwnedPrompts,
   GetSavedPrompts,
   SavePrompt,
@@ -18,6 +19,7 @@ import {
   GetBuyerTransactionHistory,
   GetCreatorTransactionHistory,
 } from "../controllers/transactionHistoryController";
+import {
   PublishPromptVersion,
   ListPromptVersions,
   GetPromptVersionDetail,
@@ -45,3 +47,7 @@ promptRouter.post("/:id/archive", ArchivePrompt);
 promptRouter.post("/:id/versions", PublishPromptVersion);
 promptRouter.get("/:id/versions", ListPromptVersions);
 promptRouter.get("/:id/versions/:versionIndex", GetPromptVersionDetail);
+
+// Generic single-prompt lookup — registered last so it never shadows the
+// more specific /buyer, /creator, and /:id/* routes above.
+promptRouter.get("/:id", GetPromptDetail);
