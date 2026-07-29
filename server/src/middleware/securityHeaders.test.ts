@@ -1,13 +1,10 @@
-// @vitest-environment node
-
 import { Request, Response, NextFunction } from "express";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { securityHeaders } from "./securityHeaders";
 
 describe("securityHeaders middleware", () => {
   let mockReq: Partial<Request>;
   let mockRes: Partial<Response>;
-  let mockNext: NextFunction;
+  let mockNext: jest.Mock;
 
   beforeEach(() => {
     mockReq = {
@@ -15,13 +12,13 @@ describe("securityHeaders middleware", () => {
       headers: {},
     };
     mockRes = {
-      setHeader: vi.fn(),
+      setHeader: jest.fn(),
     };
-    mockNext = vi.fn();
+    mockNext = jest.fn();
   });
 
   afterEach(() => {
-    vi.clearAllMocks();
+    jest.clearAllMocks();
   });
 
   it("should set X-Content-Type-Options to nosniff", () => {

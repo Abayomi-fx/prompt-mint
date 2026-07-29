@@ -4,12 +4,11 @@ import connectDb from "../db/connectDb";
 import Prompt from "../models/Prompt";
 import PromptVersion from "../models/PromptVersion";
 import Purchase from "../models/Purchase";
+import LicenseTerm from "../models/LicenseTerm";
 import User from "../models/User";
 import { AppError } from "../lib/AppError";
 import { asyncRoute } from "../lib/asyncRoute";
 import { recordMarketplaceTransaction } from "../services/transactionHistoryService";
-
-export const PostPromptUpdate = asyncRoute(async (req, res) => {
 import { enqueuePromptUpdateNotifications } from "../services/notificationService";
 
 function getWalletAddress(req: Request): string | null {
@@ -28,6 +27,72 @@ function isDuplicateKeyError(error: unknown): boolean {
     ((error as any).code === 11000 || String(error.message).includes("duplicate key"))
   );
 }
+
+export const PostPromptUpdate = asyncRoute(async (req, res) => {
+  await connectDb();
+  const promptId = String(req.body.promptId || "");
+  const walletAddress = getWalletAddress(req);
+  const { encryptedPayload, encryptedPayloadRef, changelog = "" } = req.body;
+
+  if (!walletAddress || !encryptedPayload || !encryptedPayloadRef) {
+    throw new AppError(
+      "walletAddress, encryptedPayload, and encryptedPayloadRef are required.",
+      walletAddress ? 400 : 401,
+      walletAddress ? "MISSING_FIELDS" : "UNAUTHENTICATED",
+    );
+  }
+
+  const user = await User.findOne({ walletAddress });
+  if (!user) throw new AppError("User not found.", 404, "NOT_FOUND");
+
+  const prompt = await Prompt.findById(promptId);
+  if (!prompt) throw new AppError("Prompt not found.", 404, "NOT_FOUND");
+
+  const isOwner = String(prompt.owner) === String(user._id);
+  if (!isOwner) {
+    throw new AppError("Only the prompt owner can post updates.", 403, "FORBIDDEN");
+  }
+
+  const computedHash = computeContentHash(encryptedPayload);
+  const contentHash = computedHash;
+
+  const latestVersion = await PromptVersion.findOne({ promptId }, undefined, { sort: { versionIndex: -1 } });
+  const nextVersion = (latestVersion?.versionIndex ?? 0) + 1;
+
+  try {
+    const createdVersion = await PromptVersion.create({
+      promptId,
+      versionIndex: nextVersion,
+      contentHash,
+      encryptedPayloadRef,
+      changelog,
+      createdBy: walletAddress,
+    });
+
+    await Prompt.findByIdAndUpdate(promptId, { currentVersionIndex: nextVersion });
+
+    enqueuePromptUpdateNotifications({
+      promptId,
+      promptTitle: prompt.title,
+      versionIndex: nextVersion,
+      changelog,
+    });
+
+    res.status(201).json({
+      id: String(createdVersion._id),
+      versionNumber: createdVersion.versionIndex,
+      contentHash: createdVersion.contentHash,
+      encryptedPayloadRef: createdVersion.encryptedPayloadRef,
+      changelog: createdVersion.changelog,
+      createdAt: createdVersion.createdAt,
+    });
+  } catch (error) {
+    if (isDuplicateKeyError(error)) {
+      throw new AppError("A concurrent version conflict occurred.", 409, "CONCURRENT_VERSION_CONFLICT");
+    }
+    throw error;
+  }
+});
 
 export const PublishPromptVersion = asyncRoute(async (req, res) => {
   await connectDb();
@@ -48,9 +113,8 @@ export const PublishPromptVersion = asyncRoute(async (req, res) => {
 
   const prompt = await Prompt.findById(promptId);
   if (!prompt) throw new AppError("Prompt not found.", 404, "NOT_FOUND");
-  // debug: log identities when running tests to diagnose mock shapes
+
   if (process.env.NODE_ENV === "test") {
-    // eslint-disable-next-line no-console
     console.debug("debug-owner-check", { promptOwner: prompt.owner, userId: user._id, walletAddress });
   }
   const isOwner = String(prompt.owner) === String(user._id) ||
@@ -111,7 +175,6 @@ export const ListPromptVersions = asyncRoute(async (req, res) => {
     throw new AppError("walletAddress is required to list versions.", 401, "UNAUTHENTICATED");
   }
 
-  const prompt = await Prompt.findById(promptId).populate("owner", "walletAddress");
   const user = await User.findOne({ walletAddress });
   if (!user) throw new AppError("User not found.", 404, "NOT_FOUND");
 
@@ -119,24 +182,11 @@ export const ListPromptVersions = asyncRoute(async (req, res) => {
   if (!prompt) throw new AppError("Prompt not found.", 404, "NOT_FOUND");
 
   const purchase = await Purchase.findOne({ promptId, buyerWallet: walletAddress });
-  if (!purchase && String(prompt.owner) !== String(user._id) && String(prompt.owner).toLowerCase() !== String(walletAddress).toLowerCase()) {
+  const isOwner = String(prompt.owner) === String(user._id) || String(prompt.owner).toLowerCase() === String(walletAddress).toLowerCase();
+  if (!purchase && !isOwner) {
     throw new AppError("Unauthorized to view prompt version history.", 403, "FORBIDDEN");
   }
 
-  const termsVersion = prompt.termsVersion ?? 1;
-  const licenseTerm = await LicenseTerm.findOne({ version: termsVersion });
-
-  const purchase = await Purchase.create({
-    promptId,
-    buyerWallet: buyerWallet.toLowerCase(),
-    versionIndex: prompt.currentVersionIndex ?? 1,
-    txHash: txHash ?? "",
-    termsSnapshot: {
-      termsVersion,
-      termsTitle: licenseTerm?.title ?? "Standard License",
-      termsContent: licenseTerm?.content ?? "Standard marketplace license terms.",
-      acceptedAt: new Date(),
-    },
   const versions = await PromptVersion.find(
     { promptId },
     "versionIndex changelog createdAt contentHash",
@@ -163,21 +213,6 @@ export const GetPromptVersionDetail = asyncRoute(async (req, res) => {
     throw new AppError("walletAddress is required to view version details.", 401, "UNAUTHENTICATED");
   }
 
-  const termsVersion = prompt.termsVersion ?? 1;
-  const licenseTerm = await LicenseTerm.findOne({ version: termsVersion });
-
-  const purchase = await Purchase.create({
-    promptId,
-    buyerWallet: buyerWallet.toLowerCase(),
-    versionIndex: prompt.currentVersionIndex ?? 1,
-    txHash: txHash ?? "",
-    termsSnapshot: {
-      termsVersion,
-      termsTitle: licenseTerm?.title ?? "Standard License",
-      termsContent: licenseTerm?.content ?? "Standard marketplace license terms.",
-      acceptedAt: new Date(),
-    },
-  });
   if (!Number.isInteger(versionIndex) || versionIndex < 1) {
     throw new AppError("versionIndex must be a positive integer.", 400, "INVALID_VERSION");
   }
@@ -213,6 +248,49 @@ export const GetPromptVersions = asyncRoute(async (req, res) => {
   const promptId = String(req.params.promptId || req.params.id);
   if (!promptId) throw new AppError("promptId is required.", 400, "MISSING_FIELDS");
 
+  const versions = await PromptVersion.find(
+    { promptId },
+    "versionIndex changelog createdAt contentHash",
+    { sort: { versionIndex: 1 } },
+  );
+
+  res.json(
+    versions.map((version) => ({
+      versionNumber: version.versionIndex,
+      changelog: version.changelog,
+      createdAt: version.createdAt,
+      contentHash: version.contentHash,
+    })),
+  );
+});
+
+export const RecordPurchase = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { promptId, buyerWallet, txHash } = req.body;
+
+  if (!promptId || !buyerWallet) {
+    throw new AppError("promptId and buyerWallet are required.", 400, "MISSING_FIELDS");
+  }
+
+  const prompt = await Prompt.findById(promptId);
+  if (!prompt) throw new AppError("Prompt not found.", 404, "NOT_FOUND");
+
+  const termsVersion = prompt.termsVersion ?? 1;
+  const licenseTerm = await LicenseTerm.findOne({ version: termsVersion });
+
+  const purchase = await Purchase.create({
+    promptId,
+    buyerWallet: buyerWallet.toLowerCase(),
+    versionIndex: prompt.currentVersionIndex ?? 1,
+    txHash: txHash ?? "",
+    termsSnapshot: {
+      termsVersion,
+      termsTitle: licenseTerm?.title ?? "Standard License",
+      termsContent: licenseTerm?.content ?? "Standard marketplace license terms.",
+      acceptedAt: new Date(),
+    },
+  });
+
   const ownerWallet =
     prompt.owner && typeof prompt.owner === "object" && "walletAddress" in prompt.owner
       ? String((prompt.owner as { walletAddress?: string }).walletAddress ?? "")
@@ -232,18 +310,6 @@ export const GetPromptVersions = asyncRoute(async (req, res) => {
   }
 
   res.status(201).json({ message: "Purchase recorded.", versionIndex: purchase.versionIndex });
-  const versions = await PromptVersion.find(
-    { promptId },
-    "versionIndex changelog createdAt contentHash",
-    { sort: { versionIndex: 1 } },
-  );
-
-  res.json(
-    versions.map((version) => ({
-      ...version,
-      versionNumber: version.versionIndex,
-    })),
-  );
 });
 
 export const GetBuyerVersion = asyncRoute(async (req, res) => {

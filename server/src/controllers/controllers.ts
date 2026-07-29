@@ -28,17 +28,28 @@ export const ImproveProxy = asyncRoute(async (req, res) => {
 
   console.log("Improve prompt request: ", promptText);
 
-  const response = await improveProxyBreaker.execute(() =>
-    fetch(`${API_BASE_URL}/api/improve-prompt`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "text/plain",
-        Accept: "application/json",
-      },
-      body: promptText,
-      signal: AbortSignal.timeout(10_000),
-    }),
-  );
+  let response: Response;
+  try {
+    response = await improveProxyBreaker.execute(() =>
+      fetch(`${API_BASE_URL}/api/improve-prompt`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain",
+          Accept: "application/json",
+        },
+        body: promptText,
+        signal: AbortSignal.timeout(10_000),
+      }),
+    );
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "CircuitBreakerOpenError") {
+      throw new AppError("Service temporarily degraded. Please try again shortly.", 503);
+    }
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new AppError("Gateway Timeout", 504);
+    }
+    throw err;
+  }
 
   const responseData = await response.json().catch(() => {});
   const responseText = await response.text().catch(() => {});

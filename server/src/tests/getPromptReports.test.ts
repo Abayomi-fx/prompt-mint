@@ -30,7 +30,7 @@ describe("GetPromptReports admin authentication", () => {
     await GetPromptReports(req, res);
 
     expect(res.statusCode).toBe(401);
-    expect(res._getJSONData().error).toContain("admin token");
+    expect(res._getJSONData().message).toContain("admin token");
   });
 
   it("rejects requests bearing an arbitrary truthy token (regression: previously any token was accepted)", async () => {

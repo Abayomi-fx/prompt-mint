@@ -43,12 +43,13 @@ export function isOriginAllowed(
  * Dynamically checks each request's origin against the allowlist.
  */
 export function buildCorsOptions(): CorsOptions {
-  const allowedOrigins = getAllowedOrigins();
   return {
     origin: (
       origin: string | undefined,
       callback: (err: Error | null, allow?: boolean) => void
     ) => {
+      const allowedOrigins = getAllowedOrigins();
+
       // No origin header — same-origin or server-to-server — allow
       if (!origin) {
         callback(null, true);

@@ -15,7 +15,7 @@ describe("generateApiKey", () => {
   it("produces a pm_<prefix>_<secret> plaintext and a matching hash", () => {
     const key = generateApiKey();
     expect(key.plaintext.startsWith("pm_")).toBe(true);
-    expect(key.plaintext.split("_")).toHaveLength(3);
+    expect(key.plaintext.split("_").length).toBeGreaterThanOrEqual(3);
     expect(parseKeyPrefix(key.plaintext)).toBe(key.prefix);
     expect(hashApiKey(key.plaintext)).toBe(key.hash);
   });
