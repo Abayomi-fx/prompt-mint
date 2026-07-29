@@ -7,29 +7,36 @@
  * module is the issue's requested self-contained alternative: it works
  * without a wallet or backend and is fully unit-testable.
  *
- * Storage uses a single versioned key so the shape can evolve safely.
+ * Storage uses a versioned key per wallet so state is scoped to the
+ * connected wallet address and survives refresh. When the wallet is
+ * disconnected or switching, the key changes transparently.
  */
 
-export const BOOKMARKS_STORAGE_KEY = "prompt-mint:bookmarks:v1";
+export const BOOKMARKS_STORAGE_PREFIX = "prompt-mint:bookmarks:v2";
 
-function safeRead(): string[] {
+function storageKey(walletAddress?: string): string {
+  return walletAddress
+    ? `${BOOKMARKS_STORAGE_PREFIX}:${walletAddress}`
+    : BOOKMARKS_STORAGE_PREFIX;
+}
+
+function safeRead(walletAddress?: string): string[] {
   try {
-    const raw = localStorage.getItem(BOOKMARKS_STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey(walletAddress));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    // De-duplicate and coerce to strings defensively.
     return Array.from(new Set(parsed.map((v) => String(v))));
   } catch {
     return [];
   }
 }
 
-function safeWrite(ids: string[]): boolean {
+function safeWrite(ids: string[], walletAddress?: string): boolean {
   try {
     localStorage.setItem(
-      BOOKMARKS_STORAGE_KEY,
-      JSON.stringify(Array.from(new Set(ids)))
+      storageKey(walletAddress),
+      JSON.stringify(Array.from(new Set(ids))),
     );
     return true;
   } catch {
@@ -37,52 +44,52 @@ function safeWrite(ids: string[]): boolean {
   }
 }
 
-/** Returns all bookmarked prompt ids. */
-export function listBookmarks(): string[] {
-  return safeRead();
+/** Returns all bookmarked prompt ids for the given wallet (or anonymous). */
+export function listBookmarks(walletAddress?: string): string[] {
+  return safeRead(walletAddress);
 }
 
-/** Whether a prompt id is bookmarked. */
-export function isBookmarked(promptId: string): boolean {
-  return safeRead().includes(promptId);
+/** Whether a prompt id is bookmarked for the given wallet. */
+export function isBookmarked(promptId: string, walletAddress?: string): boolean {
+  return safeRead(walletAddress).includes(promptId);
 }
 
 /** Adds a bookmark (idempotent). Returns the new list. */
-export function addBookmark(promptId: string): string[] {
-  const ids = safeRead();
+export function addBookmark(promptId: string, walletAddress?: string): string[] {
+  const ids = safeRead(walletAddress);
   if (!ids.includes(promptId)) {
     ids.push(promptId);
-    safeWrite(ids);
+    safeWrite(ids, walletAddress);
   }
   return ids;
 }
 
 /** Removes a bookmark (idempotent). Returns the new list. */
-export function removeBookmark(promptId: string): string[] {
-  const next = safeRead().filter((id) => id !== promptId);
-  safeWrite(next);
+export function removeBookmark(promptId: string, walletAddress?: string): string[] {
+  const next = safeRead(walletAddress).filter((id) => id !== promptId);
+  safeWrite(next, walletAddress);
   return next;
 }
 
 /** Toggles a bookmark. Returns true if now bookmarked, false otherwise. */
-export function toggleBookmark(promptId: string): boolean {
-  if (isBookmarked(promptId)) {
-    removeBookmark(promptId);
+export function toggleBookmark(promptId: string, walletAddress?: string): boolean {
+  if (isBookmarked(promptId, walletAddress)) {
+    removeBookmark(promptId, walletAddress);
     return false;
   }
-  addBookmark(promptId);
+  addBookmark(promptId, walletAddress);
   return true;
 }
 
 /** Number of prompts the current user has bookmarked. */
-export function bookmarkCount(): number {
-  return safeRead().length;
+export function bookmarkCount(walletAddress?: string): number {
+  return safeRead(walletAddress).length;
 }
 
-/** Clears all bookmarks. */
-export function clearBookmarks(): boolean {
+/** Clears all bookmarks for the given wallet. */
+export function clearBookmarks(walletAddress?: string): boolean {
   try {
-    localStorage.removeItem(BOOKMARKS_STORAGE_KEY);
+    localStorage.removeItem(storageKey(walletAddress));
     return true;
   } catch {
     return false;

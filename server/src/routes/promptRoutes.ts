@@ -2,6 +2,7 @@ import express from "express";
 import {
   CreatePrompt,
   GetPrompts,
+  GetPromptDetail,
   GetOwnedPrompts,
   GetSavedPrompts,
   SavePrompt,
@@ -9,11 +10,16 @@ import {
   GetDraftPrompts,
   PublishPrompt,
   ArchivePrompt,
+  SubmitForReview,
+  UpdateReviewChecklist,
+  AddTags,
+  RemoveTags,
 } from "../controllers/controllers";
 import {
   GetBuyerTransactionHistory,
   GetCreatorTransactionHistory,
 } from "../controllers/transactionHistoryController";
+import {
   PublishPromptVersion,
   ListPromptVersions,
   GetPromptVersionDetail,
@@ -32,8 +38,16 @@ promptRouter.get("/creator/:walletAddress/transactions", GetCreatorTransactionHi
 promptRouter.post("/buyer/save", SavePrompt);
 promptRouter.post("/buyer/unsave", UnsavePrompt);
 promptRouter.get("/creator/:walletAddress/drafts", GetDraftPrompts);
+promptRouter.post("/:id/submit-review", SubmitForReview);
+promptRouter.patch("/:id/review-checklist", UpdateReviewChecklist);
+promptRouter.post("/:id/tags", AddTags);
+promptRouter.delete("/:id/tags", RemoveTags);
 promptRouter.post("/:id/publish", PublishPrompt);
 promptRouter.post("/:id/archive", ArchivePrompt);
 promptRouter.post("/:id/versions", PublishPromptVersion);
 promptRouter.get("/:id/versions", ListPromptVersions);
 promptRouter.get("/:id/versions/:versionIndex", GetPromptVersionDetail);
+
+// Generic single-prompt lookup — registered last so it never shadows the
+// more specific /buyer, /creator, and /:id/* routes above.
+promptRouter.get("/:id", GetPromptDetail);

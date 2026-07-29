@@ -43,7 +43,7 @@ describe("ImproveProxy outbound request handling", () => {
     await ImproveProxy(req, res);
 
     expect(res.statusCode).toBe(504);
-    expect(res._getJSONData().error).toBe("Gateway Timeout");
+    expect(res._getJSONData().message).toBe("Gateway Timeout");
   });
 
   it("opens the circuit breaker after repeated upstream failures and short-circuits further calls", async () => {

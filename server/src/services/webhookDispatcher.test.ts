@@ -5,6 +5,14 @@
  * mirroring the pattern in analyticsEvents.test.ts.
  */
 
+// Lives outside this package's tsconfig/jest project boundary (part of the
+// root frontend project, covered by its own vitest suite) — mocked here
+// the same way the Mongoose models below are mocked.
+jest.mock("../../../src/lib/api/payloadVersion", () => ({
+  __esModule: true,
+  WEBHOOK_SCHEMA_VERSION: "2025-01-01",
+}));
+
 jest.mock("../models/WebhookSubscription", () => ({
   __esModule: true,
   default: {
@@ -14,6 +22,13 @@ jest.mock("../models/WebhookSubscription", () => ({
 }));
 
 jest.mock("../models/WebhookDelivery", () => ({
+  __esModule: true,
+  default: {
+    create: jest.fn(),
+  },
+}));
+
+jest.mock("../models/WebhookDeadLetter", () => ({
   __esModule: true,
   default: {
     create: jest.fn(),

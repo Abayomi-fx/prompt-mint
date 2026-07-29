@@ -10,6 +10,17 @@ type View = "create" | "bundle" | "manage";
 
 export default function SellPage() {
   const [view, setView] = useState<View>("create");
+  const [isCreateDirty, setIsCreateDirty] = useState(false);
+
+  const switchView = (next: View) => {
+    if (view === "create" && isCreateDirty && next === "manage") {
+      const leave = window.confirm(
+        "You have unsaved changes in your listing. Are you sure you want to leave?",
+      );
+      if (!leave) return;
+    }
+    setView(next);
+  };
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(16,185,129,0.12),_transparent_35%),linear-gradient(180deg,_#020617,_#0f172a_45%,_#020617)] text-white">
@@ -53,7 +64,7 @@ export default function SellPage() {
         {/* View switcher */}
         <div className="mb-8 flex gap-2 rounded-2xl border border-white/10 bg-slate-950/60 p-1.5">
           <button
-            onClick={() => setView("create")}
+            onClick={() => switchView("create")}
             aria-pressed={view === "create"}
             className={`min-h-11 flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-all sm:px-4 ${
               view === "create"
@@ -78,6 +89,7 @@ export default function SellPage() {
           </button>
           <button
             onClick={() => setView("manage")}
+            onClick={() => switchView("manage")}
             aria-pressed={view === "manage"}
             className={`min-h-11 flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-all sm:px-4 ${
               view === "manage"
@@ -94,8 +106,9 @@ export default function SellPage() {
           <CreatePromptForm onCreated={() => setView("manage")} />
         ) : view === "bundle" ? (
           <CreateBundleForm onCreated={() => setView("manage")} />
+          <CreatePromptForm onCreated={() => switchView("manage")} onDirtyChange={setIsCreateDirty} />
         ) : (
-          <MyPrompts onCreateNew={() => setView("create")} />
+          <MyPrompts onCreateNew={() => switchView("create")} />
         )}
       </main>
 

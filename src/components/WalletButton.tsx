@@ -16,7 +16,7 @@ const KNOWN_WALLETS: { id: string; name: string }[] = [
 export const WalletButton = () => {
   const [showModal, setShowModal] = useState(false);
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
-  const { address, status, error, connect, disconnect } = useWallet();
+  const { address, status, error, connect, disconnect, reconnect } = useWallet();
   const [dismissedError, setDismissedError] = useState<string | null>(null);
   const [checkingWallets, setCheckingWallets] = useState(false);
   const [availableWallets, setAvailableWallets] = useState<typeof KNOWN_WALLETS>(KNOWN_WALLETS);
@@ -121,6 +121,16 @@ export const WalletButton = () => {
           <Loader2 className="h-4 w-4 animate-spin shrink-0" />
           <span>Restoring Session...</span>
         </div>
+      )}
+
+      {status === "disconnected" && (
+        <ShadcnButton
+          variant={"outline"} size={"sm"}
+          className="ml-auto font-bold border-orange-600 text-orange-400 hover:text-orange-300 hover:border-orange-500 min-w-[120px]"
+          onClick={() => void reconnect()}
+        >
+          Reconnect
+        </ShadcnButton>
       )}
 
       {status === "connected" && address && (

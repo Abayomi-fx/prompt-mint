@@ -3,7 +3,7 @@ use crate::mock_asset::FungibleTokenContract;
 use crate::types::{Bundle, Discount, Error, ListingConfig, Split};
 extern crate std;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger},
+    testutils::{Address as _, Events as _, Ledger},
     token, Address, Bytes, BytesN, Env, String, Vec,
 };
 
@@ -649,7 +649,10 @@ fn test_create_bundle_rejects_unowned_prompts() {
     let result = client.try_create_bundle(&creator, &ids, &15_000i128, &context.xlm);
     match result {
         Err(Ok(Error::Unauthorized)) => {}
-        other => panic!("expected Unauthorized for unowned prompt in bundle, got {:?}", other),
+        other => panic!(
+            "expected Unauthorized for unowned prompt in bundle, got {:?}",
+            other
+        ),
     }
 }
 
@@ -687,7 +690,10 @@ fn test_purchase_bundle_grants_access_and_splits_payment() {
     // Payment split: platform fee (default 500 bps) then creator remainder.
     let fee = bundle_price * 500 / 10_000;
     let creator_amount = bundle_price - fee;
-    assert_eq!(xlm_client.balance(&creator), creator_before + creator_amount);
+    assert_eq!(
+        xlm_client.balance(&creator),
+        creator_before + creator_amount
+    );
     assert_eq!(xlm_client.balance(&context.fee_wallet), fee_before + fee);
     assert_eq!(xlm_client.balance(&buyer), buyer_before - bundle_price);
 }
@@ -1111,7 +1117,10 @@ fn test_register_referral_code_emits_event() {
     let after = env.events().all().len();
 
     // register_referral_code now publishes a ReferralCodeRegistered event.
-    assert!(after > before, "expected a referral-code-registered event to be emitted");
+    assert!(
+        after > before,
+        "expected a referral-code-registered event to be emitted"
+    );
 }
 
 #[test]
@@ -2775,7 +2784,7 @@ fn test_subscription_renewal_failure_is_atomic_and_success_preserves_time() {
     let wrong_price = client.try_renew_catalog_subscription(&subscriber, &creator, &10_000);
     assert!(matches!(
         wrong_price,
-        Err(Ok(Error::InvalidSubscriptionPrice))
+        Err(Ok(Error::InvalidSubscriptionConfig))
     ));
     assert_eq!(
         client.get_subscription(&subscriber, &creator).expires_at,
@@ -3864,6 +3873,19 @@ fn test_extend_ttl_success() {
 
 #[test]
 fn test_extend_ttl_failure_key_not_found() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let missing_key = crate::types::DataKey::Prompt(9999);
+    let result = client.try_extend_ttl(&missing_key);
+
+    match result {
+        Err(Ok(Error::KeyNotFound)) => {}
+        other => panic!("expected KeyNotFound, got {:?}", other),
+    }
+}
+
 // ─── #275: Creator Reputation Staking ────────────────────────────────────────
 
 const SECONDS_PER_WEEK: u64 = 7 * 24 * 60 * 60;
@@ -4095,14 +4117,6 @@ fn test_slash_missing_stake_is_rejected() {
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
 
-    let missing_key = crate::types::DataKey::Prompt(9999);
-    let result = client.try_extend_ttl(&missing_key);
-
-    match result {
-        Err(Ok(Error::KeyNotFound)) => {}
-        other => panic!("expected KeyNotFound, got {:?}", other),
-    }
-}
     let creator = Address::generate(&env);
     let prompt_id = create_prompt(&env, &client, &creator, "NoStake", 10_000, &context.xlm);
 
@@ -4426,6 +4440,9 @@ fn test_create_prompt_category_over_max_length_rejected() {
     match result {
         Err(Ok(Error::InvalidFieldLength)) => {}
         other => panic!("expected InvalidFieldLength, got {:?}", other),
+    }
+}
+
 // ─── #273: Time-based Discount Mechanics ────────────────────────────────────
 
 #[test]
@@ -4597,6 +4614,8 @@ fn test_create_prompt_empty_title_rejected() {
         other => panic!("expected InvalidFieldLength, got {:?}", other),
     }
 }
+
+#[test]
 fn test_clear_discount_removes_active_discount() {
     let env: Env = Default::default();
     let context = setup(&env);
@@ -4614,5 +4633,1490 @@ fn test_clear_discount_removes_active_discount() {
     let (price, _, is_discounted) = client.get_effective_price(&prompt_id);
     assert_eq!(price, 10_000i128);
     assert!(!is_discounted);
+}
+
+// ─── #35: Two-step contract administrator transfer ───────────────────────────
+//
+// The contract already wires up `stellar_access::ownable::Ownable`'s built-in
+// 2-step transfer via `#[default_impl] impl Ownable for PromptHashContract {}`
+// (see contract.rs) — `transfer_ownership`/`accept_ownership` were already
+// exposed as public contract entrypoints, just never exercised by any test in
+// this crate. These tests lock in that the flow behaves correctly end to end.
+
+#[test]
+fn test_two_step_ownership_transfer_completes_and_updates_owner() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.sequence_number = 100);
+    let new_admin = Address::generate(&env);
+
+    assert_eq!(client.get_owner(), Some(context.admin.clone()));
+
+    // Step 1: current owner proposes a transfer. Ownership does not change yet.
+    client.transfer_ownership(&new_admin, &1_000u32);
+    assert_eq!(client.get_owner(), Some(context.admin.clone()));
+
+    // Step 2: the proposed owner accepts. Only now does ownership move.
+    client.accept_ownership();
+    assert_eq!(client.get_owner(), Some(new_admin));
+}
+
+#[test]
+fn test_accept_ownership_without_pending_transfer_is_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    // No transfer_ownership() call preceded this — nothing to accept.
+    let result = client.try_accept_ownership();
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_transfer_ownership_with_past_ledger_is_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.sequence_number = 500);
+    let new_admin = Address::generate(&env);
+
+    // live_until_ledger (100) is already in the past relative to the current
+    // ledger sequence (500).
+    let result = client.try_transfer_ownership(&new_admin, &100u32);
+    assert!(result.is_err());
+
+    // Ownership is unaffected by the rejected proposal.
+    assert_eq!(client.get_owner(), Some(context.admin));
+}
+
+#[test]
+fn test_transfer_ownership_can_be_cancelled_before_acceptance() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.sequence_number = 100);
+    let new_admin = Address::generate(&env);
+
+    client.transfer_ownership(&new_admin, &1_000u32);
+    // live_until_ledger == 0 cancels the pending transfer.
+    client.transfer_ownership(&new_admin, &0u32);
+
+    // Nothing left to accept.
+    let result = client.try_accept_ownership();
+    assert!(result.is_err());
+    assert_eq!(client.get_owner(), Some(context.admin));
+}
+
+// ─── #45: Invariant Tests for Creator and Buyer Catalog Indexes ─────────────
+
+#[test]
+fn test_creator_catalog_index_invariant_prompt_added_on_creation() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    
+    // Invariant: creator index should be empty before any prompts
+    assert_eq!(client.get_prompts_by_creator(&creator).len(), 0);
+    
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    // Invariant: creator index should contain exactly the created prompt
+    let creator_prompts = client.get_prompts_by_creator(&creator);
+    assert_eq!(creator_prompts.len(), 1);
+    assert_eq!(creator_prompts.get(0).unwrap().id, prompt_id);
+    assert_eq!(creator_prompts.get(0).unwrap().creator, creator);
+}
+
+#[test]
+fn test_creator_catalog_index_invariant_multiple_prompts_tracked() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    
+    let prompt_1 = create_prompt(&env, &client, &creator, "Prompt 1", 5_000, &context.xlm);
+    let prompt_2 = create_prompt(&env, &client, &creator, "Prompt 2", 7_500, &context.xlm);
+    let prompt_3 = create_prompt(&env, &client, &creator, "Prompt 3", 12_000, &context.xlm);
+    
+    // Invariant: creator index should contain all created prompts
+    let creator_prompts = client.get_prompts_by_creator(&creator);
+    assert_eq!(creator_prompts.len(), 3);
+    
+    // Invariant: all prompts in index should belong to the creator
+    for i in 0..creator_prompts.len() {
+        assert_eq!(creator_prompts.get(i).unwrap().creator, creator);
+    }
+    
+    // Invariant: specific prompt IDs should be present
+    let mut prompt_ids = Vec::new(&env);
+    for i in 0..creator_prompts.len() {
+        prompt_ids.push_back(creator_prompts.get(i).unwrap().id);
+    }
+    let mut found_1 = false;
+    let mut found_2 = false;
+    let mut found_3 = false;
+    for i in 0..prompt_ids.len() {
+        if prompt_ids.get(i).unwrap() == prompt_1 { found_1 = true; }
+        if prompt_ids.get(i).unwrap() == prompt_2 { found_2 = true; }
+        if prompt_ids.get(i).unwrap() == prompt_3 { found_3 = true; }
+    }
+    assert!(found_1);
+    assert!(found_2);
+    assert!(found_3);
+}
+
+#[test]
+fn test_creator_catalog_index_invariant_isolation_between_creators() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator_a = Address::generate(&env);
+    let creator_b = Address::generate(&env);
+    
+    let prompt_a = create_prompt(&env, &client, &creator_a, "A's Prompt", 10_000, &context.xlm);
+    let prompt_b = create_prompt(&env, &client, &creator_b, "B's Prompt", 15_000, &context.xlm);
+    
+    // Invariant: creator A's index should only contain their prompts
+    let a_prompts = client.get_prompts_by_creator(&creator_a);
+    assert_eq!(a_prompts.len(), 1);
+    assert_eq!(a_prompts.get(0).unwrap().id, prompt_a);
+    assert_eq!(a_prompts.get(0).unwrap().creator, creator_a);
+    
+    // Invariant: creator B's index should only contain their prompts
+    let b_prompts = client.get_prompts_by_creator(&creator_b);
+    assert_eq!(b_prompts.len(), 1);
+    assert_eq!(b_prompts.get(0).unwrap().id, prompt_b);
+    assert_eq!(b_prompts.get(0).unwrap().creator, creator_b);
+}
+
+#[test]
+fn test_creator_catalog_index_invariant_persistence_across_operations() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    // Invariant: creator index should persist after purchase
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    
+    let creator_prompts = client.get_prompts_by_creator(&creator);
+    assert_eq!(creator_prompts.len(), 1);
+    assert_eq!(creator_prompts.get(0).unwrap().id, prompt_id);
+    
+    // Invariant: creator index should persist after price update
+    client.update_prompt_price(&creator, &prompt_id, &15_000);
+    let creator_prompts = client.get_prompts_by_creator(&creator);
+    assert_eq!(creator_prompts.len(), 1);
+    assert_eq!(creator_prompts.get(0).unwrap().id, prompt_id);
+    assert_eq!(creator_prompts.get(0).unwrap().price_stroops, 15_000);
+    
+    // Invariant: creator index should persist after status change
+    client.set_prompt_sale_status(&creator, &prompt_id, &false);
+    let creator_prompts = client.get_prompts_by_creator(&creator);
+    assert_eq!(creator_prompts.len(), 1);
+    assert!(!creator_prompts.get(0).unwrap().active);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_prompt_added_on_purchase() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    // Invariant: buyer index should be empty before purchase
+    assert_eq!(client.get_prompts_by_buyer(&buyer).len(), 0);
+    
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    
+    // Invariant: buyer index should contain the purchased prompt
+    let buyer_prompts = client.get_prompts_by_buyer(&buyer);
+    assert_eq!(buyer_prompts.len(), 1);
+    assert_eq!(buyer_prompts.get(0).unwrap().id, prompt_id);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_duplicate_purchase_prevented() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    
+    // Invariant: duplicate purchase should not add duplicate to index
+    let duplicate_result = client.try_buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    match duplicate_result {
+        Err(Ok(Error::AlreadyPurchased)) => {}
+        other => panic!("expected AlreadyPurchased, got {:?}", other),
+    }
+    
+    let buyer_prompts = client.get_prompts_by_buyer(&buyer);
+    assert_eq!(buyer_prompts.len(), 1);
+    assert_eq!(buyer_prompts.get(0).unwrap().id, prompt_id);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_transfer_updates_both_indexes() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    fund_buyer(&xlm_client, &seller, &context.contract, 100_000);
+    client.buy_prompt(&seller, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    
+    // Invariant: seller should have prompt in index before transfer
+    assert_eq!(client.get_prompts_by_buyer(&seller).len(), 1);
+    assert_eq!(client.get_prompts_by_buyer(&buyer).len(), 0);
+    
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.transfer_license(&seller, &prompt_id, &buyer, &20_000i128);
+    
+    // Invariant: seller's index should be updated (prompt removed)
+    assert_eq!(client.get_prompts_by_buyer(&seller).len(), 0);
+    
+    // Invariant: buyer's index should be updated (prompt added)
+    let buyer_prompts = client.get_prompts_by_buyer(&buyer);
+    assert_eq!(buyer_prompts.len(), 1);
+    assert_eq!(buyer_prompts.get(0).unwrap().id, prompt_id);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_multiple_purchases_tracked() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    
+    let prompt_1 = create_prompt(&env, &client, &creator, "Prompt 1", 5_000, &context.xlm);
+    let prompt_2 = create_prompt(&env, &client, &creator, "Prompt 2", 7_500, &context.xlm);
+    let prompt_3 = create_prompt(&env, &client, &creator, "Prompt 3", 12_000, &context.xlm);
+    
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.buy_prompt(&buyer, &prompt_1, &None::<Bytes>, &5_000i128, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_2, &None::<Bytes>, &7_500i128, &None::<Bytes>);
+    client.buy_prompt(&buyer, &prompt_3, &None::<Bytes>, &12_000i128, &None::<Bytes>);
+    
+    // Invariant: buyer index should contain all purchased prompts
+    let buyer_prompts = client.get_prompts_by_buyer(&buyer);
+    assert_eq!(buyer_prompts.len(), 3);
+    
+    // Invariant: all purchased prompt IDs should be present
+    let mut prompt_ids = Vec::new(&env);
+    for i in 0..buyer_prompts.len() {
+        prompt_ids.push_back(buyer_prompts.get(i).unwrap().id);
+    }
+    let mut found_1 = false;
+    let mut found_2 = false;
+    let mut found_3 = false;
+    for i in 0..prompt_ids.len() {
+        if prompt_ids.get(i).unwrap() == prompt_1 { found_1 = true; }
+        if prompt_ids.get(i).unwrap() == prompt_2 { found_2 = true; }
+        if prompt_ids.get(i).unwrap() == prompt_3 { found_3 = true; }
+    }
+    assert!(found_1);
+    assert!(found_2);
+    assert!(found_3);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_isolation_between_buyers() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer_a = Address::generate(&env);
+    let buyer_b = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    fund_buyer(&xlm_client, &buyer_a, &context.contract, 100_000);
+    fund_buyer(&xlm_client, &buyer_b, &context.contract, 100_000);
+    
+    client.buy_prompt(&buyer_a, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    
+    // Invariant: buyer A should have the prompt
+    assert_eq!(client.get_prompts_by_buyer(&buyer_a).len(), 1);
+    
+    // Invariant: buyer B should not have the prompt
+    assert_eq!(client.get_prompts_by_buyer(&buyer_b).len(), 0);
+    
+    client.buy_prompt(&buyer_b, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    
+    // Invariant: both buyers should now have the prompt
+    assert_eq!(client.get_prompts_by_buyer(&buyer_a).len(), 1);
+    assert_eq!(client.get_prompts_by_buyer(&buyer_b).len(), 1);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_bundle_purchase_updates_index() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let p1 = create_prompt(&env, &client, &creator, "Bundle P1", 10_000, &context.xlm);
+    let p2 = create_prompt(&env, &client, &creator, "Bundle P2", 20_000, &context.xlm);
+    
+    let ids = Vec::from_array(&env, [p1, p2]);
+    let bundle_price = 24_000i128;
+    let bundle_id = client.create_bundle(&creator, &ids, &bundle_price, &context.xlm);
+    
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.purchase_bundle(&buyer, &bundle_id, &bundle_price);
+    
+    // Invariant: buyer index should contain all prompts from bundle
+    let buyer_prompts = client.get_prompts_by_buyer(&buyer);
+    assert_eq!(buyer_prompts.len(), 2);
+    
+    let mut prompt_ids = Vec::new(&env);
+    for i in 0..buyer_prompts.len() {
+        prompt_ids.push_back(buyer_prompts.get(i).unwrap().id);
+    }
+    let mut found_p1 = false;
+    let mut found_p2 = false;
+    for i in 0..prompt_ids.len() {
+        if prompt_ids.get(i).unwrap() == p1 { found_p1 = true; }
+        if prompt_ids.get(i).unwrap() == p2 { found_p2 = true; }
+    }
+    assert!(found_p1);
+    assert!(found_p2);
+}
+
+#[test]
+fn test_buyer_catalog_index_invariant_creator_not_in_buyer_index() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Test Prompt", 10_000, &context.xlm);
+    
+    // Invariant: creator should not appear in buyer index for their own prompt
+    assert_eq!(client.get_prompts_by_buyer(&creator).len(), 0);
+    
+    // Invariant: creator should have access but not via buyer index
+    assert!(client.has_access(&creator, &prompt_id));
+}
+
+#[test]
+fn test_catalog_indexes_invariant_consistency_after_complex_flow() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator_a = Address::generate(&env);
+    let creator_b = Address::generate(&env);
+    let buyer_1 = Address::generate(&env);
+    let buyer_2 = Address::generate(&env);
+    
+    let p_a1 = create_prompt(&env, &client, &creator_a, "A1", 10_000, &context.xlm);
+    let p_a2 = create_prompt(&env, &client, &creator_a, "A2", 15_000, &context.xlm);
+    let p_b1 = create_prompt(&env, &client, &creator_b, "B1", 20_000, &context.xlm);
+    
+    fund_buyer(&xlm_client, &buyer_1, &context.contract, 100_000);
+    fund_buyer(&xlm_client, &buyer_2, &context.contract, 100_000);
+    
+    // Buyer 1 purchases A1 and B1
+    client.buy_prompt(&buyer_1, &p_a1, &None::<Bytes>, &10_000i128, &None::<Bytes>);
+    client.buy_prompt(&buyer_1, &p_b1, &None::<Bytes>, &20_000i128, &None::<Bytes>);
+    
+    // Buyer 2 purchases A2
+    client.buy_prompt(&buyer_2, &p_a2, &None::<Bytes>, &15_000i128, &None::<Bytes>);
+    
+    // Invariant: creator A should have 2 prompts in index
+    assert_eq!(client.get_prompts_by_creator(&creator_a).len(), 2);
+    
+    // Invariant: creator B should have 1 prompt in index
+    assert_eq!(client.get_prompts_by_creator(&creator_b).len(), 1);
+    
+    // Invariant: buyer 1 should have 2 prompts in index
+    assert_eq!(client.get_prompts_by_buyer(&buyer_1).len(), 2);
+    
+    // Invariant: buyer 2 should have 1 prompt in index
+    assert_eq!(client.get_prompts_by_buyer(&buyer_2).len(), 1);
+    
+    // Transfer A1 from buyer 1 to buyer 2
+    fund_buyer(&xlm_client, &buyer_2, &context.contract, 100_000);
+    client.transfer_license(&buyer_1, &p_a1, &buyer_2, &25_000i128);
+    
+    // Invariant: buyer 1 should now have 1 prompt (B1 only)
+    assert_eq!(client.get_prompts_by_buyer(&buyer_1).len(), 1);
+    let buyer_1_prompts = client.get_prompts_by_buyer(&buyer_1);
+    assert_eq!(buyer_1_prompts.get(0).unwrap().id, p_b1);
+    
+    // Invariant: buyer 2 should now have 2 prompts (A2 and transferred A1)
+    assert_eq!(client.get_prompts_by_buyer(&buyer_2).len(), 2);
+    let buyer_2_prompts = client.get_prompts_by_buyer(&buyer_2);
+    let mut found_a1 = false;
+    let mut found_a2 = false;
+    for i in 0..buyer_2_prompts.len() {
+        if buyer_2_prompts.get(i).unwrap().id == p_a1 { found_a1 = true; }
+        if buyer_2_prompts.get(i).unwrap().id == p_a2 { found_a2 = true; }
+    }
+    assert!(found_a1);
+    assert!(found_a2);
+    
+    // Invariant: creator indexes should remain unchanged
+    assert_eq!(client.get_prompts_by_creator(&creator_a).len(), 2);
+    assert_eq!(client.get_prompts_by_creator(&creator_b).len(), 1);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Financial Invariant Tests
+// Acceptance: seller proceeds + platform fee (+ referral + splits) == charged amount
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_buy_prompt_invariant_no_splits_no_referral() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let price: i128 = 77_777;
+
+    let prompt_id = create_prompt(&env, &client, &creator, "Invariant Base", price, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, price);
+
+    let creator_before = xlm_client.balance(&creator);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
+
+    let creator_after = xlm_client.balance(&creator);
+    let fee_after = xlm_client.balance(&context.fee_wallet);
+
+    let settlement = client.get_purchase_details(&prompt_id, &buyer).settlement;
+    assert_eq!(settlement.buyer_amount, price);
+    assert_eq!(
+        settlement.buyer_amount,
+        settlement.creator_amount + settlement.platform_amount + settlement.referrer_amount + settlement.split_amount,
+        "Settlement snapshot must sum to charged amount"
+    );
+    assert_eq!(price, (creator_after - creator_before) + (fee_after - fee_before));
+    assert_eq!(settlement.creator_amount, creator_after - creator_before);
+    assert_eq!(settlement.platform_amount, fee_after - fee_before);
+    assert!(client.has_access(&buyer, &prompt_id));
+}
+
+#[test]
+fn test_buy_prompt_invariant_with_splits() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let co1 = Address::generate(&env);
+    let co2 = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let price: i128 = 99_999;
+
+    let mut splits = Vec::<Split>::new(&env);
+    splits.push_back(Split { recipient: co1.clone(), bps: 1_500 });
+    splits.push_back(Split { recipient: co2.clone(), bps: 750 });
+
+    let prompt_id = create_prompt_with_splits(
+        &env, &client, &creator, "Invariant Splits", price, &context.xlm, splits,
+    );
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, price);
+
+    let creator_before = xlm_client.balance(&creator);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+    let co1_before = xlm_client.balance(&co1);
+    let co2_before = xlm_client.balance(&co2);
+
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
+
+    let creator_after = xlm_client.balance(&creator);
+    let fee_after = xlm_client.balance(&context.fee_wallet);
+    let co1_after = xlm_client.balance(&co1);
+    let co2_after = xlm_client.balance(&co2);
+
+    let settlement = client.get_purchase_details(&prompt_id, &buyer).settlement;
+    assert_eq!(settlement.buyer_amount, price);
+    assert_eq!(
+        settlement.buyer_amount,
+        settlement.creator_amount + settlement.platform_amount + settlement.referrer_amount + settlement.split_amount,
+    );
+
+    let onchain_total = (creator_after - creator_before)
+        + (fee_after - fee_before)
+        + (co1_after - co1_before)
+        + (co2_after - co2_before);
+    assert_eq!(settlement.buyer_amount, onchain_total);
+    assert!(client.has_access(&buyer, &prompt_id));
+}
+
+#[test]
+fn test_buy_prompt_invariant_with_referral() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    client.set_referral_percentage(&500);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let referrer = Address::generate(&env);
+    let price: i128 = 50_000;
+
+    let prompt_id = create_prompt(&env, &client, &creator, "Invariant Referral", price, &context.xlm);
+
+    let referral_code = Bytes::from_slice(&env, b"invariant-referral-secret");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+    client.register_referral_code(&referrer, &referral_hash);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, price);
+
+    let creator_before = xlm_client.balance(&creator);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+    let referrer_before = xlm_client.balance(&referrer);
+
+    client.buy_prompt(&buyer, &prompt_id, &Some(referral_code), &price, &None::<Bytes>());
+
+    let creator_after = xlm_client.balance(&creator);
+    let fee_after = xlm_client.balance(&context.fee_wallet);
+    let referrer_after = xlm_client.balance(&referrer);
+
+    let settlement = client.get_purchase_details(&prompt_id, &buyer).settlement;
+    assert_eq!(settlement.buyer_amount, price);
+    assert_eq!(
+        settlement.buyer_amount,
+        settlement.creator_amount + settlement.platform_amount + settlement.referrer_amount + settlement.split_amount,
+    );
+
+    let onchain_total = (creator_after - creator_before)
+        + (fee_after - fee_before)
+        + (referrer_after - referrer_before);
+    assert_eq!(settlement.buyer_amount, onchain_total);
+    assert!(client.has_access(&buyer, &prompt_id));
+}
+
+#[test]
+fn test_buy_prompt_invariant_with_splits_and_referral() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    client.set_referral_percentage(&300);
+
+    let creator = Address::generate(&env);
+    let co1 = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let referrer = Address::generate(&env);
+    let price: i128 = 123_456;
+
+    let mut splits = Vec::<Split>::new(&env);
+    splits.push_back(Split { recipient: co1.clone(), bps: 2_000 });
+
+    let prompt_id = create_prompt_with_splits(
+        &env, &client, &creator, "Invariant Full", price, &context.xlm, splits,
+    );
+
+    let referral_code = Bytes::from_slice(&env, b"invariant-full-secret");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+    client.register_referral_code(&referrer, &referral_hash);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, price);
+
+    let creator_before = xlm_client.balance(&creator);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+    let co1_before = xlm_client.balance(&co1);
+    let referrer_before = xlm_client.balance(&referrer);
+
+    client.buy_prompt(&buyer, &prompt_id, &Some(referral_code), &price, &None::<Bytes>());
+
+    let creator_after = xlm_client.balance(&creator);
+    let fee_after = xlm_client.balance(&context.fee_wallet);
+    let co1_after = xlm_client.balance(&co1);
+    let referrer_after = xlm_client.balance(&referrer);
+
+    let settlement = client.get_purchase_details(&prompt_id, &buyer).settlement;
+    assert_eq!(settlement.buyer_amount, price);
+    assert_eq!(
+        settlement.buyer_amount,
+        settlement.creator_amount + settlement.platform_amount + settlement.referrer_amount + settlement.split_amount,
+    );
+
+    let onchain_total = (creator_after - creator_before)
+        + (fee_after - fee_before)
+        + (co1_after - co1_before)
+        + (referrer_after - referrer_before);
+    assert_eq!(settlement.buyer_amount, onchain_total);
+    assert!(client.has_access(&buyer, &prompt_id));
+}
+
+#[test]
+fn test_bundle_purchase_invariant_charged_equals_creator_plus_platform() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let p1 = create_prompt(&env, &client, &creator, "Bundle A", 10_000, &context.xlm);
+    let p2 = create_prompt(&env, &client, &creator, "Bundle B", 20_000, &context.xlm);
+
+    let ids = Vec::from_array(&env, [p1, p2]);
+    let bundle_price = 28_000i128;
+    let bundle_id = client.create_bundle(&creator, &ids, &bundle_price, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, bundle_price);
+
+    let creator_before = xlm_client.balance(&creator);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+
+    client.purchase_bundle(&buyer, &bundle_id, &bundle_price);
+
+    let creator_after = xlm_client.balance(&creator);
+    let fee_after = xlm_client.balance(&context.fee_wallet);
+
+    assert_eq!(bundle_price, (creator_after - creator_before) + (fee_after - fee_before));
+    assert!(client.has_access(&buyer, &p1));
+    assert!(client.has_access(&buyer, &p2));
+}
+
+#[test]
+fn test_lease_prompt_invariant_charged_equals_creator_plus_platform() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let base_price: i128 = 100_000;
+    let prompt_id = create_prompt(&env, &client, &creator, "Lease Invariant", base_price, &context.xlm);
+
+    let lease_price = base_price * 4_000 / 10_000;
+    fund_buyer(&xlm_client, &buyer, &context.contract, lease_price);
+
+    let creator_before = xlm_client.balance(&creator);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+
+    client.lease_prompt(&buyer, &prompt_id, &600);
+
+    let creator_after = xlm_client.balance(&creator);
+    let fee_after = xlm_client.balance(&context.fee_wallet);
+
+    let settlement = client.get_purchase_details(&prompt_id, &buyer).settlement;
+    assert_eq!(settlement.buyer_amount, lease_price);
+    assert_eq!(lease_price, (creator_after - creator_before) + (fee_after - fee_before));
+    assert_eq!(settlement.buyer_amount, settlement.creator_amount + settlement.platform_amount);
+    assert!(client.has_access(&buyer, &prompt_id));
+}
+
+#[test]
+fn test_transfer_license_invariant_resale_equals_seller_plus_royalty() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let price: i128 = 10_000;
+    let prompt_id = create_prompt(&env, &client, &creator, "Transfer Invariant", price, &context.xlm);
+
+    fund_buyer(&xlm_client, &seller, &context.contract, 100_000);
+    client.buy_prompt(&seller, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>());
+
+    let resale_price: i128 = 37_500;
+    fund_buyer(&xlm_client, &buyer, &context.contract, resale_price);
+
+    let seller_before = xlm_client.balance(&seller);
+    let creator_before = xlm_client.balance(&creator);
+    let buyer_before = xlm_client.balance(&buyer);
+
+    client.transfer_license(&seller, &prompt_id, &buyer, &resale_price);
+
+    let seller_after = xlm_client.balance(&seller);
+    let creator_after = xlm_client.balance(&creator);
+    let buyer_after = xlm_client.balance(&buyer);
+
+    let royalty = resale_price * 500 / 10_000;
+    let seller_proceeds = resale_price - royalty;
+
+    assert_eq!(resale_price, (seller_after - seller_before) + (creator_after - creator_before));
+    assert_eq!(creator_after - creator_before, royalty);
+    assert_eq!(seller_after - seller_before, seller_proceeds);
+    assert_eq!(buyer_after, buyer_before - resale_price);
+    assert!(!client.has_access(&seller, &prompt_id));
+    assert!(client.has_access(&buyer, &prompt_id));
+}
+
+#[test]
+fn test_transfer_license_invariant_zero_gift_moves_no_funds() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let price: i128 = 10_000;
+    let prompt_id = create_prompt(&env, &client, &creator, "Gift Transfer", price, &context.xlm);
+
+    fund_buyer(&xlm_client, &seller, &context.contract, 100_000);
+    client.buy_prompt(&seller, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>());
+
+    let creator_before = xlm_client.balance(&creator);
+    let seller_before = xlm_client.balance(&seller);
+
+    client.transfer_license(&seller, &prompt_id, &buyer, &0i128);
+
+    assert_eq!(xlm_client.balance(&creator), creator_before);
+    assert_eq!(xlm_client.balance(&seller), seller_before);
+    assert!(!client.has_access(&seller, &prompt_id));
+    assert!(client.has_access(&buyer, &prompt_id));
+}
+
+#[test]
+fn test_subscription_purchase_invariant_charged_equals_creator_plus_platform() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let price: i128 = 25_000;
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+    client.configure_subscription_pass(&creator, &600, &price, &context.xlm, &true);
+
+    fund_buyer(&xlm_client, &subscriber, &context.contract, price);
+
+    let creator_before = xlm_client.balance(&creator);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+
+    client.subscribe_catalog(&subscriber, &creator, &price);
+
+    let creator_after = xlm_client.balance(&creator);
+    let fee_after = xlm_client.balance(&context.fee_wallet);
+
+    assert_eq!(price, (creator_after - creator_before) + (fee_after - fee_before));
+}
+
+#[test]
+fn test_bulk_purchase_invariant_holds_per_prompt() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let p1 = create_prompt(&env, &client, &creator, "Bulk Inv A", 5_000, &context.xlm);
+    let p2 = create_prompt(&env, &client, &creator, "Bulk Inv B", 15_000, &context.xlm);
+
+    let total = 5_000 + 15_000;
+    fund_buyer(&xlm_client, &buyer, &context.contract, total);
+
+    let creator_before = xlm_client.balance(&creator);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+
+    let mut ids = Vec::new(&env);
+    ids.push_back(p1);
+    ids.push_back(p2);
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(5_000i128);
+    amounts.push_back(15_000i128);
+
+    client.buy_prompts_bulk(&buyer, &ids, &amounts, &None::<Bytes>());
+
+    let creator_after = xlm_client.balance(&creator);
+    let fee_after = xlm_client.balance(&context.fee_wallet);
+
+    assert_eq!(total, (creator_after - creator_before) + (fee_after - fee_before));
+    assert!(client.has_access(&buyer, &p1));
+    assert!(client.has_access(&buyer, &p2));
+}
+
+#[test]
+fn test_settlement_snapshot_matches_actual_balances() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let co1 = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let referrer = Address::generate(&env);
+    let price: i128 = 88_888;
+
+    client.set_referral_percentage(&250);
+
+    let mut splits = Vec::<Split>::new(&env);
+    splits.push_back(Split { recipient: co1.clone(), bps: 1_250 });
+
+    let prompt_id = create_prompt_with_splits(
+        &env, &client, &creator, "Settlement Audit", price, &context.xlm, splits,
+    );
+
+    let referral_code = Bytes::from_slice(&env, b"settlement-audit-secret");
+    let referral_hash = BytesN::from_array(&env, &env.crypto().sha256(&referral_code).to_array());
+    client.register_referral_code(&referrer, &referral_hash);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, price);
+
+    let creator_before = xlm_client.balance(&creator);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+    let co1_before = xlm_client.balance(&co1);
+    let referrer_before = xlm_client.balance(&referrer);
+
+    client.buy_prompt(&buyer, &prompt_id, &Some(referral_code), &price, &None::<Bytes>());
+
+    let settlement = client.get_purchase_details(&prompt_id, &buyer).settlement;
+
+    assert_eq!(settlement.creator_amount, xlm_client.balance(&creator) - creator_before);
+    assert_eq!(settlement.platform_amount, xlm_client.balance(&context.fee_wallet) - fee_before);
+    assert_eq!(settlement.referrer_amount, xlm_client.balance(&referrer) - referrer_before);
+    assert_eq!(settlement.split_amount, xlm_client.balance(&co1) - co1_before);
+    assert_eq!(
+        settlement.buyer_amount,
+        settlement.creator_amount + settlement.platform_amount + settlement.referrer_amount + settlement.split_amount,
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Access Control Tests
+// Acceptance: unauthorized accounts cannot mutate listings, fees, disputes, or access
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_stranger_cannot_set_max_supply() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Max Supply", 5_000, &context.xlm);
+
+    let result = client.try_set_prompt_max_supply(&stranger, &prompt_id, &1u64);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger set_max_supply, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_create_promotion() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Promo", 5_000, &context.xlm);
+
+    let result = client.try_create_promotion(
+        &stranger,
+        &prompt_id,
+        &1_000u64,
+        &2_000u64,
+        &4_000i128,
+        &context.xlm,
+    );
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger create_promotion, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_cancel_promotion() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Cancel Promo", 5_000, &context.xlm);
+
+    let result = client.try_cancel_promotion(&stranger, &prompt_id);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger cancel_promotion, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_clear_discount() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Clear Disc", 5_000, &context.xlm);
+
+    let result = client.try_clear_discount(&stranger, &prompt_id);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger clear_discount, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_configure_subscription_pass() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    let result = client.try_configure_subscription_pass(&stranger, &600, &10_000, &context.xlm, &true);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger configure_subscription_pass, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_set_subscription_eligibility() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Sub Eligible", 5_000, &context.xlm);
+
+    let result = client.try_set_subscription_eligibility(&stranger, &prompt_id, &true);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger set_subscription_eligibility, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_set_fee_wallet() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let stranger = Address::generate(&env);
+    let new_wallet = Address::generate(&env);
+
+    let result = client.try_set_fee_wallet(&stranger, &new_wallet);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger set_fee_wallet, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_set_pause_status() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let stranger = Address::generate(&env);
+
+    let result = client.try_set_pause_status(&stranger, &true);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger set_pause_status, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_set_referral_percentage() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let stranger = Address::generate(&env);
+
+    let result = client.try_set_referral_percentage(&stranger, &300);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger set_referral_percentage, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_propose_upgrade() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let stranger = Address::generate(&env);
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+
+    let result = client.try_propose_upgrade(&stranger, &wasm_hash);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger propose_upgrade, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_confirm_upgrade() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let stranger = Address::generate(&env);
+
+    let result = client.try_confirm_upgrade(&stranger);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger confirm_upgrade, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_slash() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Slashable", 5_000, &context.xlm);
+
+    let result = client.try_slash(&stranger, &prompt_id, &1_000);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger slash, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_set_moderator_address() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let stranger = Address::generate(&env);
+    let moderator = Address::generate(&env);
+
+    let result = client.try_set_moderator_address(&stranger, &moderator);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger set_moderator_address, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stranger_cannot_migrate() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let stranger = Address::generate(&env);
+
+    let result = client.try_migrate(&stranger, &2);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger migrate, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_non_subscriber_cannot_renew_catalog_subscription() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let subscriber = Address::generate(&env);
+    let stranger = Address::generate(&env);
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+    client.configure_subscription_pass(&creator, &600, &10_000, &context.xlm, &true);
+
+    // subscriber subscribes
+    client.subscribe_catalog(&subscriber, &creator, &10_000);
+
+    // stranger tries to renew subscriber's subscription
+    let result = client.try_renew_catalog_subscription(&stranger, &creator, &10_000);
+    match result {
+        Err(Ok(Error::SubscriptionNotFound)) => {}
+        other => panic!("expected SubscriptionNotFound for stranger renew, got {:?}", other),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Sequence / Access Rule Preservation Tests
+// Acceptance: purchase, transfer, deactivate, and dispute sequences preserve access
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_purchase_then_deactivate_preserves_buyer_access() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Deactivate Seq", 10_000, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>());
+    assert!(client.has_access(&buyer, &prompt_id));
+
+    client.set_prompt_sale_status(&creator, &prompt_id, &false);
+    assert!(client.has_access(&buyer, &prompt_id));
+}
+
+#[test]
+fn test_purchase_then_transfer_revokes_seller_grants_buyer() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Transfer Seq", 10_000, &context.xlm);
+
+    fund_buyer(&xlm_client, &seller, &context.contract, 100_000);
+    client.buy_prompt(&seller, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>());
+    assert!(client.has_access(&seller, &prompt_id));
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.transfer_license(&seller, &prompt_id, &buyer, &15_000i128);
+
+    assert!(!client.has_access(&seller, &prompt_id));
+    assert!(client.has_access(&buyer, &prompt_id));
+    assert_eq!(client.get_prompts_by_buyer(&seller).len(), 0);
+    assert_eq!(client.get_prompts_by_buyer(&buyer).len(), 1);
+}
+
+#[test]
+fn test_transfer_then_deactivate_preserves_new_owner_access() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let seller = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Transfer Deactivate", 10_000, &context.xlm);
+
+    fund_buyer(&xlm_client, &seller, &context.contract, 100_000);
+    client.buy_prompt(&seller, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>());
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.transfer_license(&seller, &prompt_id, &buyer, &15_000i128);
+    assert!(client.has_access(&buyer, &prompt_id));
+
+    client.set_prompt_sale_status(&creator, &prompt_id, &false);
+    assert!(client.has_access(&buyer, &prompt_id));
+    assert!(!client.has_access(&seller, &prompt_id));
+}
+
+#[test]
+fn test_deactivated_listing_blocks_new_purchases() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Deactive Block", 10_000, &context.xlm);
+
+    client.set_prompt_sale_status(&creator, &prompt_id, &false);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    let result = client.try_buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>());
+    match result {
+        Err(Ok(Error::PromptInactive)) => {}
+        other => panic!("expected PromptInactive for deactivated listing, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_chain_of_transfers_preserves_access() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer_a = Address::generate(&env);
+    let buyer_b = Address::generate(&env);
+    let buyer_c = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Chain Transfer", 10_000, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer_a, &context.contract, 100_000);
+    client.buy_prompt(&buyer_a, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>());
+    assert!(client.has_access(&buyer_a, &prompt_id));
+
+    fund_buyer(&xlm_client, &buyer_b, &context.contract, 100_000);
+    client.transfer_license(&buyer_a, &prompt_id, &buyer_b, &12_000i128);
+    assert!(!client.has_access(&buyer_a, &prompt_id));
+    assert!(client.has_access(&buyer_b, &prompt_id));
+
+    fund_buyer(&xlm_client, &buyer_c, &context.contract, 100_000);
+    client.transfer_license(&buyer_b, &prompt_id, &buyer_c, &14_000i128);
+    assert!(!client.has_access(&buyer_b, &prompt_id));
+    assert!(client.has_access(&buyer_c, &prompt_id));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Boundary Value Tests
+// Acceptance: overflow, zero, maximum, rounding, and repeated-operation cases
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_zero_payment_amount_fails() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Zero Pay", 1, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 1);
+    let result = client.try_buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &0i128, &None::<Bytes>());
+    match result {
+        Err(Ok(Error::InvalidPaymentAmount)) => {}
+        other => panic!("expected InvalidPaymentAmount for zero payment, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_negative_payment_amount_fails() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Neg Pay", 1, &context.xlm);
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, 1);
+    let result = client.try_buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &(-1i128), &None::<Bytes>());
+    match result {
+        Err(Ok(Error::InvalidPaymentAmount)) => {}
+        other => panic!("expected InvalidPaymentAmount for negative payment, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_max_supply_one_blocks_second_purchase() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer_a = Address::generate(&env);
+    let buyer_b = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Max Supply One", 10_000, &context.xlm);
+
+    client.set_prompt_max_supply(&creator, &prompt_id, &1u64);
+
+    fund_buyer(&xlm_client, &buyer_a, &context.contract, 100_000);
+    client.buy_prompt(&buyer_a, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>());
+    assert!(client.has_access(&buyer_a, &prompt_id));
+
+    fund_buyer(&xlm_client, &buyer_b, &context.contract, 100_000);
+    let result = client.try_buy_prompt(&buyer_b, &prompt_id, &None::<Bytes>, &10_000i128, &None::<Bytes>());
+    match result {
+        Err(Ok(Error::MaxSupplyReached)) => {}
+        other => panic!("expected MaxSupplyReached for second purchase, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_fee_rounding_across_multiple_prices() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+
+    let prices = [1i128, 19, 101, 1_001, 10_001, 99_999, 1_000_001];
+    let mut total_fee = 0i128;
+    let mut total_creator = 0i128;
+
+    for &price in &prices {
+        let prompt_id = create_prompt(&env, &client, &creator, "Rounding", price, &context.xlm);
+        fund_buyer(&xlm_client, &buyer, &context.contract, price);
+
+        let creator_before = xlm_client.balance(&creator);
+        let fee_before = xlm_client.balance(&context.fee_wallet);
+
+        client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>());
+
+        let creator_after = xlm_client.balance(&creator);
+        let fee_after = xlm_client.balance(&context.fee_wallet);
+
+        let fee = fee_after - fee_before;
+        let creator_amount = creator_after - creator_before;
+        total_fee += fee;
+        total_creator += creator_amount;
+
+        assert_eq!(price, fee + creator_amount, "Rounding invariant failed for price {}", price);
+    }
+}
+
+#[test]
+fn test_split_rounding_preserves_total_across_operations() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
+    let co1 = Address::generate(&env);
+    let co2 = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let price: i128 = 100_001;
+
+    let mut splits = Vec::<Split>::new(&env);
+    splits.push_back(Split { recipient: co1.clone(), bps: 333 });
+    splits.push_back(Split { recipient: co2.clone(), bps: 333 });
+
+    let prompt_id = create_prompt_with_splits(
+        &env, &client, &creator, "Split Rounding", price, &context.xlm, splits,
+    );
+
+    fund_buyer(&xlm_client, &buyer, &context.contract, price);
+
+    let creator_before = xlm_client.balance(&creator);
+    let co1_before = xlm_client.balance(&co1);
+    let co2_before = xlm_client.balance(&co2);
+    let fee_before = xlm_client.balance(&context.fee_wallet);
+
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>());
+
+    let creator_after = xlm_client.balance(&creator);
+    let co1_after = xlm_client.balance(&co1);
+    let co2_after = xlm_client.balance(&co2);
+    let fee_after = xlm_client.balance(&context.fee_wallet);
+
+    let fee = fee_after - fee_before;
+    let co1_amount = co1_after - co1_before;
+    let co2_amount = co2_after - co2_before;
+    let creator_amount = creator_after - creator_before;
+
+    let distributed = fee + co1_amount + co2_amount + creator_amount;
+    assert_eq!(price, distributed, "Rounding loss must be absorbed by creator: expected {}, got {}", price, distributed);
+}
+
+#[test]
+fn test_overflow_fee_chain_returns_arithmetic_error() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+
+    let overflow_price = i128::MAX / 10_000 + 1;
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Overflow Price",
+        overflow_price,
+        &context.xlm,
+    );
+
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+    fund_buyer(&xlm_client, &buyer, &context.contract, overflow_price);
+
+    let result = client.try_buy_prompt(
+        &buyer,
+        &prompt_id,
+        &None::<Bytes>,
+        &overflow_price,
+        &None::<Bytes>,
+    );
+    match result {
+        Err(Ok(Error::ArithmeticOverflow)) => {}
+        other => panic!("expected ArithmeticOverflow for overflow price, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_repeated_operations_preserve_idempotency() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "Idempotent", 10_000, &context.xlm);
+
+    // Deactivating an already-inactive prompt should be a no-op (idempotent).
+    client.set_prompt_sale_status(&creator, &prompt_id, &false);
+    assert!(!client.get_prompt(&prompt_id).active);
+
+    client.set_prompt_sale_status(&creator, &prompt_id, &false);
+    assert!(!client.get_prompt(&prompt_id).active);
+
+    // Reactivating then deactivating again.
+    client.set_prompt_sale_status(&creator, &prompt_id, &true);
+    assert!(client.get_prompt(&prompt_id).active);
+
+    client.set_prompt_sale_status(&creator, &prompt_id, &false);
+    assert!(!client.get_prompt(&prompt_id).active);
 }
 

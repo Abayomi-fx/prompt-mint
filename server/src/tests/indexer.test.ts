@@ -1,27 +1,38 @@
-import { Server } from "@stellar/stellar-sdk/rpc";
-import { IndexerState } from "../models/IndexerState";
-import { startIndexer } from "../services/indexer";
+let startIndexer: any;
+let mockGetLatestLedger: jest.Mock;
+let mockGetEvents: jest.Mock;
+let mockSave: jest.Mock;
+let mockFindOneAndUpdate: jest.Mock;
 
-jest.mock("../models/IndexerState");
-jest.mock("@stellar/stellar-sdk/rpc");
+beforeEach(async () => {
+  process.env.PUBLIC_PROMPT_HASH_CONTRACT_ID = "CCONTRACT";
+  delete process.env.INDEXER_START_LEDGER;
 
-const mockFindOneAndUpdate = IndexerState.findOneAndUpdate as jest.Mock;
-const mockSave = jest.fn();
-const mockGetLatestLedger = jest.fn();
-const mockGetEvents = jest.fn();
-
-(Server as jest.Mock).mockImplementation(() => ({
-  getLatestLedger: mockGetLatestLedger,
-  getEvents: mockGetEvents,
-}));
-
-beforeEach(() => {
-  jest.clearAllMocks();
+  jest.resetModules();
   jest.useFakeTimers();
-  mockFindOneAndUpdate.mockResolvedValue({
+
+  mockGetLatestLedger = jest.fn();
+  mockGetEvents = jest.fn();
+  mockSave = jest.fn();
+  mockFindOneAndUpdate = jest.fn().mockResolvedValue({
     lastIndexedLedger: 0,
     save: mockSave,
   });
+
+  jest.doMock("../models/IndexerState", () => ({
+    IndexerState: {
+      findOneAndUpdate: mockFindOneAndUpdate,
+    },
+  }));
+
+  jest.doMock("@stellar/stellar-sdk/rpc", () => ({
+    Server: jest.fn(() => ({
+      getLatestLedger: mockGetLatestLedger,
+      getEvents: mockGetEvents,
+    })),
+  }));
+
+  startIndexer = require("../services/indexer").startIndexer;
 });
 
 afterEach(() => {
@@ -34,12 +45,11 @@ describe("indexer backfill", () => {
     mockGetLatestLedger.mockResolvedValue({ sequence: 1005 });
     mockGetEvents.mockResolvedValue({ events: [] });
 
-    startIndexer();
+    await startIndexer();
     await jest.advanceTimersByTimeAsync(5000);
 
     expect(mockGetEvents).toHaveBeenCalledWith(
       expect.objectContaining({ startLedger: 1000 }),
-      expect.anything(),
     );
   });
 
@@ -51,24 +61,21 @@ describe("indexer backfill", () => {
     mockGetLatestLedger.mockResolvedValue({ sequence: 5000 });
     mockGetEvents.mockResolvedValue({ events: [] });
 
-    startIndexer();
+    await startIndexer();
     await jest.advanceTimersByTimeAsync(5000);
 
     expect(mockGetEvents).toHaveBeenCalledTimes(3);
     expect(mockGetEvents).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ startLedger: 1 }),
-      expect.anything(),
     );
     expect(mockGetEvents).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ startLedger: 2001 }),
-      expect.anything(),
     );
     expect(mockGetEvents).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({ startLedger: 4001 }),
-      expect.anything(),
     );
   });
 
@@ -80,7 +87,7 @@ describe("indexer backfill", () => {
     mockGetLatestLedger.mockResolvedValue({ sequence: 5000 });
     mockGetEvents.mockResolvedValue({ events: [] });
 
-    startIndexer();
+    await startIndexer();
     await jest.advanceTimersByTimeAsync(5000);
 
     expect(mockSave).toHaveBeenCalled();

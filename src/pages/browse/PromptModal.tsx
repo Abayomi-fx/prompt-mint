@@ -1,6 +1,8 @@
 import React, { useState, useContext, useEffect, useRef } from "react";
 import { WalletContext } from "../../providers/WalletProvider";
 import { useAsyncTransaction } from "../../components/useAsyncTransaction";
+import { estimateSingleFee, type FeeEstimate } from "@/lib/checkout/feeEstimation";
+import { FeeEstimateBanner } from "@/components/FeeEstimateBanner";
 import { PromptHashClient } from "../../lib/stellar/promptHashClient";
 import { unlockPrompt } from "../../lib/prompts/unlock";
 import { Skeleton } from "../../components/Skeleton";
@@ -8,6 +10,7 @@ import { StatusBanner } from "../../components/StatusBanner";
 import { UnlockExplainer } from "../../components/UnlockExplainer";
 import { copyToClipboard } from "../../lib/clipboard/secureClipboard";
 import { MarkdownPreview } from "../../components/MarkdownPreview";
+import { WatermarkedPreview } from "../../components/WatermarkedPreview";
 import { CopyButton } from "../../components/CopyButton";
 import {
   CheckCircle,
@@ -102,11 +105,11 @@ const PromptMetadataSection: React.FC<{ itemId: string; status: BuyerStatus }> =
 
   return (
     <div className="mb-6 space-y-4">
-      {/* Preview Content – rendered as markdown */}
-      <MarkdownPreview
+      {/* Preview Content – rendered as markdown, watermarked for non-owners */}
+      <WatermarkedPreview
         content={prompt.previewText}
-        label="Preview"
-        previewOnly={false}
+        hasAccess={isPurchased}
+        previewLength={200}
       />
 
       {/* Metadata Grid */}
@@ -261,6 +264,8 @@ export const PromptModal: React.FC<PromptModalProps> = ({
   }>({ visible: false, success: false, message: "" });
   const copyTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [showGiftModal, setShowGiftModal] = useState(false);
+  const [feeEstimate, setFeeEstimate] = useState<FeeEstimate | null>(null);
+  const [isEstimatingFee, setIsEstimatingFee] = useState(false);
 
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
@@ -322,6 +327,15 @@ export const PromptModal: React.FC<PromptModalProps> = ({
         .finally(() => setIsCheckingAccess(false));
     }
   }, [isOpen, itemId, wallet?.address]);
+
+  useEffect(() => {
+    if (isOpen && status === "IDLE") {
+      setIsEstimatingFee(true);
+      estimateSingleFee()
+        .then(setFeeEstimate)
+        .finally(() => setIsEstimatingFee(false));
+    }
+  }, [isOpen, status]);
 
   // Only fire once per modal open per prompt — wallet.address changing mid-session
   // (e.g. account switch) shouldn't re-fire a view event, so it's read via a ref
@@ -595,6 +609,10 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                     />
                   )}
 
+                  {status === "IDLE" && (
+                    <FeeEstimateBanner fee={feeEstimate} isLoading={isEstimatingFee} />
+                  )}
+
                   <div className="flex flex-wrap gap-3">
                     <button
                       onClick={() => runPurchase().catch(() => {})}
@@ -663,7 +681,7 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                   {txHash && (
                     <div className="mt-6 flex items-center gap-2">
                       <a
-                        href={`https://stellar.expert/explorer/testnet/tx/${txHash}`}
+                        href={explorerTxUrl(txHash)}
                         target="_blank"
                         rel="noreferrer"
                         className="inline-flex items-center gap-2 text-xs text-slate-500 hover:text-emerald-400 font-mono transition-colors"
@@ -676,14 +694,6 @@ export const PromptModal: React.FC<PromptModalProps> = ({
                         variant="icon"
                       />
                     </div>
-                    <a
-                      href={explorerTxUrl(txHash)}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-2 mt-6 text-xs text-slate-500 hover:text-emerald-400 font-mono transition-colors"
-                    >
-                      View Transaction <ExternalLink className="h-3 w-3" />
-                    </a>
                   )}
                 </div>
               )}

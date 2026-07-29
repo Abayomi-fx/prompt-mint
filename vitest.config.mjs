@@ -36,6 +36,7 @@ export default defineConfig({
       "**/.{idea,git,cache,output,temp}/**",
       "**/{karma,rollup,webpack,vite,vitest}.config.*",
       "**/server/**",
+      "src/test/e2e/**",
       "src/test/similarityDetection.test.ts",
       "src/test/auditTrail.test.ts",
       "src/test/health.test.ts",
