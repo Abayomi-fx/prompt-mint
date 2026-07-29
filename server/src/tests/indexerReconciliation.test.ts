@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+/* global describe, it, expect */
 
 describe("Indexer Reconciliation", () => {
   describe("Price Reconciliation", () => {

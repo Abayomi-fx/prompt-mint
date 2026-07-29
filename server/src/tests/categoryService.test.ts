@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+/* global describe, it, expect, beforeEach */
 
 describe("Category Service", () => {
   const mockCategories = [
