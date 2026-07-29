@@ -765,3 +765,116 @@ impl Events {
         DiscountCleared { prompt_id, creator }.publish(env);
     }
 }
+
+// ─── Bundle events ───────────────────────────────────────────────────────────
+
+#[contractevent]
+struct BundleCreated {
+    #[topic]
+    pub bundle_id: u128,
+    pub creator: Address,
+    pub price_stroops: i128,
+    pub item_count: u32,
+}
+
+#[contractevent]
+struct BundlePurchased {
+    #[topic]
+    pub bundle_id: u128,
+    pub buyer: Address,
+    pub creator: Address,
+    pub price_stroops: i128,
+    pub referrer: Option<Address>,
+}
+
+#[contractevent]
+struct BundlePriceUpdated {
+    #[topic]
+    pub bundle_id: u128,
+    pub price_stroops: i128,
+}
+
+#[contractevent]
+struct BundleActiveUpdated {
+    #[topic]
+    pub bundle_id: u128,
+    pub active: bool,
+}
+
+#[contractevent]
+struct BundleItemAdded {
+    #[topic]
+    pub bundle_id: u128,
+    pub prompt_id: u128,
+}
+
+#[contractevent]
+struct BundleItemRemoved {
+    #[topic]
+    pub bundle_id: u128,
+    pub prompt_id: u128,
+}
+
+impl Events {
+    pub fn emit_bundle_created(
+        env: &Env,
+        bundle_id: u128,
+        creator: Address,
+        price_stroops: i128,
+        item_count: u32,
+    ) {
+        BundleCreated {
+            bundle_id,
+            creator,
+            price_stroops,
+            item_count,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_bundle_purchased(
+        env: &Env,
+        bundle_id: u128,
+        buyer: Address,
+        creator: Address,
+        price_stroops: i128,
+        referrer: Option<Address>,
+    ) {
+        BundlePurchased {
+            bundle_id,
+            buyer,
+            creator,
+            price_stroops,
+            referrer,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_bundle_price_updated(env: &Env, bundle_id: u128, price_stroops: i128) {
+        BundlePriceUpdated {
+            bundle_id,
+            price_stroops,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_bundle_active_updated(env: &Env, bundle_id: u128, active: bool) {
+        BundleActiveUpdated { bundle_id, active }.publish(env);
+    }
+
+    pub fn emit_bundle_item_added(env: &Env, bundle_id: u128, prompt_id: u128) {
+        BundleItemAdded {
+            bundle_id,
+            prompt_id,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_bundle_item_removed(env: &Env, bundle_id: u128, prompt_id: u128) {
+        BundleItemRemoved {
+            bundle_id,
+            prompt_id,
+        }
+        .publish(env);
+    }
+}

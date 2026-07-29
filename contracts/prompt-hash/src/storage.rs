@@ -722,3 +722,162 @@ impl Storage {
         env.storage().persistent().remove(&key);
     }
 }
+
+// ─── Bundle storage ──────────────────────────────────────────────────────────
+
+use super::types::{Bundle, BundlePurchase};
+
+impl Storage {
+    // ── Counter ──────────────────────────────────────────────────────────────
+
+    pub fn get_bundle_counter(env: &Env) -> u128 {
+        let key = DataKey::BundleCounter;
+        let count: u128 = env.storage().persistent().get(&key).unwrap_or(0);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        count
+    }
+
+    fn increment_bundle_counter(env: &Env, bundle_id: u128) -> Result<(), Error> {
+        let key = DataKey::BundleCounter;
+        let next = bundle_id.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
+        env.storage().persistent().set(&key, &next);
+        Self::extend_key_ttl(env, &key);
+        Ok(())
+    }
+
+    // ── CRUD ─────────────────────────────────────────────────────────────────
+
+    pub fn save_bundle(env: &Env, bundle: &Bundle) -> Result<(), Error> {
+        let key = DataKey::Bundle(bundle.id);
+        env.storage().persistent().set(&key, bundle);
+        Self::extend_key_ttl(env, &key);
+        Self::increment_bundle_counter(env, bundle.id)
+    }
+
+    pub fn get_bundle(env: &Env, bundle_id: u128) -> Option<Bundle> {
+        let key = DataKey::Bundle(bundle_id);
+        if let Some(b) = env.storage().persistent().get::<_, Bundle>(&key) {
+            Self::extend_key_ttl(env, &key);
+            Some(b)
+        } else {
+            None
+        }
+    }
+
+    pub fn require_bundle(env: &Env, bundle_id: u128) -> Result<Bundle, Error> {
+        Self::get_bundle(env, bundle_id).ok_or(Error::BundleNotFound)
+    }
+
+    pub fn update_bundle(env: &Env, bundle: &Bundle) {
+        let key = DataKey::Bundle(bundle.id);
+        env.storage().persistent().set(&key, bundle);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_all_bundles(env: &Env) -> Vec<Bundle> {
+        let count = Self::get_bundle_counter(env);
+        let mut out = Vec::new(env);
+        for id in 0..count {
+            if let Some(b) = Self::get_bundle(env, id) {
+                out.push_back(b);
+            }
+        }
+        out
+    }
+
+    // ── Creator / buyer index ─────────────────────────────────────────────────
+
+    pub fn add_bundle_to_creator(env: &Env, creator: &Address, bundle_id: u128) {
+        let key = DataKey::CreatorBundles(creator.clone());
+        let mut ids: Vec<u128> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        ids.push_back(bundle_id);
+        env.storage().persistent().set(&key, &ids);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_bundles_by_creator(env: &Env, creator: &Address) -> Vec<Bundle> {
+        let key = DataKey::CreatorBundles(creator.clone());
+        let ids: Vec<u128> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        Self::bundles_from_ids(env, ids)
+    }
+
+    pub fn add_bundle_to_buyer(env: &Env, buyer: &Address, bundle_id: u128) {
+        let key = DataKey::BuyerBundles(buyer.clone());
+        let mut ids: Vec<u128> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        // idempotent
+        for i in 0..ids.len() {
+            if ids.get(i).unwrap() == bundle_id {
+                Self::extend_key_ttl(env, &key);
+                return;
+            }
+        }
+        ids.push_back(bundle_id);
+        env.storage().persistent().set(&key, &ids);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_bundles_by_buyer(env: &Env, buyer: &Address) -> Vec<Bundle> {
+        let key = DataKey::BuyerBundles(buyer.clone());
+        let ids: Vec<u128> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        Self::bundles_from_ids(env, ids)
+    }
+
+    fn bundles_from_ids(env: &Env, ids: Vec<u128>) -> Vec<Bundle> {
+        let mut out = Vec::new(env);
+        for i in 0..ids.len() {
+            if let Some(b) = Self::get_bundle(env, ids.get(i).unwrap()) {
+                out.push_back(b);
+            }
+        }
+        out
+    }
+
+    // ── Bundle purchase record ────────────────────────────────────────────────
+
+    pub fn save_bundle_purchase(env: &Env, purchase: &BundlePurchase) {
+        let key = DataKey::BundlePurchase(purchase.bundle_id, purchase.owner.clone());
+        env.storage().persistent().set(&key, purchase);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn get_bundle_purchase(
+        env: &Env,
+        bundle_id: u128,
+        buyer: &Address,
+    ) -> Option<BundlePurchase> {
+        let key = DataKey::BundlePurchase(bundle_id, buyer.clone());
+        let p = env.storage().persistent().get::<_, BundlePurchase>(&key);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        p
+    }
+
+    pub fn has_bundle_purchase(env: &Env, bundle_id: u128, buyer: &Address) -> bool {
+        Self::get_bundle_purchase(env, bundle_id, buyer).is_some()
+    }
+}

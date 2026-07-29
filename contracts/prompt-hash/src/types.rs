@@ -47,6 +47,19 @@ pub enum Error {
     // #50 – revenue splits
     InvalidSplits = 20,
     // #49 – time-bound listing expiry
+    ListingExpired = 28,
+    LicenseNotFound = 29,
+    InvalidLicenseTransfer = 30,
+    // Bundle errors
+    BundleNotFound = 31,
+    BundleInactive = 32,
+    BundleAlreadyPurchased = 33,
+    BundleEmpty = 34,
+    InvalidBundleTitleLength = 35,
+    InvalidBundleDescriptionLength = 36,
+    PromptAlreadyInBundle = 37,
+    PromptNotInBundle = 38,
+    InvalidBundleItemCount = 39,
     ListingExpired = 21,
     LicenseNotFound = 22,
     InvalidLicenseTransfer = 23,
@@ -106,6 +119,12 @@ pub enum DataKey {
     ReferralPercentage,
     IsPaused,
     VoucherKey(u128, BytesN<32>),
+    // Bundle storage keys
+    Bundle(u128),
+    BundleCounter,
+    CreatorBundles(Address),
+    BuyerBundles(Address),
+    BundlePurchase(u128, Address),
     ReferralCode(BytesN<32>),
     ReferralParent(Address),
     SubscriptionConfig(Address),
@@ -561,6 +580,110 @@ pub trait PromptHashTrait {
     fn get_pending_upgrade(env: Env) -> Option<BytesN<32>>;
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error>;
 
+    // ─── Bundle methods ──────────────────────────────────────────────────────
+
+    /// Create a bundle of existing active prompts owned by `creator`.
+    /// All prompt_ids must be active prompts whose `creator` field matches.
+    /// `price_stroops` is the single price a buyer pays for the entire bundle.
+    /// `asset` is the payment token (same restriction as individual prompts).
+    fn create_bundle(
+        env: Env,
+        creator: Address,
+        title: String,
+        description: String,
+        image_url: String,
+        prompt_ids: Vec<u128>,
+        price_stroops: i128,
+        asset: Address,
+    ) -> Result<u128, Error>;
+
+    /// Add a prompt to an existing bundle. Must be the bundle creator.
+    fn add_bundle_item(
+        env: Env,
+        creator: Address,
+        bundle_id: u128,
+        prompt_id: u128,
+    ) -> Result<(), Error>;
+
+    /// Remove a prompt from a bundle. Must be the bundle creator.
+    fn remove_bundle_item(
+        env: Env,
+        creator: Address,
+        bundle_id: u128,
+        prompt_id: u128,
+    ) -> Result<(), Error>;
+
+    /// Update the bundle price. Must be the bundle creator.
+    fn update_bundle_price(
+        env: Env,
+        creator: Address,
+        bundle_id: u128,
+        price_stroops: i128,
+    ) -> Result<(), Error>;
+
+    /// Toggle the bundle's active state. Must be the bundle creator.
+    fn set_bundle_active(
+        env: Env,
+        creator: Address,
+        bundle_id: u128,
+        active: bool,
+    ) -> Result<(), Error>;
+
+    /// Purchase a bundle atomically. Grants access to every current bundle item.
+    /// `payment_amount_stroops` must be >= bundle.price_stroops.
+    fn buy_bundle(
+        env: Env,
+        buyer: Address,
+        bundle_id: u128,
+        payment_amount_stroops: i128,
+        referrer: Option<Address>,
+    ) -> Result<(), Error>;
+
+    /// Returns true if the user has purchased the bundle (or is the creator).
+    fn has_bundle_access(env: Env, user: Address, bundle_id: u128) -> Result<bool, Error>;
+
+    fn get_bundle(env: Env, bundle_id: u128) -> Result<Bundle, Error>;
+    fn get_all_bundles(env: Env) -> Result<Vec<Bundle>, Error>;
+    fn get_bundles_by_creator(env: Env, creator: Address) -> Result<Vec<Bundle>, Error>;
+    fn get_bundles_by_buyer(env: Env, buyer: Address) -> Result<Vec<Bundle>, Error>;
+}
+
+// ─── Bundle on-chain types ───────────────────────────────────────────────────
+
+pub const MAX_BUNDLE_TITLE_LEN: u32 = 120;
+pub const MAX_BUNDLE_DESC_LEN: u32 = 512;
+pub const MAX_BUNDLE_ITEMS: u32 = 20;
+
+/// On-chain bundle record. prompt_ids stores the current set of member prompts.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Bundle {
+    pub id: u128,
+    pub creator: Address,
+    pub title: String,
+    pub description: String,
+    pub image_url: String,
+    /// Current set of member prompt IDs. Capped at MAX_BUNDLE_ITEMS.
+    pub prompt_ids: Vec<u128>,
+    pub price_stroops: i128,
+    pub asset: Address,
+    pub active: bool,
+    pub sales_count: u64,
+    pub created_at: u64,
+}
+
+/// Per-buyer bundle purchase record. Records the snapshot of prompt_ids that
+/// were current at time of purchase so the unlock layer can serve each one.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BundlePurchase {
+    pub bundle_id: u128,
+    pub owner: Address,
+    pub original_creator: Address,
+    pub paid_price: i128,
+    pub purchased_at: u64,
+    /// Snapshot of prompt IDs that were in the bundle when purchased.
+    pub purchased_prompt_ids: Vec<u128>,
     // ─── Contract state versioning ───────────────────────────────────────────
     /// Current schema version applied to this contract's storage. `0` means
     /// the contract predates this versioning scheme (never migrated).
