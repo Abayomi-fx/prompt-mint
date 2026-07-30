@@ -43,6 +43,7 @@ const reportSchema = new mongoose.Schema(
 
 // Index for finding reports by prompt
 reportSchema.index({ promptId: 1, createdAt: -1 });
+reportSchema.index({ status: 1, createdAt: -1 });
 
 const Report = mongoose.models.Report || mongoose.model("Report", reportSchema);
 

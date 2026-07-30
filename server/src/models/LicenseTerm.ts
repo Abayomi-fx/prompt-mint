@@ -29,5 +29,7 @@ const licenseTermSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
+licenseTermSchema.index({ isActive: 1, version: -1 });
+
 const LicenseTerm = mongoose.models.LicenseTerm || mongoose.model("LicenseTerm", licenseTermSchema);
 export default LicenseTerm;
