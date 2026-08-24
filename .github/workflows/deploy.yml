@@ -257,7 +257,7 @@ jobs:
           echo "Checksum verification passed"
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             ./release-artifacts/release-checksums.txt
