@@ -63,9 +63,6 @@ export const ErrorCode = {
 
   /** The version requested via Accept-Version is not supported by this server. */
   UNSUPPORTED_VERSION: "UNSUPPORTED_VERSION",
-
-  /** The input value provided in the request body or query is invalid. */
-  INVALID_INPUT: "INVALID_INPUT",
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -129,5 +126,4 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   UNSUPPORTED_VERSION:
     "The API version you requested is not supported. Please use a supported version.",
   // NOTE: INVALID_INPUT is used by image validation; keep it in sync with ErrorCode above.
-  INVALID_INPUT: "The input provided is invalid.",
 };

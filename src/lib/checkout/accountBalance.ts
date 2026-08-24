@@ -14,7 +14,9 @@ export interface CheckoutAccountSnapshot {
 
 function getHorizonServer(): Horizon.Server {
   return new Horizon.Server(horizonUrl, {
-    allowHttp: stellarNetwork === "LOCAL" || stellarNetwork === "STANDALONE",
+    allowHttp:
+      (stellarNetwork as string) === "LOCAL" ||
+      (stellarNetwork as string) === "STANDALONE",
   });
 }
 
@@ -27,7 +29,7 @@ async function resolveBaseReserveStroops(horizon: Horizon.Server): Promise<bigin
 
   try {
     const root = await horizon.root();
-    const fromHorizon = BigInt(root.base_reserve_in_stroops);
+    const fromHorizon = BigInt((root as unknown as { base_reserve_in_stroops: string }).base_reserve_in_stroops);
     cachedBaseReserveStroops = fromHorizon > 0n ? fromHorizon : DEFAULT_BASE_RESERVE_STROOPS;
   } catch {
     cachedBaseReserveStroops = DEFAULT_BASE_RESERVE_STROOPS;

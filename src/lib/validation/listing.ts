@@ -65,9 +65,10 @@ export type ListingFormInput = {
   previewText: string;
   fullPrompt: string;
   priceXlm: string;
-  // #131 – content classification
-  classification: string;
-  safetyFlags: string[];
+  // #131 – content classification (optional at the form-input boundary; the
+  // validation below still reports an error when classification is omitted)
+  classification?: string;
+  safetyFlags?: string[];
 };
 
 export type ListingValidationErrors = Partial<
@@ -172,8 +173,8 @@ export function validateListingForm(
   }
 
   // Safety flags are optional — valid if provided
-  if (input.safetyFlags.length > 0) {
-    for (const flag of input.safetyFlags) {
+  if ((input.safetyFlags?.length ?? 0) > 0) {
+    for (const flag of input.safetyFlags ?? []) {
       if (!SAFETY_DISCLOSURE_FLAGS.some((f) => f.value === flag)) {
         errors.safetyFlags = `"${flag}" is not a recognized safety disclosure flag.`;
         break;

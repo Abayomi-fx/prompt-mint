@@ -12,7 +12,6 @@ import { stellarNetwork } from "../lib/env";
 import { ALBEDO_ID } from "@creit.tech/stellar-wallets-kit";
 import { useAsyncTransaction } from "../components/useAsyncTransaction";
 import { trackEvent, trackEventWithWallet } from "../lib/analytics/track";
-import { useQueryClient } from "@tanstack/react-query";
 
 export type WalletStatus = 
   | "idle" 
@@ -55,8 +54,6 @@ export const WalletProvider = ({ children }: { children: React.ReactNode }) => {
   const isConnectingRef = useRef(false);
   const reconnectAttemptsRef = useRef(0);
   const maxReconnectAttempts = 3;
-  const queryClient = useQueryClient();
-  const previousAddressRef = useRef<string | undefined>(undefined);
 
   const { execute: executeDisconnect } = useAsyncTransaction(
     async () => {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, NavLink, useLocation } from "react-router-dom";
+import { Link, NavLink } from "react-router-dom";
 import {
   Activity,
   Menu,
@@ -10,7 +10,6 @@ import {
   Shield,
   User,
   ShoppingCart,
-  Wallet,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "./ui/sheet";
@@ -60,7 +59,6 @@ export function Navigation() {
   const [showCart, setShowCart] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
   const { itemCount } = useCart();
-  const location = useLocation();
 
   return (
     <>

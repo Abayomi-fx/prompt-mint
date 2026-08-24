@@ -10,7 +10,6 @@ import { PromptModalSkeleton } from "@/components/MarketplaceSkeletons";
 import { StatusBanner } from "../../components/StatusBanner";
 import { UnlockExplainer } from "../../components/UnlockExplainer";
 import { copyToClipboard } from "../../lib/clipboard/secureClipboard";
-import { MarkdownPreview } from "../../components/MarkdownPreview";
 import { WatermarkedPreview } from "../../components/WatermarkedPreview";
 import { CopyButton } from "../../components/CopyButton";
 import {

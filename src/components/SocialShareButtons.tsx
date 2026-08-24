@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Check, Link2, Send, Twitter } from "lucide-react";
+import { Check, Link2, Send, Share2 } from "lucide-react";
 import { copyToClipboard } from "@/lib/clipboard/secureClipboard";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -74,7 +74,7 @@ export function SocialShareButtons({
             rel="noopener noreferrer"
             aria-label="Share on X (Twitter)"
           >
-            <Twitter className="h-4 w-4" />
+            <Share2 className="h-4 w-4" />
             X
           </a>
         </Button>

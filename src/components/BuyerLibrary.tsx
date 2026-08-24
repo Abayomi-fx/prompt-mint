@@ -9,6 +9,7 @@ import {
   RefreshCw,
   ShoppingBag,
   WifiOff,
+  BookOpenCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,7 +20,6 @@ import { unlockPromptContent, type IntegrityMetadata } from "@/lib/prompts/unloc
 import { UnlockExplainer, type UnlockState } from "@/components/UnlockExplainer";
 import { IntegrityBadge } from "@/components/IntegrityBadge";
 import { stellarNetwork } from "@/lib/env";
-import { CurrencyPrice } from "@/components/CurrencyPrice";
 import { FreshnessBadge } from "@/components/FreshnessBadge";
 import { useNetworkState } from "@/hooks/useNetworkState";
 import { formatPriceLabel } from "@/lib/stellar/format";
@@ -39,7 +39,9 @@ function getCachedBuyerPrompts(address?: string): CachedBuyerLibrary | null {
   try {
     const raw = window.localStorage.getItem(`prompt-mint:buyer-library-cache:${address}`);
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch {
+    // ignore malformed cache entries
+  }
   return null;
 }
 
@@ -49,7 +51,9 @@ function setCachedBuyerPrompts(address: string, prompts: PromptRecord[]) {
       `prompt-mint:buyer-library-cache:${address}`,
       JSON.stringify({ timestamp: Date.now(), prompts }),
     );
-  } catch {}
+  } catch {
+    // ignore write failures (e.g., quota exceeded)
+  }
 }
 
 
