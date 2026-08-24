@@ -9,6 +9,7 @@ import Report from "../models/Report";
 import Vote from "../models/Vote";
 import Purchase from "../models/Purchase";
 import WebhookSubscription from "../models/WebhookSubscription";
+import Notification from "../models/Notification";
 import { cacheSet, cacheGet, cacheDel } from "../services/cacheService";
 import connectDb from "../db/connectDb";
 
@@ -146,6 +147,74 @@ export const RequestExport = asyncRoute(async (req: Request, res: Response) => {
     exportId,
     expiresIn: 3600,
     downloadUrl: `/api/user/export/download/${exportId}`
+  });
+});
+
+// ─── Account deletion (#91: data retention & deletion policies) ───────────────
+//
+// Mirrors the export challenge/signature flow above so only the wallet owner
+// can request deletion. Off-chain personal data (profile, notification
+// preferences, webhook subscriptions) is removed. Records that constitute
+// marketplace/on-chain history -- purchases, marketplace transactions,
+// votes, and moderation reports -- are intentionally retained so that
+// on-chain access authority and audit integrity are unaffected, per
+// docs/legal/data-retention-policy.md.
+
+export const GenerateDeletionChallenge = (req: Request, res: Response): void => {
+  const { address } = req.body;
+  if (!address) {
+    res.status(400).json({ error: "address is required.", code: "MISSING_FIELDS" });
+    return;
+  }
+  const secret = process.env.CHALLENGE_TOKEN_SECRET;
+  if (!secret) {
+    res.status(500).json({ error: "Configuration error." });
+    return;
+  }
+  const challenge = createChallengeToken(secret, String(address), "delete-account");
+  res.status(200).json(challenge);
+};
+
+export const RequestAccountDeletion = asyncRoute(async (req: Request, res: Response) => {
+  const { address, signature, token } = req.body;
+  if (!address || !signature || !token) {
+    throw new AppError("address, signature, and token are required.", 400, "MISSING_FIELDS");
+  }
+  const secret = process.env.CHALLENGE_TOKEN_SECRET;
+  if (!secret) {
+    throw new AppError("Configuration error.", 500);
+  }
+
+  const payload = verifyChallengeToken(secret, token, String(address), "delete-account");
+  const message = buildChallengeMessage(payload);
+  const isValid = verifyChallengeSignature(String(address), message, String(signature));
+
+  if (!isValid) {
+    throw new AppError("Invalid signature.", 401, "INVALID_SIGNATURE");
+  }
+
+  await connectDb();
+
+  const walletAddress = String(address).toLowerCase();
+
+  const [userResult, webhookResult, notificationResult] = await Promise.all([
+    User.deleteOne({ walletAddress }),
+    WebhookSubscription.deleteMany({ walletAddress }),
+    Notification.deleteMany({ walletAddress }),
+  ]);
+
+  res.status(200).json({
+    success: true,
+    deleted: {
+      profile: userResult.deletedCount > 0,
+      webhookSubscriptions: webhookResult.deletedCount,
+      notifications: notificationResult.deletedCount,
+    },
+    retained: {
+      collections: ["purchases", "marketplaceTransactions", "votes", "reports"],
+      reason:
+        "Marketplace purchase records, votes, and moderation reports are retained to preserve on-chain access authority, audit integrity, and marketplace history. These records reference your wallet address but store no additional personal profile data.",
+    },
   });
 });
 

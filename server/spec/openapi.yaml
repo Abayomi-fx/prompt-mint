@@ -1004,6 +1004,94 @@ paths:
               schema:
                 type: object
 
+  /api/user/delete/challenge:
+    post:
+      operationId: generateDeletionChallenge
+      summary: Generate a Stellar challenge for account deletion (#91)
+      tags: [Users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                address:
+                  type: string
+      responses:
+        "200":
+          description: Challenge generated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                  challenge:
+                    type: string
+                  expiresAt:
+                    type: number
+                  nonce:
+                    type: string
+
+  /api/user/delete:
+    post:
+      operationId: requestAccountDeletion
+      summary: Delete the off-chain profile data for a wallet (#91)
+      description: >-
+        Signature-gated deletion of the caller's User profile, notifications,
+        and webhook subscriptions. Marketplace purchase/order records, votes,
+        and moderation reports are intentionally retained to preserve
+        on-chain access authority and audit integrity -- see
+        docs/legal/data-retention-policy.md.
+      tags: [Users]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                address:
+                  type: string
+                signature:
+                  type: string
+                token:
+                  type: string
+      responses:
+        "200":
+          description: Off-chain profile data deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  deleted:
+                    type: object
+                    properties:
+                      profile:
+                        type: boolean
+                      webhookSubscriptions:
+                        type: number
+                      notifications:
+                        type: number
+                  retained:
+                    type: object
+                    properties:
+                      collections:
+                        type: array
+                        items:
+                          type: string
+                      reason:
+                        type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
   # ─── Versions ──────────────────────────────────────────────────────────────
   /api/versions/update:
     post:
