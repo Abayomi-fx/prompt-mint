@@ -1,0 +1,128 @@
+name: Dependency Vulnerability Scan
+
+# Automated dependency vulnerability scanning for both the JS/TS frontend
+# (yarn/npm advisories) and the Rust/Soroban contract (RustSec advisories).
+#
+# - Runs on every PR/push that touches a manifest or lockfile and fails the
+#   build on high/critical severity findings.
+# - Also runs weekly on a schedule (and can be triggered manually) to catch
+#   newly-disclosed vulnerabilities in dependencies that haven't changed,
+#   publishing a report artifact and job summary for tracking remediation.
+on:
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "package.json"
+      - "yarn.lock"
+      - ".yarnrc.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/dependency-scan.yml"
+  push:
+    branches: ["main"]
+    paths:
+      - "package.json"
+      - "yarn.lock"
+      - ".yarnrc.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/dependency-scan.yml"
+  schedule:
+    # Every Monday at 06:00 UTC — catches newly-disclosed CVEs against
+    # dependencies that haven't changed since the last push.
+    - cron: "0 6 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  npm-audit:
+    name: "npm: dependency audit"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install --immutable
+
+      - name: Run npm audit (JSON report)
+        # Always capture a full JSON report for the weekly artifact, even
+        # if no vulnerabilities are found (yarn exits non-zero on findings,
+        # so the report step must not fail the job by itself).
+        run: |
+          mkdir -p reports
+          yarn npm audit --recursive --json > reports/npm-audit.json || true
+
+      - name: Upload npm audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-audit-report
+          path: reports/npm-audit.json
+          retention-days: 90
+
+      - name: Fail on high/critical severity vulnerabilities
+        run: yarn npm audit --recursive --severity high
+
+      - name: Weekly summary
+        if: always() && github.event_name == 'schedule'
+        run: |
+          echo "### npm dependency audit — $(date -u +%Y-%m-%d)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat reports/npm-audit.json >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  cargo-audit:
+    name: "cargo: dependency audit"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.89.0"
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit (JSON report)
+        run: |
+          mkdir -p reports
+          cargo audit --json > reports/cargo-audit.json || true
+
+      - name: Upload cargo audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-report
+          path: reports/cargo-audit.json
+          retention-days: 90
+
+      - name: Fail on RustSec advisories (contract dependencies)
+        run: cargo audit --deny warnings
+
+      - name: Weekly summary
+        if: always() && github.event_name == 'schedule'
+        run: |
+          echo "### cargo dependency audit — $(date -u +%Y-%m-%d)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat reports/cargo-audit.json >> "$GITHUB_STEP_SUMMARY" || true
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
