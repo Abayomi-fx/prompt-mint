@@ -144,6 +144,37 @@ fn test_create_prompt_stores_encrypted_fields() {
     assert_eq!(all_prompts.get(0).unwrap().id, prompt_id);
 }
 
+/// #32 – `__constructor` must reject a second setup call against an
+/// already-initialized instance instead of silently overwriting the owner,
+/// fee wallet, fee percentage, XLM SAC address, pause status, or schema
+/// version that were established during the first (successful) setup.
+#[test]
+fn test_constructor_rejects_repeated_initialization() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+
+    // `setup` already ran `__constructor` once via `env.register(...)`.
+    // Invoke it again directly against the same, already-initialized
+    // contract instance and confirm it is rejected rather than silently
+    // re-running setup.
+    let attacker_admin = Address::generate(&env);
+    let attacker_fee_wallet = Address::generate(&env);
+    let result: Result<(), Error> = env.as_contract(&context.contract, || {
+        <PromptHashContract as crate::types::PromptHashTrait>::__constructor(
+            env.clone(),
+            attacker_admin.clone(),
+            attacker_fee_wallet.clone(),
+            context.xlm.clone(),
+        )
+    });
+
+    assert_eq!(result, Err(Error::AlreadyInitialized));
+
+    // Original setup state must remain untouched by the rejected call.
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    assert_eq!(client.get_fee_percentage(), 500);
+}
+
 #[test]
 fn test_creator_can_pause_reactivate_and_update_price() {
     let env: Env = Default::default();

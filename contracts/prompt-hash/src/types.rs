@@ -99,6 +99,14 @@ pub enum Error {
     StakeLocked = 48,
     InvalidStakeAmount = 49,
     NotStakeOwner = 50,
+    // #32 – guard against the constructor/setup routine being invoked more
+    // than once against an already-initialized contract instance.
+    //
+    // NB: this enum already has pre-existing duplicate variant names/values
+    // (see the note at the top of this enum) unrelated to issue #32, so it
+    // does not currently compile as-is. `51` is chosen so this new variant
+    // stays unique regardless of how that separate cleanup lands.
+    AlreadyInitialized = 51,
 }
 
 #[contracttype]
@@ -150,6 +158,9 @@ pub enum DataKey {
     PendingUpgrade,
     UpgradeProposer,
     UpgradeProposedAt,
+    // #32 – marks that `__constructor` has already run once, so repeated
+    // setup calls against an already-initialized instance are rejected.
+    Initialized,
 }
 
 /// #273 – Time-based discount schedule for a prompt.

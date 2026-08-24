@@ -11,7 +11,8 @@ const TX_ERROR_MAP: Record<string, string> = {
   "expired": "errors.transaction.expired",
 };
 
-const FALLBACK_UNKNOWN = "An unexpected error occurred. Please try again.";
+const FALLBACK_UNKNOWN =
+  "An unexpected error occurred. Please try again. If this keeps happening, please contact support with the time this occurred.";
 
 export function translateError(message: string): string {
   if (!message) return "";
