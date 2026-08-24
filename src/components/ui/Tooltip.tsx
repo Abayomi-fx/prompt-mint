@@ -1,5 +1,5 @@
 import React, { useId, useRef, useState } from "react";
-import { cn, shortenAddress } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { formatXLM } from "@/lib/formatters";
 
 // ── Generic Tooltip ────────────────────────────────────────────────────────────
@@ -102,6 +102,8 @@ export function AddressTooltip({
   className,
 }: AddressTooltipProps) {
   if (!address) return null;
+  const safeChars = Math.max(1, chars);
+  const display = `${address.slice(0, safeChars)}…${address.slice(-safeChars)}`;
   return (
     <Tooltip
       content={
@@ -110,7 +112,7 @@ export function AddressTooltip({
       className={className}
     >
       <span className="cursor-help font-mono underline decoration-dotted decoration-slate-500 underline-offset-2">
-        {shortenAddress(address, chars)}
+        {display}
       </span>
     </Tooltip>
   );

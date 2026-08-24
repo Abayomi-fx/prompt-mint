@@ -538,7 +538,7 @@ const MyPrompts = ({ onCreateNew: _onCreateNew }: MyPromptsProps) => {
                 onDragOver={handlePromptDragOver}
                 onDrop={handlePromptDrop(prompt.id.toString())}
                 onDragEnd={() => setDraggedId(null)}
-                className={`border-white/10 bg-slate-950/70 text-white transition-opacity ${
+                className={`relative border-white/10 bg-slate-950/70 text-white transition-opacity ${
                   draggedId === prompt.id.toString() ? "opacity-50" : ""
                 }`}
               >
@@ -549,8 +549,6 @@ const MyPrompts = ({ onCreateNew: _onCreateNew }: MyPromptsProps) => {
                   />
                   <span className="text-xs uppercase tracking-[0.2em]">Drag to reorder</span>
                 </div>
-                className="relative border-white/10 bg-slate-950/70 text-white"
-              >
                 <label className="absolute left-3 top-3 z-10 flex h-7 w-7 items-center justify-center rounded-lg border border-white/20 bg-slate-950/70 backdrop-blur">
                   <input
                     type="checkbox"
