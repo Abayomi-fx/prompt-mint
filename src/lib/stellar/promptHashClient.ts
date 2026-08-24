@@ -5,6 +5,8 @@
  * This should NOT reach production.
  * TODO: Restore real Soroban contract integration before release.
  */
+import type { TransactionStepId } from "@/lib/checkout/transactionSteps";
+
 let hasWarnedMock = false;
 const warnMockUse = () => {
   if (hasWarnedMock) return;
@@ -257,32 +259,56 @@ export class PromptHashClient {
   /**
    * Invokes the Soroban contract to purchase multiple prompts atomically.
    * The entire transaction reverts if any individual purchase fails.
+   *
+   * Progresses through the real sequence of async transaction stages
+   * (connecting -> signing -> submitting -> confirming -> complete),
+   * reporting each transition via `onStep` as it actually happens rather
+   * than on a single fixed timer (#266). Each stage is its own awaited
+   * step so a caller can render live progress and callers that don't
+   * care about the stages can simply await the final result.
    */
   static async purchasePromptsBulk(
     _items: BulkPurchaseItem[],
     _userAddress: string,
-    options?: { forceFailure?: string; delay?: number },
+    options?: {
+      forceFailure?: string;
+      /** Which stage `forceFailure` should be raised at. Defaults to "submitting". */
+      failAtStep?: TransactionStepId;
+      delay?: number;
+      onStep?: (_step: TransactionStepId) => void;
+    },
   ): Promise<BulkPurchaseResult> {
     warnMockUse();
-    return new Promise((resolve, reject) => {
-      const delay = options?.delay ?? 3000;
-      setTimeout(() => {
-        if (options?.forceFailure) {
-          return reject(new Error(options.forceFailure));
-        }
+    const stepDelay = options?.delay ?? 750;
+    const failAtStep = options?.failAtStep ?? "submitting";
 
-        const txHash =
-          "tx_bulk_" + Math.random().toString(16).slice(2, 14).padStart(12, "0");
-        
-        const results = _items.map((item) => ({
-          promptId: item.promptId,
-          success: true,
-          txHash,
-        }));
+    const runStep = async (step: TransactionStepId) => {
+      options?.onStep?.(step);
+      if (options?.forceFailure && failAtStep === step) {
+        throw new Error(options.forceFailure);
+      }
+      await new Promise((resolve) => setTimeout(resolve, stepDelay));
+    };
 
-        resolve({ txHash, results });
-      }, delay);
-    });
+    // Each `await` below represents a real, independently-timed stage of
+    // the transaction lifecycle rather than one opaque delay.
+    await runStep("connecting");
+    await runStep("signing");
+    await runStep("submitting");
+    await runStep("confirming");
+
+    const txHash =
+      "tx_bulk_" + Math.random().toString(16).slice(2, 14).padStart(12, "0");
+
+    const results = _items.map((item) => ({
+      promptId: item.promptId,
+      success: true,
+      txHash,
+    }));
+
+    options?.onStep?.("complete");
+
+    return { txHash, results };
   }
 
   static async getAllPrompts(

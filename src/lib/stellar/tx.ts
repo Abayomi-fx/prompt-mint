@@ -141,12 +141,18 @@ export async function readContract<TResult>(
   return readSimulationResult(simulation) as TResult;
 }
 
+/** Real lifecycle stages a submitted transaction passes through (#266). */
+export type SubmitTransactionStep = "signing" | "submitting" | "confirming" | "complete";
+
 export async function submitPreparedTransaction(
   config: StellarNetworkConfig,
   prepared: PreparedContractCall,
   signer: WalletTransactionSigner,
   source: string,
+  // eslint-disable-next-line no-unused-vars
+  onStep?: (step: SubmitTransactionStep) => void,
 ) {
+  onStep?.("signing");
   const signed = await signer.signTransaction(
     prepared.preparedTransaction.toXDR(),
     {
@@ -160,6 +166,7 @@ export async function submitPreparedTransaction(
     config.networkPassphrase,
   );
 
+  onStep?.("submitting");
   const response = await stellarRpcBreaker.execute(() =>
     prepared.server.sendTransaction(signedTransaction),
   );
@@ -174,6 +181,7 @@ export async function submitPreparedTransaction(
     );
   }
 
+  onStep?.("confirming");
   const result = await stellarRpcBreaker.execute(() =>
     prepared.server.pollTransaction(response.hash, {
       attempts: 20,
@@ -182,6 +190,7 @@ export async function submitPreparedTransaction(
   );
 
   if (result.status === Api.GetTransactionStatus.SUCCESS) {
+    onStep?.("complete");
     return result;
   }
 
