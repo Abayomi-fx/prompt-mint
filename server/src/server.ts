@@ -18,6 +18,8 @@ import { IndexerState } from "./models/IndexerState";
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
 import { idempotency } from "./middleware/idempotency";
+import { SessionManager } from "./services/session";
+import { createSessionAuthMiddleware } from "./middleware/sessionAuth";
 
 const app = express();
 
@@ -35,6 +37,11 @@ app.use(jsonBodyTooLargeHandler);
 // carries a matching Idempotency-Key header; a no-op for every other
 // request, so this is safe to apply ahead of all routers. (Issue #89)
 app.use(idempotency());
+
+// Session & token lifecycle (Issue #258): attaches `req.session` /
+// `req.sessionManager` for downstream routes. Non-blocking — requests
+// without a valid session cookie simply get `req.session = null`.
+app.use(createSessionAuthMiddleware(new SessionManager()));
 
 app.use(robotsRouter);
 
