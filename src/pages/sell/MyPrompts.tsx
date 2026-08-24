@@ -19,6 +19,7 @@ import { unlockPromptContent } from "@/lib/prompts/unlock";
 import { FreshnessBadge } from "@/components/FreshnessBadge";
 import { useNetworkState } from "@/hooks/useNetworkState";
 import { type PromptRecord } from "@/lib/stellar/promptHashClient";
+import { SkeletonCard } from "@/components/Skeleton";
 
 const emptyState = (
   <div className="rounded-3xl border border-white/10 bg-white/5 p-8 text-sm text-slate-300">
@@ -266,8 +267,10 @@ const MyPrompts = ({ onCreateNew: _onCreateNew }: MyPromptsProps) => {
         </div>
 
         {createdQuery.isLoading ? (
-          <div className="rounded-3xl border border-white/10 bg-white/5 p-8 text-sm text-slate-300">
-            Loading created prompts...
+          <div className="grid gap-6 xl:grid-cols-2" role="status" aria-label="Loading created prompts">
+            {[...Array(2)].map((_, i) => (
+              <SkeletonCard key={i} lines={3} className="h-full" />
+            ))}
           </div>
         ) : createdPrompts.length === 0 ? (
           emptyState
@@ -367,8 +370,10 @@ const MyPrompts = ({ onCreateNew: _onCreateNew }: MyPromptsProps) => {
         </div>
 
         {purchasedQuery.isLoading ? (
-          <div className="rounded-3xl border border-white/10 bg-white/5 p-8 text-sm text-slate-300">
-            Loading purchased prompts...
+          <div className="grid gap-6 xl:grid-cols-2" role="status" aria-label="Loading purchased prompts">
+            {[...Array(2)].map((_, i) => (
+              <SkeletonCard key={i} withMedia={false} lines={3} className="h-full" />
+            ))}
           </div>
         ) : purchasedPrompts.length === 0 ? (
           emptyState

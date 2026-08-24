@@ -3,6 +3,7 @@ import { StarRating } from "./StarRating";
 import { User, ThumbsUp, MessageSquare, Pencil } from "lucide-react";
 import { ReviewClient, type Review } from "../../lib/reviews/reviewClient";
 import { Button } from "../ui/button";
+import { SkeletonAvatar, SkeletonText } from "../Skeleton";
 
 const formatDistanceToNow = (date: Date, options?: { addSuffix?: boolean }) => {
   const now = Date.now();
@@ -110,15 +111,17 @@ export const ReviewList = ({
 
   if (isLoading) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-4" role="status" aria-label="Loading reviews">
         {[1, 2, 3].map((i) => (
-          <div
-            key={i}
-            className="p-4 rounded-2xl bg-white/5 border border-white/5 animate-pulse"
-          >
-            <div className="h-4 w-32 bg-white/10 rounded mb-3" />
-            <div className="h-3 w-full bg-white/10 rounded mb-2" />
-            <div className="h-3 w-2/3 bg-white/10 rounded" />
+          <div key={i} className="p-5 rounded-2xl bg-white/[0.02] border border-white/5">
+            <div className="flex items-center gap-3 mb-3">
+              <SkeletonAvatar size={40} />
+              <div className="flex-1 space-y-1.5">
+                <SkeletonText className="w-32" />
+                <SkeletonText className="w-20" />
+              </div>
+            </div>
+            <SkeletonText lines={2} />
           </div>
         ))}
       </div>

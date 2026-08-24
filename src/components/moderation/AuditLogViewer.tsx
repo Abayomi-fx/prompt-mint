@@ -3,6 +3,7 @@ import { Shield, Search, Filter, ChevronLeft, ChevronRight, AlertTriangle } from
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { signModeratorAuth, type SignMessageFn } from "../../lib/auth/moderatorAuth";
+import { SkeletonTable } from "../Skeleton";
 
 interface ModerationLogEntry {
   id: string;
@@ -205,18 +206,7 @@ export const AuditLogViewer = ({
       )}
 
       {isLoading ? (
-        <div className="space-y-3">
-          {[1, 2, 3].map((i) => (
-            <div
-              key={i}
-              className="p-5 rounded-2xl bg-white/5 border border-white/5 animate-pulse"
-            >
-              <div className="h-4 w-48 bg-white/10 rounded mb-3" />
-              <div className="h-3 w-full bg-white/10 rounded mb-2" />
-              <div className="h-3 w-2/3 bg-white/10 rounded" />
-            </div>
-          ))}
-        </div>
+        <SkeletonTable rows={5} columns={4} />
       ) : logs.length === 0 ? (
         <div className="text-center py-12">
           <Shield className="h-12 w-12 text-slate-600 mx-auto mb-4" />

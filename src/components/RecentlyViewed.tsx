@@ -17,6 +17,7 @@ import { useRecentlyViewed, type UseRecentlyViewedReturn } from '@/hooks/useRece
 import { PromptHashClient } from '@/lib/stellar/promptHashClient';
 import { browserStellarConfig } from '@/lib/stellar/browserConfig';
 import { formatPriceLabel } from '@/lib/stellar/format';
+import { Skeleton, SkeletonText } from '@/components/Skeleton';
 
 const promptImageFallback = '/images/codeguru.png';
 
@@ -43,6 +44,27 @@ function RecentlyViewedCard({
 
   const viewedDate = new Date(entry.viewedAt);
   const timeAgo = getTimeAgo(viewedDate);
+
+  // Only show the card skeleton when we have neither live data nor a
+  // cached snapshot from the recently-viewed entry itself.
+  if (isLoading && !prompt && !entry.title) {
+    return (
+      <div
+        className="overflow-hidden rounded-xl border border-white/10 bg-[#0f1419] p-4"
+        role="status"
+        aria-label="Loading recently viewed listing"
+      >
+        <div className="flex gap-4">
+          <Skeleton className="h-20 w-20 shrink-0 rounded-lg" />
+          <div className="min-w-0 flex-1 space-y-2">
+            <SkeletonText className="w-2/3" />
+            <Skeleton className="h-4 w-16" />
+            <Skeleton className="h-8 w-28" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <article className="overflow-hidden rounded-xl border border-white/10 bg-[#0f1419] transition-colors hover:border-white/[0.18]">
