@@ -1,7 +1,9 @@
 import { lazy, Suspense } from "react";
-import { Outlet, Route, Routes } from "react-router-dom";
+import { Outlet, Route, Routes, useLocation } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import { CartProvider } from "./providers/CartProvider";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { useReducedMotion } from "./components/ReducedMotionProvider";
 import Home from "./pages/Home";
 
 const BrowsePage = lazy(() => import("./pages/browse/page.jsx"));
@@ -13,9 +15,33 @@ const CreatorSharePage = lazy(() => import("./pages/creator/page.tsx"));
 const StatusPage = lazy(() => import("./pages/status/page.tsx"));
 const ModerationPage = lazy(() => import("./pages/Moderation.tsx"));
 
+/** Fade + slide transition applied to the active route on navigation. */
+const PageTransition = () => {
+  const location = useLocation();
+  const { prefersReducedMotion } = useReducedMotion();
+
+  if (prefersReducedMotion) {
+    return <Outlet />;
+  }
+
+  return (
+    <AnimatePresence mode="wait" initial={false}>
+      <motion.div
+        key={location.pathname}
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -12 }}
+        transition={{ duration: 0.2, ease: "easeOut" }}
+      >
+        <Outlet />
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
 const AppLayout = () => (
   <main className="min-h-screen bg-slate-950 text-white pb-16 sm:pb-0">
-    <Outlet />
+    <PageTransition />
   </main>
 );
 

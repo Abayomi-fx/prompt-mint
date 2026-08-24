@@ -1,6 +1,7 @@
 
-import { AlertTriangle, CheckCircle2, KeyRound, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
+import { AlertTriangle, KeyRound, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { AnimatedCheckmark } from "@/components/AnimatedCheckmark";
 
 export type UnlockState =
   | "idle"
@@ -92,7 +93,7 @@ const toneStyles = {
 
 const ToneIcon = ({ tone }: { tone: "info" | "success" | "warn" | "error" }) => {
   const cls = "h-5 w-5 shrink-0";
-  if (tone === "success") return <CheckCircle2 className={cls} />;
+  if (tone === "success") return <AnimatedCheckmark size={20} className="shrink-0" />;
   if (tone === "warn") return <AlertTriangle className={cls} />;
   if (tone === "error") return <XCircle className={cls} />;
   return <ShieldCheck className={cls} />;
