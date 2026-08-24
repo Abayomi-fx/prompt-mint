@@ -130,10 +130,13 @@ describe("i18n Error Localization", () => {
 
       i18n.changeLanguage("zh");
       expect(i18n.t("errors.validation.required")).toBe("此字段为必填项。");
+
+      i18n.changeLanguage("ja");
+      expect(i18n.t("errors.validation.required")).toBe("この項目は必須です。");
     });
 
     it("all locales have all required keys", () => {
-      const locales = ["en", "es", "fr", "zh"];
+      const locales = ["en", "es", "fr", "zh", "ja"];
       const requiredKeys = [
         "errors.validation.required",
         "errors.validation.min_length",

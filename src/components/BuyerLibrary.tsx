@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import {
-  BookOpenCheck,
   Eye,
   Loader2,
   LockKeyhole,
@@ -25,6 +24,8 @@ import { FreshnessBadge } from "@/components/FreshnessBadge";
 import { useNetworkState } from "@/hooks/useNetworkState";
 import { formatPriceLabel } from "@/lib/stellar/format";
 import { Skeleton, SkeletonAvatar, SkeletonText } from "@/components/Skeleton";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { BuyerLibraryRowSkeleton } from "@/components/MarketplaceSkeletons";
 
 const EXPECTED_NETWORK = stellarNetwork;
 
@@ -51,64 +52,6 @@ function setCachedBuyerPrompts(address: string, prompts: PromptRecord[]) {
   } catch {}
 }
 
-function EmptyLibrary() {
-  return (
-    <div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-white/15 bg-white/[0.02] p-8 text-center">
-      <div className="max-w-xs">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-cyan-200/10 text-cyan-100">
-          <BookOpenCheck className="h-7 w-7" />
-        </div>
-        <h3 className="mt-4 text-lg font-semibold text-white">No purchases yet</h3>
-        <p className="mt-2 text-sm leading-6 text-slate-400">
-          Prompts you purchase will appear here with a direct unlock path to the
-          decrypted content.
-        </p>
-        <Button asChild className="mt-5 h-9 bg-cyan-200 text-slate-950 hover:bg-cyan-100 px-5">
-          <Link to="/browse">
-            <ShoppingBag className="h-4 w-4" />
-            Browse marketplace
-          </Link>
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function DisconnectedState() {
-  return (
-    <div className="grid min-h-64 place-items-center rounded-xl border border-white/10 bg-white/[0.02] p-8 text-center">
-      <div className="max-w-xs">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-700/50 text-slate-400">
-          <PlugZap className="h-7 w-7" />
-        </div>
-        <h3 className="mt-4 text-lg font-semibold text-white">Wallet not connected</h3>
-        <p className="mt-2 text-sm leading-6 text-slate-400">
-          Connect your Stellar wallet to view prompts you have purchased.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function WrongNetworkState({ network }: { network?: string }) {
-  return (
-    <div className="grid min-h-64 place-items-center rounded-xl border border-amber-300/20 bg-amber-300/[0.04] p-8 text-center">
-      <div className="max-w-xs">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-300/10 text-amber-200">
-          <WifiOff className="h-7 w-7" />
-        </div>
-        <h3 className="mt-4 text-lg font-semibold text-white">Wrong network</h3>
-        <p className="mt-2 text-sm leading-6 text-slate-400">
-          You are connected to{" "}
-          <span className="font-semibold text-amber-200">{network ?? "an unknown network"}</span>.
-          Switch to{" "}
-          <span className="font-semibold text-white">{EXPECTED_NETWORK}</span> to
-          view your library.
-        </p>
-      </div>
-    </div>
-  );
-}
 
 function PromptLibraryCard({
   prompt,
@@ -310,8 +253,24 @@ export function BuyerLibrary() {
     }
   };
 
-  if (!address) return <DisconnectedState />;
-  if (isWrongNetwork) return <WrongNetworkState network={network} />;
+  if (!address)
+    return (
+      <EmptyState
+        variant="custom"
+        icon={PlugZap}
+        title="Wallet not connected"
+        description="Connect your Stellar wallet to view prompts you have purchased."
+      />
+    );
+  if (isWrongNetwork)
+    return (
+      <EmptyState
+        variant="custom"
+        icon={WifiOff}
+        title="Wrong network"
+        description={`You are connected to ${network ?? "an unknown network"}. Switch to ${EXPECTED_NETWORK} to view your library.`}
+      />
+    );
 
   if (query.isLoading && prompts.length === 0) {
     return (
@@ -330,6 +289,7 @@ export function BuyerLibrary() {
             </div>
             <Skeleton className="h-9 w-32" />
           </div>
+          <BuyerLibraryRowSkeleton key={i} />
         ))}
       </div>
     );
@@ -337,25 +297,39 @@ export function BuyerLibrary() {
 
   if (query.isError && prompts.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center rounded-xl border border-rose-400/20 bg-rose-400/[0.05] p-8 text-center gap-3">
-        <p className="text-sm font-medium text-rose-300">Failed to load library</p>
-        <p className="text-xs text-slate-400">
-          Could not read purchased prompts from the contract.
-        </p>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void query.refetch()}
-          className="border border-white/10 text-slate-300 hover:bg-white/10 text-xs"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          Retry
-        </Button>
-      </div>
+      <EmptyState
+        variant="error"
+        title="Failed to load library"
+        description="Could not read purchased prompts from the contract."
+        action={
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void query.refetch()}
+            className="border border-white/10 text-slate-300 hover:bg-white/10 text-xs"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry
+          </Button>
+        }
+      />
     );
   }
 
-  if (prompts.length === 0) return <EmptyLibrary />;
+  if (prompts.length === 0)
+    return (
+      <EmptyState
+        variant="no-purchases"
+        action={
+          <Button asChild className="h-9 bg-cyan-200 text-slate-950 hover:bg-cyan-100 px-5">
+            <Link to="/browse">
+              <ShoppingBag className="h-4 w-4" />
+              Browse marketplace
+            </Link>
+          </Button>
+        }
+      />
+    );
 
   return (
     <div className="space-y-4">

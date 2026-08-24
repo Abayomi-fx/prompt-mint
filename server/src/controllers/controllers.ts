@@ -28,17 +28,28 @@ export const ImproveProxy = asyncRoute(async (req, res) => {
 
   console.log("Improve prompt request: ", promptText);
 
-  const response = await improveProxyBreaker.execute(() =>
-    fetch(`${API_BASE_URL}/api/improve-prompt`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "text/plain",
-        Accept: "application/json",
-      },
-      body: promptText,
-      signal: AbortSignal.timeout(10_000),
-    }),
-  );
+  let response: Response;
+  try {
+    response = await improveProxyBreaker.execute(() =>
+      fetch(`${API_BASE_URL}/api/improve-prompt`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain",
+          Accept: "application/json",
+        },
+        body: promptText,
+        signal: AbortSignal.timeout(10_000),
+      }),
+    );
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "CircuitBreakerOpenError") {
+      throw new AppError("Service temporarily degraded. Please try again shortly.", 503);
+    }
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new AppError("Gateway Timeout", 504);
+    }
+    throw err;
+  }
 
   const responseData = await response.json().catch(() => {});
   const responseText = await response.text().catch(() => {});
@@ -156,6 +167,33 @@ export const GetPrompts = asyncRoute(async (req, res) => {
   await cacheSet(cacheKey, JSON.stringify(prompts), 60);
 
   res.json(prompts);
+});
+
+export const GetPromptDetail = asyncRoute(async (req, res) => {
+  await connectDb();
+
+  const id = String(req.params.id);
+
+  const cacheKey = CACHE_KEYS.promptDetail(id);
+  const cached = await cacheGet(cacheKey);
+  if (cached) return res.json(JSON.parse(cached));
+
+  const prompt = await Prompt.findOne({
+    _id: id,
+    listingStatus: "published",
+    isActive: true,
+  }).populate("owner", "username walletAddress");
+
+  if (!prompt) {
+    throw new AppError("Prompt not found.", 404, "NOT_FOUND");
+  }
+
+  // Every mutation that touches this prompt (publish/archive/tags/update)
+  // already busts CACHE_KEYS.promptDetail(id) on write — see the cacheDel
+  // calls elsewhere in this file — so a short TTL here is just a backstop.
+  await cacheSet(cacheKey, JSON.stringify(prompt), 60);
+
+  res.json(prompt);
 });
 
 /* USER CONTROLLERS */
@@ -474,15 +512,28 @@ export const PublishPrompt = asyncRoute(async (req, res) => {
   await connectDb();
   const { id } = req.params;
 
-  const prompt = await Prompt.findByIdAndUpdate(
-    id,
-    { listingStatus: "published", isActive: true },
-    { new: true },
-  );
-
+  const prompt = await Prompt.findById(id);
   if (!prompt) {
     throw new AppError("Prompt not found.", 404);
   }
+
+  // Validate pre-publish checklist
+  if (prompt.listingStatus !== "ready") {
+    throw new AppError("Prompt must be in 'ready' status before publishing.", 400);
+  }
+
+  const checklist = prompt.reviewChecklist || {};
+  const allChecked = Object.values(checklist).every((v) => v === true);
+  if (!allChecked) {
+    throw new AppError(
+      "Pre-publish review checklist incomplete. Please complete all review items.",
+      400,
+    );
+  }
+
+  prompt.listingStatus = "published";
+  prompt.isActive = true;
+  await prompt.save();
 
   await Promise.all([
     cacheDelPattern("prompts:list:*"),
@@ -512,6 +563,107 @@ export const ArchivePrompt = asyncRoute(async (req, res) => {
   ]);
 
   res.json({ success: true, prompt });
+});
+
+export const SubmitForReview = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { id } = req.params;
+
+  const prompt = await Prompt.findById(id);
+  if (!prompt) {
+    throw new AppError("Prompt not found.", 404);
+  }
+
+  if (prompt.listingStatus !== "draft") {
+    throw new AppError("Only draft prompts can be submitted for review.", 400);
+  }
+
+  // Automatically validate checklist items
+  const checklist = {
+    contentQuality: prompt.content && prompt.content.length >= 10,
+    imageValid: prompt.image && prompt.image.length > 0,
+    pricingSet: prompt.price !== undefined && prompt.price >= 0,
+    categoryAssigned: prompt.category && prompt.category.length > 0,
+    termsAccepted: true,
+  };
+
+  prompt.reviewChecklist = checklist;
+  prompt.listingStatus = "ready";
+  prompt.reviewedAt = new Date();
+  await prompt.save();
+
+  await Promise.all([
+    cacheDelPattern("prompts:list:*"),
+    cacheDel(CACHE_KEYS.promptDetail(id)),
+  ]);
+
+  res.json({ success: true, prompt, checklist });
+});
+
+export const UpdateReviewChecklist = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { id } = req.params;
+  const { checklist } = req.body;
+
+  const prompt = await Prompt.findById(id);
+  if (!prompt) {
+    throw new AppError("Prompt not found.", 404);
+  }
+
+  if (checklist) {
+    prompt.reviewChecklist = { ...prompt.reviewChecklist, ...checklist };
+    await prompt.save();
+  }
+
+  res.json({ success: true, checklist: prompt.reviewChecklist });
+});
+
+export const AddTags = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { id } = req.params;
+  const { tags } = req.body;
+
+  if (!Array.isArray(tags) || tags.length === 0) {
+    throw new AppError("Tags must be a non-empty array.", 400);
+  }
+
+  const prompt = await Prompt.findById(id);
+  if (!prompt) {
+    throw new AppError("Prompt not found.", 404);
+  }
+
+  const existingTags = prompt.tags || [];
+  const newTags = tags.filter((tag) => !existingTags.includes(tag) && tag.length <= 30);
+  const updatedTags = [...existingTags, ...newTags].slice(0, 10);
+
+  prompt.tags = updatedTags;
+  await prompt.save();
+
+  await cacheDel(CACHE_KEYS.promptDetail(id));
+
+  res.json({ success: true, tags: prompt.tags });
+});
+
+export const RemoveTags = asyncRoute(async (req, res) => {
+  await connectDb();
+  const { id } = req.params;
+  const { tags } = req.body;
+
+  if (!Array.isArray(tags) || tags.length === 0) {
+    throw new AppError("Tags must be a non-empty array.", 400);
+  }
+
+  const prompt = await Prompt.findById(id);
+  if (!prompt) {
+    throw new AppError("Prompt not found.", 404);
+  }
+
+  prompt.tags = (prompt.tags || []).filter((tag) => !tags.includes(tag));
+  await prompt.save();
+
+  await cacheDel(CACHE_KEYS.promptDetail(id));
+
+  res.json({ success: true, tags: prompt.tags });
 });
 
 /* NOTIFICATION PREFERENCES CONTROLLERS */

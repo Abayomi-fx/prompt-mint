@@ -99,6 +99,110 @@ export interface BulkPurchaseResult {
   }[];
 }
 
+export const CONTRACT_ERROR_CODES = {
+  CONTRACT_PAUSED: "CONTRACT_PAUSED",
+  PROMPT_NOT_FOUND: "PROMPT_NOT_FOUND",
+  UNAUTHORIZED: "UNAUTHORIZED",
+  INVALID_PRICE: "INVALID_PRICE",
+  ALREADY_PURCHASED: "ALREADY_PURCHASED",
+  LISTING_EXPIRED: "LISTING_EXPIRED",
+  UNKNOWN: "UNKNOWN",
+} as const;
+
+export type ContractErrorCode = (typeof CONTRACT_ERROR_CODES)[keyof typeof CONTRACT_ERROR_CODES];
+
+export interface ContractErrorDetails {
+  code: ContractErrorCode;
+  message: string;
+  isUserActionable: boolean;
+  raw: string;
+}
+
+function normalizeContractErrorText(error: unknown): string {
+  if (typeof error === "string") return error;
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return "Unknown contract error";
+}
+
+export function classifyContractError(error: unknown): ContractErrorDetails {
+  const raw = normalizeContractErrorText(error).trim();
+  const normalized = raw.toLowerCase();
+
+  if (normalized.includes("paused") || normalized.includes("contractispaused")) {
+    return {
+      code: CONTRACT_ERROR_CODES.CONTRACT_PAUSED,
+      message: "The marketplace is temporarily paused. Please try again shortly.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("promptnotfound") || normalized.includes("not found") || normalized.includes("prompt #")) {
+    return {
+      code: CONTRACT_ERROR_CODES.PROMPT_NOT_FOUND,
+      message: "The requested prompt could not be found.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("unauthorized") || normalized.includes("not authorized")) {
+    return {
+      code: CONTRACT_ERROR_CODES.UNAUTHORIZED,
+      message: "You are not authorized to perform this action.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("alreadypurchased") || normalized.includes("already purchased")) {
+    return {
+      code: CONTRACT_ERROR_CODES.ALREADY_PURCHASED,
+      message: "You already have access to this prompt.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("listingexpired") || normalized.includes("expired")) {
+    return {
+      code: CONTRACT_ERROR_CODES.LISTING_EXPIRED,
+      message: "This listing is no longer available for purchase.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (normalized.includes("invalidprice") || normalized.includes("invalid price")) {
+    return {
+      code: CONTRACT_ERROR_CODES.INVALID_PRICE,
+      message: "The requested price is invalid.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  return {
+    code: CONTRACT_ERROR_CODES.UNKNOWN,
+    message: "The marketplace could not complete that action. Please try again later.",
+    isUserActionable: true,
+    raw,
+  };
+}
+
+export function formatContractErrorMessage(error: unknown | ContractErrorDetails): string {
+  if (typeof error === "object" && error !== null && "code" in error && "message" in error) {
+    const details = error as ContractErrorDetails;
+    return details.message;
+  }
+
+  return classifyContractError(error).message;
+}
+
 export class PromptHashClient {
   /**
    * Checks if the user already has access to the prompt.
@@ -420,6 +524,257 @@ export const updatePromptPrice = async (
     promptId,
     newPrice,
   );
+
+// ─── Bundle types ─────────────────────────────────────────────────────────────
+
+export interface BundleRecord {
+  id: bigint;
+  creator: string;
+  title: string;
+  description: string;
+  imageUrl: string;
+  /** Current member prompt IDs at time of last fetch. */
+  promptIds: bigint[];
+  priceStroops: bigint;
+  asset: string;
+  active: boolean;
+  salesCount: number;
+  createdAt: number;
+}
+
+export interface BundlePurchaseRecord {
+  bundleId: bigint;
+  owner: string;
+  originalCreator: string;
+  paidPrice: bigint;
+  purchasedAt: number;
+  /** Snapshot of prompt IDs that were in the bundle at purchase time. */
+  purchasedPromptIds: bigint[];
+}
+
+export interface CreateBundleInput {
+  title: string;
+  description: string;
+  imageUrl: string;
+  promptIds: bigint[];
+  priceStroops: bigint;
+}
+
+// ─── Bundle mock helpers ──────────────────────────────────────────────────────
+
+const MOCK_BUNDLES: BundleRecord[] = [
+  {
+    id: 1n,
+    creator: "GD...1234",
+    title: "Developer Starter Pack",
+    description: "Three high-performance prompts for software engineers covering architecture, code review, and debugging.",
+    imageUrl: "",
+    promptIds: [1n, 2n],
+    priceStroops: 150_000_000n, // 15 XLM
+    asset: "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+    active: true,
+    salesCount: 7,
+    createdAt: 1_700_000_000,
+  },
+];
+
+// ─── Bundle client methods on PromptHashClient ────────────────────────────────
+
+// Extend the existing class with static bundle methods.
+// Because promptHashClient.ts is fully mocked, these follow the same pattern.
+export class BundleHashClient {
+  static async getAllBundles(
+    _config: PromptHashConfig,
+  ): Promise<BundleRecord[]> {
+    warnMockUse();
+    return new Promise((resolve) => setTimeout(() => resolve(MOCK_BUNDLES), 800));
+  }
+
+  static async getBundle(
+    _config: PromptHashConfig,
+    bundleId: bigint,
+  ): Promise<BundleRecord> {
+    warnMockUse();
+    const match = MOCK_BUNDLES.find((b) => b.id === bundleId);
+    if (!match) throw new Error(`Bundle #${bundleId.toString()} not found.`);
+    return match;
+  }
+
+  static async getBundlesByBuyer(
+    _config: PromptHashConfig,
+    _address: string,
+  ): Promise<BundleRecord[]> {
+    warnMockUse();
+    return [];
+  }
+
+  static async getBundlesByCreator(
+    _config: PromptHashConfig,
+    _address: string,
+  ): Promise<BundleRecord[]> {
+    warnMockUse();
+    return MOCK_BUNDLES.filter((b) => b.creator === _address);
+  }
+
+  static async hasBundleAccess(
+    _config: PromptHashConfig,
+    _address: string,
+    _bundleId: bigint,
+  ): Promise<boolean> {
+    warnMockUse();
+    return false;
+  }
+
+  static async buyBundle(
+    _config: PromptHashConfig,
+    _walletSigner: any,
+    _address: string,
+    _bundleId: bigint,
+    _paymentStroops: bigint,
+    _referrer?: string,
+  ): Promise<{ txHash: string; success: boolean }> {
+    warnMockUse();
+    return new Promise((resolve) =>
+      setTimeout(() => {
+        const txHash =
+          "tx_" + Math.random().toString(16).slice(2, 14).padStart(12, "0");
+        resolve({ txHash, success: true });
+      }, 2000),
+    );
+  }
+
+  static async createBundle(
+    _config: PromptHashConfig,
+    _walletSigner: any,
+    _address: string,
+    _data: CreateBundleInput,
+  ): Promise<{ success: boolean; txHash: string; bundleId: string }> {
+    warnMockUse();
+    return { success: true, txHash: "tx_mock_bundle", bundleId: "1" };
+  }
+
+  static async addBundleItem(
+    _config: PromptHashConfig,
+    _walletSigner: any,
+    _address: string,
+    _bundleId: bigint,
+    _promptId: bigint,
+  ): Promise<{ success: boolean }> {
+    warnMockUse();
+    return { success: true };
+  }
+
+  static async removeBundleItem(
+    _config: PromptHashConfig,
+    _walletSigner: any,
+    _address: string,
+    _bundleId: bigint,
+    _promptId: bigint,
+  ): Promise<{ success: boolean }> {
+    warnMockUse();
+    return { success: true };
+  }
+
+  static async updateBundlePrice(
+    _config: PromptHashConfig,
+    _walletSigner: any,
+    _address: string,
+    _bundleId: bigint,
+    _priceStroops: bigint,
+  ): Promise<{ success: boolean }> {
+    warnMockUse();
+    return { success: true };
+  }
+
+  static async setBundleActive(
+    _config: PromptHashConfig,
+    _walletSigner: any,
+    _address: string,
+    _bundleId: bigint,
+    _active: boolean,
+  ): Promise<{ success: boolean }> {
+    warnMockUse();
+    return { success: true };
+  }
+}
+
+// ─── Standalone bundle exports (mirrors the prompt standalone pattern) ─────────
+
+export const getAllBundles = (config: PromptHashConfig) =>
+  BundleHashClient.getAllBundles(config);
+
+export const getBundle = (config: PromptHashConfig, bundleId: bigint) =>
+  BundleHashClient.getBundle(config, bundleId);
+
+export const getBundlesByBuyer = (config: PromptHashConfig, address: string) =>
+  BundleHashClient.getBundlesByBuyer(config, address);
+
+export const getBundlesByCreator = (
+  config: PromptHashConfig,
+  address: string,
+) => BundleHashClient.getBundlesByCreator(config, address);
+
+export const hasBundleAccess = (
+  config: PromptHashConfig,
+  address: string,
+  bundleId: bigint,
+) => BundleHashClient.hasBundleAccess(config, address, bundleId);
+
+export const buyBundle = (
+  config: PromptHashConfig,
+  walletSigner: any,
+  address: string,
+  bundleId: bigint,
+  paymentStroops: bigint,
+  referrer?: string,
+) =>
+  BundleHashClient.buyBundle(
+    config,
+    walletSigner,
+    address,
+    bundleId,
+    paymentStroops,
+    referrer,
+  );
+
+export const createBundle = (
+  config: PromptHashConfig,
+  walletSigner: any,
+  address: string,
+  data: CreateBundleInput,
+) => BundleHashClient.createBundle(config, walletSigner, address, data);
+
+export const addBundleItem = (
+  config: PromptHashConfig,
+  walletSigner: any,
+  address: string,
+  bundleId: bigint,
+  promptId: bigint,
+) => BundleHashClient.addBundleItem(config, walletSigner, address, bundleId, promptId);
+
+export const removeBundleItem = (
+  config: PromptHashConfig,
+  walletSigner: any,
+  address: string,
+  bundleId: bigint,
+  promptId: bigint,
+) => BundleHashClient.removeBundleItem(config, walletSigner, address, bundleId, promptId);
+
+export const updateBundlePrice = (
+  config: PromptHashConfig,
+  walletSigner: any,
+  address: string,
+  bundleId: bigint,
+  priceStroops: bigint,
+) => BundleHashClient.updateBundlePrice(config, walletSigner, address, bundleId, priceStroops);
+
+export const setBundleActive = (
+  config: PromptHashConfig,
+  walletSigner: any,
+  address: string,
+  bundleId: bigint,
+  active: boolean,
+) => BundleHashClient.setBundleActive(config, walletSigner, address, bundleId, active);
 export const getPurchaseDetails = async (
   config: PromptHashConfig,
   promptId: bigint,

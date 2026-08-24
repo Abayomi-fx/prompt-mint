@@ -92,6 +92,31 @@ const promptSchema = new mongoose.Schema(
       default: 'draft',
       index: true,
     },
+    reviewChecklist: {
+      contentQuality: { type: Boolean, default: false },
+      imageValid: { type: Boolean, default: false },
+      pricingSet: { type: Boolean, default: false },
+      categoryAssigned: { type: Boolean, default: false },
+      termsAccepted: { type: Boolean, default: false },
+    },
+    reviewedAt: {
+      type: Date,
+      default: null,
+    },
+    reviewedBy: {
+      type: String,
+      default: null,
+    },
+    tags: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: function(v) {
+          return v.length <= 10 && v.every(tag => tag.length <= 30);
+        },
+        message: 'Maximum 10 tags, each up to 30 characters'
+      }
+    },
     savedPrompts: {
       type: [mongoose.Schema.Types.ObjectId],
       ref: 'User',
@@ -113,6 +138,10 @@ const promptSchema = new mongoose.Schema(
   },
 );
 promptSchema.index({ title: 1 });
+promptSchema.index({ listingStatus: 1, isActive: 1, createdAt: -1 });
+promptSchema.index({ category: 1, listingStatus: 1, isActive: 1 });
+promptSchema.index({ owner: 1, listingStatus: 1, createdAt: -1 });
+promptSchema.index({ savedPrompts: 1, listingStatus: 1 });
 
 // Check if the model exists before creating it
 const Prompt = mongoose.models.Prompt || mongoose.model("Prompt", promptSchema);

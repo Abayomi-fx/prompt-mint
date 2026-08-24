@@ -25,6 +25,8 @@ import { useWallet } from '@/hooks/useWallet';
 import { useQueryClient } from '@tanstack/react-query';
 import { fetchActiveLicenseTerms, type LicenseTerm } from '@/lib/checkout/licenseTerms';
 import { translateError } from '@/lib/i18n-errors';
+import { estimateBulkFee, type FeeEstimate } from '@/lib/checkout/feeEstimation';
+import { FeeEstimateBanner } from '@/components/FeeEstimateBanner';
 
 const promptImageFallback = '/images/codeguru.png';
 
@@ -58,6 +60,8 @@ export function Checkout({ onClose }: CheckoutProps) {
   const [globalError, setGlobalError] = useState<string | null>(null);
   const [licenseTerms, setLicenseTerms] = useState<LicenseTerm[]>([]);
   const [termsAccepted, setTermsAccepted] = useState(false);
+  const [feeEstimate, setFeeEstimate] = useState<FeeEstimate | null>(null);
+  const [isEstimatingFees, setIsEstimatingFees] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
 
   const validateItems = useCallback(async () => {
@@ -79,6 +83,15 @@ export function Checkout({ onClose }: CheckoutProps) {
       validateItems();
     }
   }, [address, state.items.length, step, summary, validateItems]);
+
+  useEffect(() => {
+    if (state.items.length > 0 && step === 'review') {
+      setIsEstimatingFees(true);
+      estimateBulkFee(state.items.length)
+        .then(setFeeEstimate)
+        .finally(() => setIsEstimatingFees(false));
+    }
+  }, [state.items.length, step]);
 
   useEffect(() => {
     fetchActiveLicenseTerms().then(setLicenseTerms).catch(() => {});
@@ -433,8 +446,9 @@ export function Checkout({ onClose }: CheckoutProps) {
         </div>
       )}
 
-      {/* Total */}
+      {/* Estimated network fee */}
       <div className="border-t border-white/10 pt-3">
+        <FeeEstimateBanner fee={feeEstimate} isLoading={isEstimatingFees} className="mb-3" />
         <div className="flex items-center justify-between">
           <span className="text-sm text-slate-400">Total ({itemCount} items)</span>
           <span className="text-xl font-bold text-white">{formatPrice(totalStroops)}</span>

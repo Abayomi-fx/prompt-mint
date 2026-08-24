@@ -36,6 +36,24 @@ struct PromptPurchased {
     pub referrer_amount: i128,
 }
 
+// ─── #274: Referral tracking events ──────────────────────────────────────
+#[contractevent]
+struct ReferralCodeRegistered {
+    #[topic]
+    pub referrer: Address,
+    pub code_hash: soroban_sdk::BytesN<32>,
+    pub reward_bps: u32,
+}
+
+#[contractevent]
+struct ReferralRewardPaid {
+    #[topic]
+    pub prompt_id: u128,
+    pub referrer: Address,
+    pub buyer: Address,
+    pub reward_amount: i128,
+}
+
 #[contractevent]
 struct LicenseTransferred {
     #[topic]
@@ -73,6 +91,12 @@ struct VoucherRemoved {
 #[contractevent]
 struct ContractPausedStateChanged {
     pub is_paused: bool,
+}
+
+#[contractevent]
+struct SchemaMigrated {
+    pub previous_version: u32,
+    pub new_version: u32,
 }
 
 #[contractevent]
@@ -119,6 +143,66 @@ struct SubscriptionRenewed {
     pub expires_at: u64,
     pub paid_amount: i128,
     pub renewal_count: u32,
+}
+
+// ─── #272: Prompt Bundle Events ───────────────────────────────────────────
+
+#[contractevent]
+struct BundleCreated {
+    #[topic]
+    pub bundle_id: u128,
+    pub creator: Address,
+    pub price: i128,
+    pub asset: Address,
+}
+
+#[contractevent]
+struct BundlePurchased {
+    #[topic]
+    pub bundle_id: u128,
+    pub buyer: Address,
+    pub creator: Address,
+    pub price: i128,
+    pub creator_amount: i128,
+    pub platform_amount: i128,
+}
+
+impl Events {
+    pub fn emit_bundle_created(
+        env: &Env,
+        bundle_id: u128,
+        creator: Address,
+        price: i128,
+        asset: Address,
+    ) {
+        BundleCreated {
+            bundle_id,
+            creator,
+            price,
+            asset,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_bundle_purchased(
+        env: &Env,
+        bundle_id: u128,
+        buyer: Address,
+        creator: Address,
+        price: i128,
+        creator_amount: i128,
+        platform_amount: i128,
+    ) {
+        BundlePurchased {
+            bundle_id,
+            buyer,
+            creator,
+            price,
+            creator_amount,
+            platform_amount,
+        }
+        .publish(env);
+    }
 }
 
 pub struct Events;
@@ -176,6 +260,37 @@ impl Events {
         .publish(env);
     }
 
+    // ─── #274: Referral tracking events ───────────────────────────────────
+    pub fn emit_referral_code_registered(
+        env: &Env,
+        referrer: Address,
+        code_hash: soroban_sdk::BytesN<32>,
+        reward_bps: u32,
+    ) {
+        ReferralCodeRegistered {
+            referrer,
+            code_hash,
+            reward_bps,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_referral_reward_paid(
+        env: &Env,
+        prompt_id: u128,
+        referrer: Address,
+        buyer: Address,
+        reward_amount: i128,
+    ) {
+        ReferralRewardPaid {
+            prompt_id,
+            referrer,
+            buyer,
+            reward_amount,
+        }
+        .publish(env);
+    }
+
     pub fn emit_license_transferred(
         env: &Env,
         prompt_id: u128,
@@ -229,6 +344,14 @@ impl Events {
 
     pub fn emit_contract_paused_state_changed(env: &Env, is_paused: bool) {
         ContractPausedStateChanged { is_paused }.publish(env);
+    }
+
+    pub fn emit_schema_migrated(env: &Env, previous_version: u32, new_version: u32) {
+        SchemaMigrated {
+            previous_version,
+            new_version,
+        }
+        .publish(env);
     }
 
     pub fn emit_fee_updated(env: &Env, new_fee_percentage: u32) {
@@ -326,7 +449,7 @@ impl Events {
     }
 }
 
-// ─── #131: Event Structs ───────────────────────────────────────────────────
+// ─── Promotional Pricing Events ──────────────────────────────────────────
 
 #[contractevent]
 struct ClassificationSet {
@@ -389,8 +512,60 @@ struct PromotionApplied {
     pub original_price: i128,
 }
 
-pub struct Events;
+// ─── #275: Creator Reputation Staking Events ─────────────────────────────
 
+#[contractevent]
+struct StakeAdded {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub amount: i128,
+    pub total_staked: i128,
+}
+
+#[contractevent]
+struct StakeSlashed {
+    #[topic]
+    pub prompt_id: u128,
+    pub slashed_amount: i128,
+    pub remaining_staked: i128,
+}
+
+#[contractevent]
+struct StakeWithdrawn {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub amount: i128,
+    pub remaining_staked: i128,
+}
+
+// ─── Upgrade Authorization Events (#42) ───────────────────────────────
+
+#[contractevent]
+struct UpgradeProposed {
+    #[topic]
+    pub new_wasm_hash: soroban_sdk::BytesN<32>,
+    pub proposed_at: u64,
+}
+
+#[contractevent]
+struct UpgradeConfirmed {
+    #[topic]
+    pub new_wasm_hash: soroban_sdk::BytesN<32>,
+    pub confirmed_at: u64,
+}
+
+#[contractevent]
+struct UpgradeCancelled {
+    #[topic]
+    pub cancelled_wasm_hash: soroban_sdk::BytesN<32>,
+}
+
+// NB: `Events` is already declared earlier in this file; this is an additional
+// `impl Events` block (multiple impl blocks for one type are valid Rust). The
+// duplicate `pub struct Events;` that previously sat here has been removed to
+// keep the crate compiling.
 impl Events {
     pub fn emit_promotion_created(
         env: &Env,
@@ -460,6 +635,245 @@ impl Events {
             previous_version,
             new_version,
             rotated_at,
+        }
+        .publish(env);
+    }
+
+    // ─── #275: Creator Reputation Staking ─────────────────────────────────
+
+    pub fn emit_stake_added(
+        env: &Env,
+        prompt_id: u128,
+        creator: Address,
+        amount: i128,
+        total_staked: i128,
+    ) {
+        StakeAdded {
+            prompt_id,
+            creator,
+            amount,
+            total_staked,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_stake_slashed(
+        env: &Env,
+        prompt_id: u128,
+        slashed_amount: i128,
+        remaining_staked: i128,
+    ) {
+        StakeSlashed {
+            prompt_id,
+            slashed_amount,
+            remaining_staked,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_stake_withdrawn(
+        env: &Env,
+        prompt_id: u128,
+        creator: Address,
+        amount: i128,
+        remaining_staked: i128,
+    ) {
+        StakeWithdrawn {
+            prompt_id,
+            creator,
+            amount,
+            remaining_staked,
+        }
+        .publish(env);
+    }
+
+    // ─── Upgrade Authorization (#42) ──────────────────────────────────────
+
+    pub fn emit_upgrade_proposed(
+        env: &Env,
+        new_wasm_hash: soroban_sdk::BytesN<32>,
+        proposed_at: u64,
+    ) {
+        UpgradeProposed {
+            new_wasm_hash,
+            proposed_at,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_upgrade_confirmed(
+        env: &Env,
+        new_wasm_hash: soroban_sdk::BytesN<32>,
+        confirmed_at: u64,
+    ) {
+        UpgradeConfirmed {
+            new_wasm_hash,
+            confirmed_at,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_upgrade_cancelled(env: &Env, cancelled_wasm_hash: soroban_sdk::BytesN<32>) {
+        UpgradeCancelled {
+            cancelled_wasm_hash,
+        }
+        .publish(env);
+    }
+}
+
+// ─── #273: Time-based Discount Events ─────────────────────────────────────
+
+#[contractevent]
+struct DiscountSet {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub discounted_price: i128,
+    pub start_ledger: u32,
+    pub end_ledger: u32,
+}
+
+#[contractevent]
+struct DiscountCleared {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+}
+
+impl Events {
+    // ─── #273: Time-based Discounts ────────────────────────────────────────
+
+    pub fn emit_discount_set(
+        env: &Env,
+        prompt_id: u128,
+        creator: Address,
+        discounted_price: i128,
+        start_ledger: u32,
+        end_ledger: u32,
+    ) {
+        DiscountSet {
+            prompt_id,
+            creator,
+            discounted_price,
+            start_ledger,
+            end_ledger,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_discount_cleared(env: &Env, prompt_id: u128, creator: Address) {
+        DiscountCleared { prompt_id, creator }.publish(env);
+    }
+}
+
+// ─── Bundle events ───────────────────────────────────────────────────────────
+
+#[contractevent]
+struct BundleCreated {
+    #[topic]
+    pub bundle_id: u128,
+    pub creator: Address,
+    pub price_stroops: i128,
+    pub item_count: u32,
+}
+
+#[contractevent]
+struct BundlePurchased {
+    #[topic]
+    pub bundle_id: u128,
+    pub buyer: Address,
+    pub creator: Address,
+    pub price_stroops: i128,
+    pub referrer: Option<Address>,
+}
+
+#[contractevent]
+struct BundlePriceUpdated {
+    #[topic]
+    pub bundle_id: u128,
+    pub price_stroops: i128,
+}
+
+#[contractevent]
+struct BundleActiveUpdated {
+    #[topic]
+    pub bundle_id: u128,
+    pub active: bool,
+}
+
+#[contractevent]
+struct BundleItemAdded {
+    #[topic]
+    pub bundle_id: u128,
+    pub prompt_id: u128,
+}
+
+#[contractevent]
+struct BundleItemRemoved {
+    #[topic]
+    pub bundle_id: u128,
+    pub prompt_id: u128,
+}
+
+impl Events {
+    pub fn emit_bundle_created(
+        env: &Env,
+        bundle_id: u128,
+        creator: Address,
+        price_stroops: i128,
+        item_count: u32,
+    ) {
+        BundleCreated {
+            bundle_id,
+            creator,
+            price_stroops,
+            item_count,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_bundle_purchased(
+        env: &Env,
+        bundle_id: u128,
+        buyer: Address,
+        creator: Address,
+        price_stroops: i128,
+        referrer: Option<Address>,
+    ) {
+        BundlePurchased {
+            bundle_id,
+            buyer,
+            creator,
+            price_stroops,
+            referrer,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_bundle_price_updated(env: &Env, bundle_id: u128, price_stroops: i128) {
+        BundlePriceUpdated {
+            bundle_id,
+            price_stroops,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_bundle_active_updated(env: &Env, bundle_id: u128, active: bool) {
+        BundleActiveUpdated { bundle_id, active }.publish(env);
+    }
+
+    pub fn emit_bundle_item_added(env: &Env, bundle_id: u128, prompt_id: u128) {
+        BundleItemAdded {
+            bundle_id,
+            prompt_id,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_bundle_item_removed(env: &Env, bundle_id: u128, prompt_id: u128) {
+        BundleItemRemoved {
+            bundle_id,
+            prompt_id,
         }
         .publish(env);
     }
