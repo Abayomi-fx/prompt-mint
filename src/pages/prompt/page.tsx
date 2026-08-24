@@ -1,6 +1,6 @@
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, Loader2, PackageSearch } from "lucide-react";
+import { AlertTriangle, ArrowLeft, PackageSearch } from "lucide-react";
 import { Navigation } from "@/components/navigation";
 import { Footer } from "@/components/footer";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import {
   parsePromptIdParam,
 } from "@/lib/marketplace/shareUrls";
 import { SEOHead } from "@/components/seo/SEOHead";
+import { Skeleton, SkeletonText } from "@/components/Skeleton";
 
 export default function PromptDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -75,10 +76,19 @@ export default function PromptDetailPage() {
       <div className="min-h-screen bg-slate-950 text-white">
         <SEOHead promptId={parsed.promptId} />
         <Navigation />
-        <main className="flex min-h-[50vh] items-center justify-center">
-          <div className="flex items-center gap-3 text-slate-300">
-            <Loader2 className="h-5 w-5 animate-spin text-cyan-200" />
-            Loading listing…
+        <main
+          className="mx-auto max-w-3xl space-y-4 px-4 py-8"
+          role="status"
+          aria-label="Loading listing"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <Skeleton className="h-9 w-32" />
+            <Skeleton className="h-9 w-36" />
+          </div>
+          <div className="overflow-hidden rounded-2xl border border-white/10 bg-[#0f1419] p-6 space-y-4">
+            <Skeleton className="h-52 w-full" />
+            <Skeleton className="h-6 w-2/3" />
+            <SkeletonText lines={3} />
           </div>
         </main>
         <Footer />

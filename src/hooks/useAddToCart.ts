@@ -1,4 +1,5 @@
 import { useCallback } from 'react';
+import { toast } from 'sonner';
 import { useCart, type CartItem } from '@/providers/CartProvider';
 import { useQuery } from '@tanstack/react-query';
 import { PromptHashClient } from '@/lib/stellar/promptHashClient';
@@ -26,11 +27,13 @@ export function useAddToCart(): UseAddToCartReturn {
   const addToCart = useCallback(
     (promptId: string): boolean => {
       if (hasItem(promptId)) {
+        toast.info('Already in your cart');
         return false;
       }
 
       const prompt = prompts?.find((p) => p.id.toString() === promptId);
       if (!prompt) {
+        toast.error('Could not add prompt to cart');
         return false;
       }
 
@@ -43,7 +46,13 @@ export function useAddToCart(): UseAddToCartReturn {
         creator: prompt.creator,
       };
 
-      return addItem(cartItem);
+      const added = addItem(cartItem);
+      if (added) {
+        toast.success(`${prompt.title} added to cart`);
+      } else {
+        toast.error('Your cart is full');
+      }
+      return added;
     },
     [prompts, addItem, hasItem]
   );

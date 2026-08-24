@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { Toaster } from "sonner";
 import "./index.css";
 import App from "./App.tsx";
 import "@stellar/design-system/build/styles.min.css";
@@ -37,6 +38,14 @@ createRoot(document.getElementById("root") as HTMLElement).render(
                   <BrowserRouter>
                     <CurrencyProvider>
                       <App />
+                      <Toaster
+                        theme="dark"
+                        position="bottom-right"
+                        toastOptions={{
+                          className:
+                            "!bg-slate-900 !border !border-white/10 !text-white !shadow-2xl",
+                        }}
+                      />
                     </CurrencyProvider>
                   </BrowserRouter>
                 </NetworkStateProvider>

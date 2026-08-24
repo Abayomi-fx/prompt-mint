@@ -36,6 +36,7 @@ import { WebhookSettings } from "@/components/WebhookSettings";
 import { NotificationPreferences } from "@/components/NotificationPreferences";
 import { PostVersionUpdate } from "@/components/PostVersionUpdate";
 import { RecentlyViewed } from "@/components/RecentlyViewed";
+import { SkeletonCard } from "@/components/Skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -109,9 +110,10 @@ function AlertBanner({
 
 function LoadingState({ label }: { label: string }) {
   return (
-    <div className="flex min-h-56 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] p-8 text-sm text-slate-300">
-      <Loader2 className="mr-2 h-4 w-4 animate-spin text-cyan-200" />
-      {label}
+    <div className="space-y-4" role="status" aria-label={label}>
+      {[...Array(3)].map((_, i) => (
+        <SkeletonCard key={i} withMedia={false} lines={2} />
+      ))}
     </div>
   );
 }

@@ -23,6 +23,7 @@ import { CurrencyPrice } from "@/components/CurrencyPrice";
 import { FreshnessBadge } from "@/components/FreshnessBadge";
 import { useNetworkState } from "@/hooks/useNetworkState";
 import { formatPriceLabel } from "@/lib/stellar/format";
+import { Skeleton, SkeletonAvatar, SkeletonText } from "@/components/Skeleton";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { BuyerLibraryRowSkeleton } from "@/components/MarketplaceSkeletons";
 
@@ -273,8 +274,21 @@ export function BuyerLibrary() {
 
   if (query.isLoading && prompts.length === 0) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-4" role="status" aria-label="Loading your library">
         {[...Array(3)].map((_, i) => (
+          <div key={i} className="overflow-hidden rounded-xl border border-white/10 bg-[#0f1419] p-5 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 flex-1 space-y-2">
+                <div className="flex gap-2">
+                  <SkeletonAvatar size={20} />
+                  <SkeletonText className="w-24" />
+                </div>
+                <SkeletonText className="w-1/2" />
+                <SkeletonText lines={2} className="w-full" />
+              </div>
+            </div>
+            <Skeleton className="h-9 w-32" />
+          </div>
           <BuyerLibraryRowSkeleton key={i} />
         ))}
       </div>
