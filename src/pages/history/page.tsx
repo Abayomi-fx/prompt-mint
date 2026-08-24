@@ -90,17 +90,16 @@ function sortTransactions(
   return direction === "asc" ? sorted : sorted.reverse();
 }
 
-function SortableHeader({
-  column,
-  activeKey,
-  direction,
-  onSort,
-}: {
+/* eslint-disable no-unused-vars */
+interface SortableHeaderProps {
   column: { key: SortKey; label: string };
   activeKey: SortKey;
   direction: SortDirection;
   onSort: (_key: SortKey) => void;
-}) {
+}
+/* eslint-enable no-unused-vars */
+
+function SortableHeader({ column, activeKey, direction, onSort }: SortableHeaderProps) {
   const isActive = column.key === activeKey;
   return (
     <th className="py-3 px-4 font-medium">
