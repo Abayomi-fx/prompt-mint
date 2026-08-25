@@ -1,6 +1,7 @@
 use super::types::{
-    Bundle, ClassificationOverride, DataKey, Discount, Error, Prompt, PromptEncryptedPayload,
-    Purchase, ReferralCode, Settlement, Stake, Subscription, SubscriptionConfig,
+    Bundle, BundlePurchase, ClassificationOverride, DataKey, Discount, Error, Prompt,
+    PromptEncryptedPayload, Purchase, ReferralCode, Settlement, Stake, Subscription,
+    SubscriptionConfig,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
 
@@ -724,8 +725,6 @@ impl Storage {
 }
 
 // ─── Bundle storage ──────────────────────────────────────────────────────────
-
-use super::types::{Bundle, BundlePurchase};
 
 impl Storage {
     // ── Counter ──────────────────────────────────────────────────────────────

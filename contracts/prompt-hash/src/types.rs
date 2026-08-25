@@ -46,20 +46,6 @@ pub enum Error {
     MaxSupplyReached = 19,
     // #50 – revenue splits
     InvalidSplits = 20,
-    // #49 – time-bound listing expiry
-    ListingExpired = 28,
-    LicenseNotFound = 29,
-    InvalidLicenseTransfer = 30,
-    // Bundle errors
-    BundleNotFound = 31,
-    BundleInactive = 32,
-    BundleAlreadyPurchased = 33,
-    BundleEmpty = 34,
-    InvalidBundleTitleLength = 35,
-    InvalidBundleDescriptionLength = 36,
-    PromptAlreadyInBundle = 37,
-    PromptNotInBundle = 38,
-    InvalidBundleItemCount = 39,
     ListingExpired = 21,
     LicenseNotFound = 22,
     InvalidLicenseTransfer = 23,
@@ -112,9 +98,6 @@ pub enum DataKey {
     CreatorPrompts(Address),
     BuyerPrompts(Address),
     Purchase(u128, Address),
-    // #272 – prompt bundles and their id counter
-    Bundle(u128),
-    BundleCounter,
     Reentrancy,
     ReferralPercentage,
     IsPaused,
@@ -232,19 +215,6 @@ pub struct Promotion {
     /// Promotional price in stroops.
     pub price: i128,
     /// Token contract address for the promotional price.
-    pub asset: Address,
-}
-
-/// #272 – A bundle of prompts sold together at a single discounted total price.
-/// A buyer who purchases the bundle receives a license/entitlement for every
-/// prompt id it contains.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Bundle {
-    pub id: u128,
-    pub creator: Address,
-    pub prompt_ids: Vec<u128>,
-    pub price: i128,
     pub asset: Address,
 }
 
@@ -473,28 +443,6 @@ pub trait PromptHashTrait {
         referral_code: Option<Bytes>,
     ) -> Result<(), Error>;
 
-    // ─── #272: Prompt bundling ────────────────────────────────────────────────
-    /// Creator-gated. Bundles multiple prompts (all owned by `creator`) at a
-    /// single `price`. Returns the new bundle id.
-    fn create_bundle(
-        env: Env,
-        creator: Address,
-        prompt_ids: Vec<u128>,
-        price: i128,
-        asset: Address,
-    ) -> Result<u128, Error>;
-
-    /// Purchases a bundle: transfers `price` from the buyer (split to creator and
-    /// platform fee) and grants the buyer a license for every prompt in it.
-    fn purchase_bundle(
-        env: Env,
-        buyer: Address,
-        bundle_id: u128,
-        payment_amount: i128,
-    ) -> Result<(), Error>;
-
-    fn get_bundle(env: Env, bundle_id: u128) -> Result<Bundle, Error>;
-
     fn transfer_license(
         env: Env,
         seller: Address,
@@ -646,44 +594,6 @@ pub trait PromptHashTrait {
     fn get_all_bundles(env: Env) -> Result<Vec<Bundle>, Error>;
     fn get_bundles_by_creator(env: Env, creator: Address) -> Result<Vec<Bundle>, Error>;
     fn get_bundles_by_buyer(env: Env, buyer: Address) -> Result<Vec<Bundle>, Error>;
-}
-
-// ─── Bundle on-chain types ───────────────────────────────────────────────────
-
-pub const MAX_BUNDLE_TITLE_LEN: u32 = 120;
-pub const MAX_BUNDLE_DESC_LEN: u32 = 512;
-pub const MAX_BUNDLE_ITEMS: u32 = 20;
-
-/// On-chain bundle record. prompt_ids stores the current set of member prompts.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Bundle {
-    pub id: u128,
-    pub creator: Address,
-    pub title: String,
-    pub description: String,
-    pub image_url: String,
-    /// Current set of member prompt IDs. Capped at MAX_BUNDLE_ITEMS.
-    pub prompt_ids: Vec<u128>,
-    pub price_stroops: i128,
-    pub asset: Address,
-    pub active: bool,
-    pub sales_count: u64,
-    pub created_at: u64,
-}
-
-/// Per-buyer bundle purchase record. Records the snapshot of prompt_ids that
-/// were current at time of purchase so the unlock layer can serve each one.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct BundlePurchase {
-    pub bundle_id: u128,
-    pub owner: Address,
-    pub original_creator: Address,
-    pub paid_price: i128,
-    pub purchased_at: u64,
-    /// Snapshot of prompt IDs that were in the bundle when purchased.
-    pub purchased_prompt_ids: Vec<u128>,
     // ─── Contract state versioning ───────────────────────────────────────────
     /// Current schema version applied to this contract's storage. `0` means
     /// the contract predates this versioning scheme (never migrated).
@@ -787,4 +697,42 @@ pub struct BundlePurchase {
 
     /// Read the current stake record for a prompt.
     fn get_stake(env: Env, prompt_id: u128) -> Result<Stake, Error>;
+}
+
+// ─── Bundle on-chain types ───────────────────────────────────────────────────
+
+pub const MAX_BUNDLE_TITLE_LEN: u32 = 120;
+pub const MAX_BUNDLE_DESC_LEN: u32 = 512;
+pub const MAX_BUNDLE_ITEMS: u32 = 20;
+
+/// On-chain bundle record. prompt_ids stores the current set of member prompts.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Bundle {
+    pub id: u128,
+    pub creator: Address,
+    pub title: String,
+    pub description: String,
+    pub image_url: String,
+    /// Current set of member prompt IDs. Capped at MAX_BUNDLE_ITEMS.
+    pub prompt_ids: Vec<u128>,
+    pub price_stroops: i128,
+    pub asset: Address,
+    pub active: bool,
+    pub sales_count: u64,
+    pub created_at: u64,
+}
+
+/// Per-buyer bundle purchase record. Records the snapshot of prompt_ids that
+/// were current at time of purchase so the unlock layer can serve each one.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BundlePurchase {
+    pub bundle_id: u128,
+    pub owner: Address,
+    pub original_creator: Address,
+    pub paid_price: i128,
+    pub purchased_at: u64,
+    /// Snapshot of prompt IDs that were in the bundle when purchased.
+    pub purchased_prompt_ids: Vec<u128>,
 }
