@@ -48,6 +48,7 @@ PromptHash Stellar addresses a concrete gap between AI workflows and blockchain 
 - Unlock flow with integrity checking against a stored content hash
 - Creator dashboard for price updates and sale activation/deactivation
 - Buyer profile for reopening previously purchased prompt licenses
+- Public sitemap endpoint for indexed active listings at /api/sitemap and /sitemap.xml
 
 ## How It Works
 
@@ -183,6 +184,7 @@ The unlock service is hardened for production use with the following features:
 - **Operational Metrics**: Real-time tracking of unlock success/failure rates, invalid signatures, and rate limit hits.
 - **Health Monitoring**: Dedicated `/api/health` endpoint for uptime and configuration verification.
 - **Incident Response**: Documented runbooks and debugging procedures located in `docs/operations/`.
+- **Privacy-Safe Analytics**: A closed, versioned event taxonomy (`/api/analytics/events`) captures product usage without ever transmitting a raw wallet address, prompt content, or free text. See [docs/analytics-events.md](docs/analytics-events.md).
 
 ## Proposed Tech Stack
 

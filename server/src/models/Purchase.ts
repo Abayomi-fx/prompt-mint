@@ -26,6 +26,24 @@ const purchaseSchema = new mongoose.Schema(
       default: false,
       index: true,
     },
+    termsSnapshot: {
+      termsVersion: {
+        type: Number,
+        required: true,
+      },
+      termsTitle: {
+        type: String,
+        required: true,
+      },
+      termsContent: {
+        type: String,
+        required: true,
+      },
+      acceptedAt: {
+        type: Date,
+        default: Date.now,
+      },
+    },
   },
   { timestamps: true },
 );

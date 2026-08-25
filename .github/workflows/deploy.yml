@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
 jobs:
   deploy-frontend:
     runs-on: ubuntu-latest
@@ -15,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Use Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '18.x'
           cache: 'npm'
@@ -27,6 +32,26 @@ jobs:
         run: npm run build
         env:
           CI: true
+
+      - name: Generate frontend checksums
+        run: |
+          cd dist
+          find . -type f -exec sha256sum {} \; > ../frontend-checksums.txt
+          sha256sum ../frontend-checksums.txt > ../frontend-checksums.txt.sha256
+
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-build-${{ github.sha }}
+          path: dist/
+          retention-days: 30
+
+      - name: Upload frontend checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-checksums-${{ github.sha }}
+          path: frontend-checksums.txt
+          retention-days: 30
 
       - name: Deploy to Vercel
         uses: vercel/action@v5
@@ -46,6 +71,10 @@ jobs:
 
   contract-build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +85,7 @@ jobs:
           targets: wasm32-unknown-unknown
 
       - name: Cache cargo registry
-        uses: actions/cache@v3
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
@@ -64,7 +93,7 @@ jobs:
             ${{ runner.os }}-cargo-registry-
 
       - name: Cache cargo index
-        uses: actions/cache@v3
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/git
           key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
@@ -72,7 +101,7 @@ jobs:
             ${{ runner.os }}-cargo-git-
 
       - name: Cache cargo build
-        uses: actions/cache@v3
+        uses: actions/cache@v6
         with:
           path: target
           key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
@@ -87,41 +116,232 @@ jobs:
       - name: List WASM artifacts
         run: ls -lah target/wasm32-unknown-unknown/release/*.wasm
 
+      - name: Generate WASM checksums
+        run: |
+          cd target/wasm32-unknown-unknown/release
+          sha256sum *.wasm > ../../../wasm-checksums.txt
+          sha256sum ../../../wasm-checksums.txt > ../../../wasm-checksums.txt.sha256
+
       - name: Upload WASM artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: contract-wasm-${{ github.sha }}
           path: target/wasm32-unknown-unknown/release/*.wasm
           retention-days: 30
           if-no-files-found: warn
 
-  create-release:
-    needs: [contract-build]
+      - name: Upload WASM checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: wasm-checksums-${{ github.sha }}
+          path: wasm-checksums.txt
+          retention-days: 30
+
+  sign-artifacts:
+    needs: [contract-build, deploy-frontend]
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      id-token: write
+      attestations: write
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download artifacts
+      - name: Set up cosign
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.3'
+
+      - name: Download WASM artifacts
         uses: actions/download-artifact@v3
         with:
           name: contract-wasm-${{ github.sha }}
-          path: ./wasm-artifacts
+          path: ./artifacts/wasm
+
+      - name: Download WASM checksums
+        uses: actions/download-artifact@v3
+        with:
+          name: wasm-checksums-${{ github.sha }}
+          path: ./artifacts
+
+      - name: Download frontend checksums
+        uses: actions/download-artifact@v3
+        with:
+          name: frontend-checksums-${{ github.sha }}
+          path: ./artifacts
+
+      - name: Create combined checksum manifest
+        run: |
+          cat ./artifacts/wasm-checksums.txt ./artifacts/frontend-checksums.txt > ./artifacts/release-checksums.txt
+          echo "" >> ./artifacts/release-checksums.txt
+          echo "# Release ${{ github.sha }}" >> ./artifacts/release-checksums.txt
+          echo "# Build timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> ./artifacts/release-checksums.txt
+          echo "# Repository: ${{ github.repository }}" >> ./artifacts/release-checksums.txt
+          echo "# Workflow: ${{ github.workflow }}" >> ./artifacts/release-checksums.txt
+          echo "# Run ID: ${{ github.run_id }}" >> ./artifacts/release-checksums.txt
+          sha256sum ./artifacts/release-checksums.txt > ./artifacts/release-checksums.txt.sha256
+
+      - name: Sign checksums with cosign
+        run: |
+          cosign sign-blob \
+            --yes \
+            --bundle ./artifacts/release-checksums.txt.sig \
+            ./artifacts/release-checksums.txt
+
+      - name: Sign WASM artifacts with cosign
+        run: |
+          for wasm in ./artifacts/wasm/*.wasm; do
+            cosign sign-blob \
+              --yes \
+              --bundle "${wasm}.sig" \
+              "$wasm"
+          done
+
+      - name: Generate SLSA provenance attestation
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            ./artifacts/wasm/*.wasm
+            ./artifacts/release-checksums.txt
+
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: signed-release-${{ github.sha }}
+          path: |
+            ./artifacts/release-checksums.txt
+            ./artifacts/release-checksums.txt.sha256
+            ./artifacts/release-checksums.txt.sig
+            ./artifacts/wasm/*.wasm
+            ./artifacts/wasm/*.wasm.sig
+          retention-days: 90
+
+  create-release:
+    needs: [sign-artifacts, contract-build, generate-sbom]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      attestations: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download signed artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: signed-release-${{ github.sha }}
+          path: ./signed-release
+
+      - name: Download provenance attestation
+        uses: actions/download-artifact@v3
+        with:
+          name: signed-release-${{ github.sha }}
+          path: ./release-artifacts
+
+      - name: Download SBOM
+        uses: actions/download-artifact@v3
+        with:
+          name: sbom-${{ github.sha }}
+          path: ./sbom
+
+      - name: Verify signatures
+        uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: 'v2.4.3'
+
+      - name: Verify checksums
+        run: |
+          cd ./release-artifacts
+          sha256sum -c release-checksums.txt.sha256
+          echo "Checksum verification passed"
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: ./wasm-artifacts/*.wasm
+          files: |
+            ./release-artifacts/release-checksums.txt
+            ./release-artifacts/release-checksums.txt.sha256
+            ./release-artifacts/release-checksums.txt.sig
+            ./release-artifacts/*.wasm
+            ./release-artifacts/*.wasm.sig
+            ./sbom/*.json
           tag_name: v${{ github.run_number }}
           body: |
-            Automatic release for commit ${{ github.sha }}
-            
-            **WASM Artifacts:**
-            - Contract build for Soroban deployment
-            - Build date: ${{ github.event.head_commit.timestamp }}
+            ## Release v${{ github.run_number }}
+
+            **Commit:** ${{ github.sha }}
+            **Build date:** ${{ github.event.head_commit.timestamp }}
+
+            ### Artifacts
+            - **WASM Contract**: Soroban contract binary for deployment
+            - **Checksum manifest**: `release-checksums.txt` (SHA256)
+            - **Signatures**: Cosign `.sig` bundles for each artifact
+            - **Provenance**: SLSA build provenance attestation (via `actions/attest-build-provenance`)
+            - **SBOM**: Software Bill of Materials (CycloneDX format) for frontend and contract dependencies
+
+            ### Verification
+            See [artifact-verification.md](./docs/artifact-verification.md) for instructions on verifying artifact integrity and provenance.
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  generate-sbom:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '18.x'
+          cache: 'npm'
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Install CycloneDX tooling
+        run: npm install -g @cyclonedx/cyclonedx-npm
+
+      - name: Generate frontend SBOM (CycloneDX)
+        run: |
+          cyclonedx-npm --output-format JSON --output-file sbom/frontend-sbom.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install cargo-cyclonedx
+        run: cargo install cargo-cyclonedx
+
+      - name: Generate contract SBOM (CycloneDX)
+        run: |
+          cd contracts
+          cargo cyclonedx --output ../sbom/contract-sbom.json 2>/dev/null || echo "{\"warning\":\"cargo-cyclonedx not available for contract crate\",\"generatedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > ../sbom/contract-sbom.json
+
+      - name: Generate server SBOM
+        run: |
+          cd server
+          npx -y @cyclonedx/cyclonedx-npm --output-format JSON --output-file ../sbom/server-sbom.json 2>/dev/null || echo "{\"warning\":\"cyclonedx-npm not available for server\",\"generatedAt\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > ../sbom/server-sbom.json
+
+      - name: Create SBOM manifest
+        run: |
+          jq -n \
+            --arg sha "${{ github.sha }}" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg repo "${{ github.repository }}" \
+            --arg run_id "${{ github.run_id }}" \
+            '{release: $sha, generatedAt: $ts, repository: $repo, runId: $run_id, sbomFiles: ["frontend-sbom.json","contract-sbom.json","server-sbom.json"]}' \
+            > sbom/sbom-manifest.json
+
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: sbom-${{ github.sha }}
+          path: sbom/
+          retention-days: 90

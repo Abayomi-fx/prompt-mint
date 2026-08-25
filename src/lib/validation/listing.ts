@@ -1,4 +1,51 @@
 import { xlmToStroops } from "@/lib/stellar/format";
+import { estimateEncryptedPayloadSize } from "@/lib/crypto/promptCrypto";
+
+function validatePricePrecision(priceStr: string): string | null {
+  const trimmed = priceStr.trim();
+
+  if (!trimmed) return null;
+
+  if (/[eE]/.test(trimmed)) {
+    return "Scientific notation (e.g., 2e3) is not allowed. Enter a decimal number.";
+  }
+
+  if (!/^(\d+\.?\d*|\.\d+)$/.test(trimmed)) {
+    return "Enter a valid decimal number.";
+  }
+
+  const parts = trimmed.split(".");
+  if (parts.length > 2) {
+    return "Invalid price format.";
+  }
+
+  if (parts.length === 2 && parts[1].length > 7) {
+    return "Price precision exceeds 7 decimal places (maximum: 0.0000001 XLM per stoop).";
+  }
+
+  return null;
+}
+
+// #131 – Canonical content classification taxonomy
+export const CONTENT_CLASSIFICATIONS = [
+  { value: "general", label: "General", description: "General purpose content" },
+  { value: "educational", label: "Educational", description: "Educational or learning content" },
+  { value: "professional", label: "Professional", description: "Professional or business content" },
+  { value: "creative", label: "Creative", description: "Creative, artistic, or entertainment content" },
+  { value: "technical", label: "Technical", description: "Technical, programming, or engineering content" },
+  { value: "sensitive", label: "Sensitive", description: "May contain sensitive topics (politics, religion, etc.)" },
+  { value: "restricted", label: "Restricted", description: "Age-restricted or potentially offensive content" },
+] as const;
+
+// #131 – Standard safety disclosure flags
+export const SAFETY_DISCLOSURE_FLAGS = [
+  { value: "none", label: "None", description: "No specific safety concerns" },
+  { value: "ai-generated", label: "AI Generated", description: "Contains AI-generated content" },
+  { value: "financial-advice", label: "Financial Advice", description: "Contains financial or investment advice" },
+  { value: "medical", label: "Medical", description: "Contains medical or health information" },
+  { value: "legal", label: "Legal", description: "Contains legal information or advice" },
+  { value: "political", label: "Political", description: "Contains political content or commentary" },
+] as const;
 
 export const LISTING_LIMITS = {
   imageUrl: 512,
@@ -6,6 +53,9 @@ export const LISTING_LIMITS = {
   category: 40,
   preview: 280,
   fullPrompt: 50_000,
+  // On-chain MAX_ENCRYPTED_PROMPT_LEN (contracts/prompt-hash/src/contract.rs)
+  // — the encrypted+base64-encoded payload, not the plaintext character count.
+  encryptedPrompt: 4096,
 } as const;
 
 export type ListingFormInput = {
@@ -15,6 +65,9 @@ export type ListingFormInput = {
   previewText: string;
   fullPrompt: string;
   priceXlm: string;
+  // #131 – content classification
+  classification: string;
+  safetyFlags: string[];
 };
 
 export type ListingValidationErrors = Partial<
@@ -86,25 +139,61 @@ export function validateListingForm(
       "Add at least 10 characters of prompt content so buyers receive meaningful value.";
   } else if (fullPrompt.length > LISTING_LIMITS.fullPrompt) {
     errors.fullPrompt = `Shorten the prompt to ${LISTING_LIMITS.fullPrompt.toLocaleString()} characters or fewer.`;
+  } else if (estimateEncryptedPayloadSize(fullPrompt) > LISTING_LIMITS.encryptedPrompt) {
+    errors.fullPrompt = `Encrypted payload is too large for the on-chain limit (${LISTING_LIMITS.encryptedPrompt.toLocaleString()} bytes once encrypted). Shorten the prompt.`;
   }
 
   if (!priceXlm) {
     errors.priceXlm = "Enter a price in XLM — use a value greater than zero.";
   } else {
-    try {
-      const price = xlmToStroops(priceXlm);
-      if (price <= 0n) {
-        errors.priceXlm = "Set a price greater than zero XLM.";
+    const precisionError = validatePricePrecision(priceXlm);
+    if (precisionError) {
+      errors.priceXlm = precisionError;
+    } else {
+      try {
+        const price = xlmToStroops(priceXlm);
+        if (price <= 0n) {
+          errors.priceXlm = "Set a price greater than zero XLM.";
+        }
+      } catch (error) {
+        errors.priceXlm =
+          error instanceof Error
+            ? error.message
+            : "Enter a valid XLM amount with up to 7 decimal places.";
       }
-    } catch (error) {
-      errors.priceXlm =
-        error instanceof Error
-          ? error.message
-          : "Enter a valid XLM amount with up to 7 decimal places.";
+    }
+  }
+
+  // #131 – classification validation
+  if (input.classification) {
+    if (!CONTENT_CLASSIFICATIONS.some((c) => c.value === input.classification)) {
+      errors.classification = "Selected classification is not in the recognized taxonomy.";
+    }
+  }
+
+  // Safety flags are optional — valid if provided
+  if (input.safetyFlags && input.safetyFlags.length > 0) {
+    for (const flag of input.safetyFlags) {
+      if (!SAFETY_DISCLOSURE_FLAGS.some((f) => f.value === flag)) {
+        errors.safetyFlags = `"${flag}" is not a recognized safety disclosure flag.`;
+        break;
+      }
     }
   }
 
   return errors;
+}
+
+/**
+ * #269 – Validate a single field for inline (on-blur) feedback.
+ * Reuses {@link validateListingForm} so field rules never drift from the
+ * submit-time rules, and returns just that field's message (or undefined).
+ */
+export function validateListingField(
+  field: keyof ListingFormInput,
+  input: ListingFormInput,
+): string | undefined {
+  return validateListingForm(input)[field];
 }
 
 export async function validateImageMetadata(url: string): Promise<string | null> {
@@ -143,6 +232,7 @@ export function buildListingChecklistItems(
     { id: "fullPrompt", label: "Full prompt content" },
     { id: "priceXlm", label: "Price" },
     { id: "imageUrl", label: "Image URL" },
+    { id: "classification", label: "Content classification" },
   ];
 
   for (const { id, label } of fieldChecks) {

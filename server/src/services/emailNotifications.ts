@@ -12,6 +12,12 @@
 
 import nodemailer from "nodemailer";
 import User from "../models/User.js";
+import { getCircuitBreaker } from "./circuitBreaker";
+
+const smtpBreaker = getCircuitBreaker("email-smtp", {
+  failureThreshold: 5,
+  resetTimeoutMs: 60_000,
+});
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -89,8 +95,10 @@ async function sendEmail(to: string, subject: string, html: string): Promise<voi
     console.warn("[email] SMTP not configured — skipping email to", to);
     return;
   }
-  const transport = createTransport();
-  await transport.sendMail({ from: FROM, to, subject, html });
+  await smtpBreaker.execute(async () => {
+    const transport = createTransport();
+    await transport.sendMail({ from: FROM, to, subject, html });
+  });
   console.log(`[email] Sent "${subject}" to ${to}`);
 }
 

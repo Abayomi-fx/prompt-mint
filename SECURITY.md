@@ -4,6 +4,13 @@
 
 Please reach out to the team using GitHub's own security mechanism to submit an anonymous report.
 
+## Related Documentation
+
+- [Penetration testing schedule and methodology](docs/security/penetration-testing.md) — cadence, scope, and remediation SLAs for our recurring security testing program.
+- [Security model and threat architecture](docs/security-model.md) — ongoing threat model for the on-chain contract and off-chain Unlock Service.
+- [Security audit report](docs/security-audit.md) — most recent point-in-time audit findings.
+- [`.github/workflows/dependency-scan.yml`](.github/workflows/dependency-scan.yml) — automated dependency vulnerability scanning (npm + cargo) that runs on every PR and weekly.
+
 ---
 
 # PromptHash Soroban Contract - Threat Model & Security Review

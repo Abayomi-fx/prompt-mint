@@ -98,6 +98,7 @@ yarn dev
 | `PUBLIC_CHAT_API_BASE` | Chat UI |
 | `REDIS_URL` | Rate limiting (in-memory fallback) |
 | `ADMIN_ROTATION_TOKEN` | Secret rotation admin |
+| `ADMIN_RECOVERY_TOKEN` | Unlock key recovery verification admin |
 | `CHALLENGE_TOKEN_SECRET_PREVIOUS` | Rotation grace period |
 | `MONGODB_URI` | `server/` draft & buyer APIs |
 

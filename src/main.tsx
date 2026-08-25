@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { Toaster } from "sonner";
 import "./index.css";
 import App from "./App.tsx";
 import "@stellar/design-system/build/styles.min.css";
@@ -13,10 +14,9 @@ import { TransactionProvider } from "./components/TransactionProvider.tsx";
 import { NotificationProvider } from "./providers/NotificationProvider.tsx";
 import { ContractSyncProvider } from "./providers/ContractSyncProvider.tsx";
 import { CurrencyProvider } from "./providers/CurrencyProvider.tsx";
+import { NetworkStateProvider } from "./hooks/useNetworkState.tsx";
+import { ReducedMotionProvider } from "./components/ReducedMotionProvider.tsx";
 
-import { NetworkStateProvider } from "./hooks/useNetworkState.ts";
-
-// Initialize the client
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -28,33 +28,32 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
-    <NotificationProvider>
-      <QueryClientProvider client={queryClient}>
-        <ContractSyncProvider>
-          <TransactionProvider>
-            <WalletProvider>
-              <BrowserRouter>
-                <CurrencyProvider><App /></CurrencyProvider>
-              </BrowserRouter>
-            </WalletProvider>
-          </TransactionProvider>
-        </ContractSyncProvider>
-      </QueryClientProvider>
-    </NotificationProvider>
-    <NetworkStateProvider>
+    <ReducedMotionProvider>
       <NotificationProvider>
         <QueryClientProvider client={queryClient}>
           <ContractSyncProvider>
             <TransactionProvider>
               <WalletProvider>
-                <BrowserRouter>
-                  <App />
-                </BrowserRouter>
+                <NetworkStateProvider>
+                  <BrowserRouter>
+                    <CurrencyProvider>
+                      <App />
+                      <Toaster
+                        theme="dark"
+                        position="bottom-right"
+                        toastOptions={{
+                          className:
+                            "!bg-slate-900 !border !border-white/10 !text-white !shadow-2xl",
+                        }}
+                      />
+                    </CurrencyProvider>
+                  </BrowserRouter>
+                </NetworkStateProvider>
               </WalletProvider>
             </TransactionProvider>
           </ContractSyncProvider>
         </QueryClientProvider>
       </NotificationProvider>
-    </NetworkStateProvider>
+    </ReducedMotionProvider>
   </StrictMode>,
 );

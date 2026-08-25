@@ -8,7 +8,6 @@ import {
   LockKeyhole,
   PlugZap,
   RefreshCw,
-  ShieldCheck,
   ShoppingBag,
   WifiOff,
 } from "lucide-react";
@@ -17,12 +16,17 @@ import { Button } from "@/components/ui/button";
 import { useWallet } from "@/hooks/useWallet";
 import { browserStellarConfig } from "@/lib/stellar/browserConfig";
 import { getPromptsByBuyer, type PromptRecord } from "@/lib/stellar/promptHashClient";
-import { unlockPromptContent } from "@/lib/prompts/unlock";
+import { unlockPromptContent, type IntegrityMetadata } from "@/lib/prompts/unlock";
 import { UnlockExplainer, type UnlockState } from "@/components/UnlockExplainer";
+import { IntegrityBadge } from "@/components/IntegrityBadge";
 import { stellarNetwork } from "@/lib/env";
 import { CurrencyPrice } from "@/components/CurrencyPrice";
 import { FreshnessBadge } from "@/components/FreshnessBadge";
 import { useNetworkState } from "@/hooks/useNetworkState";
+import { formatPriceLabel } from "@/lib/stellar/format";
+import { Skeleton, SkeletonAvatar, SkeletonText } from "@/components/Skeleton";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { BuyerLibraryRowSkeleton } from "@/components/MarketplaceSkeletons";
 
 const EXPECTED_NETWORK = stellarNetwork;
 
@@ -49,74 +53,18 @@ function setCachedBuyerPrompts(address: string, prompts: PromptRecord[]) {
   } catch {}
 }
 
-function EmptyLibrary() {
-  return (
-    <div className="grid min-h-64 place-items-center rounded-xl border border-dashed border-white/15 bg-white/[0.02] p-8 text-center">
-      <div className="max-w-xs">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-cyan-200/10 text-cyan-100">
-          <BookOpenCheck className="h-7 w-7" />
-        </div>
-        <h3 className="mt-4 text-lg font-semibold text-white">No purchases yet</h3>
-        <p className="mt-2 text-sm leading-6 text-slate-400">
-          Prompts you purchase will appear here with a direct unlock path to the
-          decrypted content.
-        </p>
-        <Button asChild className="mt-5 h-9 bg-cyan-200 text-slate-950 hover:bg-cyan-100 px-5">
-          <Link to="/browse">
-            <ShoppingBag className="h-4 w-4" />
-            Browse marketplace
-          </Link>
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function DisconnectedState() {
-  return (
-    <div className="grid min-h-64 place-items-center rounded-xl border border-white/10 bg-white/[0.02] p-8 text-center">
-      <div className="max-w-xs">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-700/50 text-slate-400">
-          <PlugZap className="h-7 w-7" />
-        </div>
-        <h3 className="mt-4 text-lg font-semibold text-white">Wallet not connected</h3>
-        <p className="mt-2 text-sm leading-6 text-slate-400">
-          Connect your Stellar wallet to view prompts you have purchased.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function WrongNetworkState({ network }: { network?: string }) {
-  return (
-    <div className="grid min-h-64 place-items-center rounded-xl border border-amber-300/20 bg-amber-300/[0.04] p-8 text-center">
-      <div className="max-w-xs">
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-amber-300/10 text-amber-200">
-          <WifiOff className="h-7 w-7" />
-        </div>
-        <h3 className="mt-4 text-lg font-semibold text-white">Wrong network</h3>
-        <p className="mt-2 text-sm leading-6 text-slate-400">
-          You are connected to{" "}
-          <span className="font-semibold text-amber-200">{network ?? "an unknown network"}</span>.
-          Switch to{" "}
-          <span className="font-semibold text-white">{EXPECTED_NETWORK}</span> to
-          view your library.
-        </p>
-      </div>
-    </div>
-  );
-}
 
 function PromptLibraryCard({
   prompt,
   plaintext,
+  integrity,
   unlockState,
   isBusy,
   onUnlock,
 }: {
   prompt: PromptRecord;
   plaintext?: string;
+  integrity?: IntegrityMetadata;
   unlockState: UnlockState;
   isBusy: boolean;
   onUnlock: () => void;
@@ -165,7 +113,6 @@ function PromptLibraryCard({
               Paid
             </p>
             <p className="mt-0.5 text-sm font-semibold text-white">
-              <CurrencyPrice stroops={prompt.priceStroops} />
               {formatPriceLabel(prompt.priceStroops)} XLM
             </p>
           </div>
@@ -185,16 +132,17 @@ function PromptLibraryCard({
           />
         )}
 
-        {/* Unlocked content */}
-        {isUnlocked && (
-          <div className="rounded-xl border border-emerald-300/20 bg-emerald-300/[0.07] p-4">
-            <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-200">
-              <ShieldCheck className="h-3.5 w-3.5" />
+        {/* Unlocked content — only rendered when plaintext is present */}
+        {isUnlocked && plaintext && (
+          <div className="rounded-xl border border-emerald-300/20 bg-emerald-300/[0.07] p-4 space-y-3">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-emerald-200">
               Decrypted content
             </div>
             <pre className="max-h-60 overflow-auto whitespace-pre-wrap text-xs leading-6 text-slate-200">
               {plaintext}
             </pre>
+            {/* Cryptographic provenance badge */}
+            {integrity && <IntegrityBadge integrity={integrity} />}
           </div>
         )}
 
@@ -202,7 +150,12 @@ function PromptLibraryCard({
         <Button
           className="h-9 bg-cyan-200 text-slate-950 hover:bg-cyan-100 disabled:opacity-50 text-xs font-bold"
           onClick={onUnlock}
-          disabled={isBusy || unlockState === "signing" || unlockState === "verifying"}
+          disabled={
+            isBusy ||
+            unlockState === "signing" ||
+            unlockState === "verifying" ||
+            unlockState === "integrity_failed"
+          }
         >
           {isBusy ? (
             <>
@@ -230,6 +183,7 @@ export function BuyerLibrary() {
   const { address, network, signMessage } = useWallet();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [unlocked, setUnlocked] = useState<Record<string, string>>({});
+  const [integrityMap, setIntegrityMap] = useState<Record<string, IntegrityMetadata>>({});
   const [unlockStates, setUnlockStates] = useState<Record<string, UnlockState>>({});
 
   const isWrongNetwork =
@@ -262,7 +216,10 @@ export function BuyerLibrary() {
 
   const cachedData = getCachedBuyerPrompts(address);
   const prompts = query.data ?? cachedData?.prompts ?? [];
-  const isUsingCache = query.isError || !networkState.isOnline || (query.isSuccess && !query.isFetchedAfterMount);
+  const isUsingCache =
+    query.isError ||
+    !networkState.isOnline ||
+    (query.isSuccess && !query.isFetchedAfterMount);
   const freshnessTimestamp = query.dataUpdatedAt || cachedData?.timestamp || null;
 
   const setUnlockState = (id: string, state: UnlockState) =>
@@ -277,12 +234,18 @@ export function BuyerLibrary() {
       const result = await unlockPromptContent(address, id, signMessage);
       setUnlockState(id, "success");
       setUnlocked((prev) => ({ ...prev, [id]: result.plaintext }));
+      setIntegrityMap((prev) => ({ ...prev, [id]: result.integrity }));
     } catch (e) {
       const msg = e instanceof Error ? e.message : "";
       if (msg.toLowerCase().includes("declined") || msg.toLowerCase().includes("rejected")) {
         setUnlockState(id, "rejected");
       } else if (msg.toLowerCase().includes("expired")) {
         setUnlockState(id, "expired");
+      } else if (
+        msg.toLowerCase().includes("integrity") ||
+        msg.toLowerCase().includes("verified")
+      ) {
+        setUnlockState(id, "integrity_failed");
       } else {
         setUnlockState(id, "failed");
       }
@@ -291,17 +254,30 @@ export function BuyerLibrary() {
     }
   };
 
-  if (!address) return <DisconnectedState />;
-  if (isWrongNetwork) return <WrongNetworkState network={network} />;
+  if (!address)
+    return (
+      <EmptyState
+        variant="custom"
+        icon={PlugZap}
+        title="Wallet not connected"
+        description="Connect your Stellar wallet to view prompts you have purchased."
+      />
+    );
+  if (isWrongNetwork)
+    return (
+      <EmptyState
+        variant="custom"
+        icon={WifiOff}
+        title="Wrong network"
+        description={`You are connected to ${network ?? "an unknown network"}. Switch to ${EXPECTED_NETWORK} to view your library.`}
+      />
+    );
 
   if (query.isLoading && prompts.length === 0) {
     return (
-      <div className="space-y-4">
+      <div className="space-y-4" role="status" aria-label="Loading your library">
         {[...Array(3)].map((_, i) => (
-          <div
-            key={i}
-            className="h-32 rounded-xl border border-white/5 bg-white/[0.02] animate-pulse"
-          />
+          <BuyerLibraryRowSkeleton key={i} />
         ))}
       </div>
     );
@@ -309,25 +285,39 @@ export function BuyerLibrary() {
 
   if (query.isError && prompts.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center rounded-xl border border-rose-400/20 bg-rose-400/[0.05] p-8 text-center gap-3">
-        <p className="text-sm font-medium text-rose-300">Failed to load library</p>
-        <p className="text-xs text-slate-400">
-          Could not read purchased prompts from the contract.
-        </p>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => void query.refetch()}
-          className="border border-white/10 text-slate-300 hover:bg-white/10 text-xs"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          Retry
-        </Button>
-      </div>
+      <EmptyState
+        variant="error"
+        title="Failed to load library"
+        description="Could not read purchased prompts from the contract."
+        action={
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void query.refetch()}
+            className="border border-white/10 text-slate-300 hover:bg-white/10 text-xs"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry
+          </Button>
+        }
+      />
     );
   }
 
-  if (prompts.length === 0) return <EmptyLibrary />;
+  if (prompts.length === 0)
+    return (
+      <EmptyState
+        variant="no-purchases"
+        action={
+          <Button asChild className="h-9 bg-cyan-200 text-slate-950 hover:bg-cyan-100 px-5">
+            <Link to="/browse">
+              <ShoppingBag className="h-4 w-4" />
+              Browse marketplace
+            </Link>
+          </Button>
+        }
+      />
+    );
 
   return (
     <div className="space-y-4">
@@ -352,6 +342,7 @@ export function BuyerLibrary() {
             key={id}
             prompt={prompt}
             plaintext={unlocked[id]}
+            integrity={integrityMap[id]}
             unlockState={unlockStates[id] ?? "idle"}
             isBusy={busyId === id}
             onUnlock={() => void handleUnlock(prompt)}
