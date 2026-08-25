@@ -40,14 +40,14 @@ jobs:
           sha256sum ../frontend-checksums.txt > ../frontend-checksums.txt.sha256
 
       - name: Upload frontend build
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-build-${{ github.sha }}
           path: dist/
           retention-days: 30
 
       - name: Upload frontend checksums
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: frontend-checksums-${{ github.sha }}
           path: frontend-checksums.txt
@@ -123,7 +123,7 @@ jobs:
           sha256sum ../../../wasm-checksums.txt > ../../../wasm-checksums.txt.sha256
 
       - name: Upload WASM artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: contract-wasm-${{ github.sha }}
           path: target/wasm32-unknown-unknown/release/*.wasm
@@ -131,7 +131,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Upload WASM checksums
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: wasm-checksums-${{ github.sha }}
           path: wasm-checksums.txt
@@ -206,7 +206,7 @@ jobs:
             ./artifacts/release-checksums.txt
 
       - name: Upload signed artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: signed-release-${{ github.sha }}
           path: |
@@ -340,7 +340,7 @@ jobs:
             > sbom/sbom-manifest.json
 
       - name: Upload SBOM artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v7
         with:
           name: sbom-${{ github.sha }}
           path: sbom/
