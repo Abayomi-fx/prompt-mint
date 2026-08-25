@@ -14,6 +14,11 @@
     "dev": "nodemon --watch src --exec ts-node src/server.ts",
     "start": "node build/server.js",
     "backup": "ts-node scripts/runBackup.ts",
+    "backup:backup": "ts-node scripts/mongodbBackup.ts backup",
+    "backup:prune": "ts-node scripts/mongodbBackup.ts prune",
+    "backup:status": "ts-node scripts/mongodbBackup.ts status",
+    "backup:verify": "ts-node scripts/mongodbBackup.ts verify",
+    "backup:test-recovery": "ts-node scripts/mongodbBackup.ts test-recovery",
     "reindex": "ts-node scripts/reIndexFromLedger.ts",
     "reindex:dry-run": "ts-node scripts/reIndexFromLedger.ts --dry-run"
   },
