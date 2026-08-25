@@ -30,6 +30,8 @@ fi
 
 # Identities
 ADMIN_ALIAS=${ADMIN_ALIAS:-admin}
+ADMIN_TWO_ALIAS=${ADMIN_TWO_ALIAS:-admin_two}
+ADMIN_THREE_ALIAS=${ADMIN_THREE_ALIAS:-admin_three}
 FEE_WALLET_ALIAS=${FEE_WALLET_ALIAS:-fee_wallet}
 
 echo "🌐 Using network: $NETWORK ($STELLAR_NETWORK)"
@@ -67,9 +69,13 @@ setup_identity() {
 }
 
 setup_identity $ADMIN_ALIAS
+setup_identity $ADMIN_TWO_ALIAS
+setup_identity $ADMIN_THREE_ALIAS
 setup_identity $FEE_WALLET_ALIAS
 
 ADMIN_ADDRESS=$(stellar keys address $ADMIN_ALIAS)
+ADMIN_TWO_ADDRESS=$(stellar keys address $ADMIN_TWO_ALIAS)
+ADMIN_THREE_ADDRESS=$(stellar keys address $ADMIN_THREE_ALIAS)
 FEE_WALLET_ADDRESS=$(stellar keys address $FEE_WALLET_ALIAS)
 
 # Handle XLM SAC
@@ -105,6 +111,8 @@ stellar contract invoke \
     -- \
     __constructor \
     --admin $ADMIN_ADDRESS \
+    --admin_two $ADMIN_TWO_ADDRESS \
+    --admin_three $ADMIN_THREE_ADDRESS \
     --fee_wallet $FEE_WALLET_ADDRESS \
     --xlm_sac $XLM_SAC
 
@@ -155,5 +163,7 @@ echo "--------------------------------------------------------"
 echo "Deployment successful!"
 echo "Contract ID: $CONTRACT_ID"
 echo "Admin: $ADMIN_ADDRESS"
+echo "Admin 2: $ADMIN_TWO_ADDRESS"
+echo "Admin 3: $ADMIN_THREE_ADDRESS"
 echo "--------------------------------------------------------"
 

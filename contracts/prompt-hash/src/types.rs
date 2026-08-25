@@ -121,67 +121,7 @@ pub enum DataKey {
     SubscriptionConfig(Address),
     Subscription(Address, Address),
     SubscriptionEligible(u128),
-    // #131 – content classification
-    ClassificationOverride(u128),
-    ModeratorAddress,
-    // Promotional pricing
-    ActivePromotion(u128),
-    PromotionHistory(u128),
-    // Encryption rotation – versioned payloads & version counter per prompt
-    PromptEncryptedPayload(u128, u32),
-    PromptEncryptionVersion(u128),
-    // Contract state schema version, bumped by `migrate` after an `upgrade`
-    // that changes stored data shapes.
-    SchemaVersion,
-    // #273 – time-based discount schedule per prompt
-    Discount(u128),
-    // #275 – creator reputation staking, keyed by prompt id
-    CreatorStake(u128),
-    // #42 – two-step upgrade authorization
-    PendingUpgrade,
-    UpgradeProposer,
-    UpgradeProposedAt,
-    // #32 – marks that `__constructor` has already run once, so repeated
-    // setup calls against an already-initialized instance are rejected.
-    Initialized,
-}
-
-/// #273 – Time-based discount schedule for a prompt.
-/// While the current ledger sequence is within `[start_ledger, end_ledger]`
-/// (inclusive), `discounted_price` transparently overrides the base price on
-/// the purchase path. The window is expressed in ledger sequence numbers so it
-/// reverts automatically once the window closes, with no further action needed.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Discount {
-    pub prompt_id: u128,
-    pub creator: Address,
-    pub discounted_price: i128,
-    pub start_ledger: u32,
-    pub end_ledger: u32,
-}
-
-/// A moderator-overridden classification that takes precedence
-/// over the creator's attested classification for display purposes.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ClassificationOverride {
-    pub classifier: Address,
-    pub classification: String,
-    pub safety_flags: Vec<String>,
-    pub reason: String,
-    pub reviewed_at: u64,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Settlement {
-    pub buyer_amount: i128,
-    pub creator_amount: i128,
-    pub platform_amount: i128,
-    pub referrer: Option<Address>,
-    pub referrer_amount: i128,
-    pub split_amount: i128,
+    AdminSigners,
 }
 
 #[contracttype]
@@ -377,6 +317,8 @@ pub trait PromptHashTrait {
     fn __constructor(
         env: Env,
         admin: Address,
+        admin_two: Address,
+        admin_three: Address,
         fee_wallet: Address,
         xlm_sac: Address,
     ) -> Result<(), Error>;
@@ -501,23 +443,28 @@ pub trait PromptHashTrait {
     ) -> Result<Subscription, Error>;
     fn get_subscription_config(env: Env, creator: Address) -> Result<SubscriptionConfig, Error>;
     fn is_subscription_eligible(env: Env, prompt_id: u128) -> Result<bool, Error>;
-    fn set_fee_percentage(env: Env, new_fee_percentage: u32) -> Result<(), Error>;
-    fn set_fee_wallet(env: Env, new_fee_wallet: Address) -> Result<(), Error>;
+    fn set_fee_percentage(
+        env: Env,
+        new_fee_percentage: u32,
+        approver_a: Address,
+        approver_b: Address,
+    ) -> Result<(), Error>;
+    fn set_fee_wallet(
+        env: Env,
+        new_fee_wallet: Address,
+        approver_a: Address,
+        approver_b: Address,
+    ) -> Result<(), Error>;
     fn get_fee_percentage(env: Env) -> u32;
     fn get_fee_wallet(env: Env) -> Option<Address>;
     fn set_referral_percentage(env: Env, new_referral_percentage: u32) -> Result<(), Error>;
     fn get_referral_percentage(env: Env) -> u32;
-    fn register_referral_code(
+    fn set_pause_status(
         env: Env,
-        referrer: Address,
-        code_hash: BytesN<32>,
+        paused: bool,
+        approver_a: Address,
+        approver_b: Address,
     ) -> Result<(), Error>;
-    fn revoke_referral_code(
-        env: Env,
-        referrer: Address,
-        code_hash: BytesN<32>,
-    ) -> Result<(), Error>;
-    fn set_pause_status(env: Env, paused: bool) -> Result<(), Error>;
     fn is_paused(env: Env) -> bool;
     fn add_voucher(
         env: Env,
@@ -533,10 +480,12 @@ pub trait PromptHashTrait {
         hashed_code: BytesN<32>,
     ) -> Result<(), Error>;
     fn get_xlm_sac(env: Env) -> Option<Address>;
-    fn propose_upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
-    fn confirm_upgrade(env: Env) -> Result<(), Error>;
-    fn cancel_upgrade(env: Env) -> Result<(), Error>;
-    fn get_pending_upgrade(env: Env) -> Option<BytesN<32>>;
+    fn upgrade(
+        env: Env,
+        new_wasm_hash: BytesN<32>,
+        approver_a: Address,
+        approver_b: Address,
+    ) -> Result<(), Error>;
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error>;
 
     // ─── Bundle methods ──────────────────────────────────────────────────────

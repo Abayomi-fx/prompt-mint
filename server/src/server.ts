@@ -14,7 +14,8 @@ import { robotsRouter } from "./routes/robotsRoutes";
 import { licenseTermsRouter } from "./routes/licenseTermsRoutes";
 import { runBackup, getBackupHealth } from "./services/backupService";
 import { runRestoreDrill } from "./services/restoreService";
-import { IndexerState } from "./models/IndexerState";
+import { IndexerState } from "./models/IndexerState"; 
+import creatorReputationHandler from "./controllers/creatorReputationController";
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
 import { idempotency } from "./middleware/idempotency";
@@ -48,8 +49,7 @@ app.use("/api/chat", chatRouter);
 app.use("/api/webhooks", webhookRouter);
 app.use("/api/versions", versioningRouter);
 app.use("/api/governance", governanceRouter); // Issue #113
-app.use("/api/appeals", appealRouter);
-app.use("/api/license-terms", licenseTermsRouter);
+app.get("/api/creators/reputation", creatorReputationHandler);
 
 app.post("/api/test-prompt", TestPromptProxy);
 

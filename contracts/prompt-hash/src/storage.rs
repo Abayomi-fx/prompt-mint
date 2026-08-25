@@ -20,6 +20,30 @@ fn ensure(condition: bool, error: Error) -> Result<(), Error> {
 }
 
 impl Storage {
+    pub fn set_admin_signers(env: &Env, signers: &Vec<Address>) {
+        let key = DataKey::AdminSigners;
+        env.storage().persistent().set(&key, signers);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn is_admin_signer(env: &Env, signer: &Address) -> bool {
+        let key = DataKey::AdminSigners;
+        let signers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        for index in 0..signers.len() {
+            if signers.get(index).unwrap() == signer.clone() {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn extend_key_ttl(env: &Env, key: &DataKey) {
         if env.storage().persistent().has(key) {
             env.storage().persistent().extend_ttl(
@@ -167,7 +191,10 @@ impl Storage {
             if ids.get(index).unwrap() == prompt_id {
                 ids.remove(index);
             } else {
-                index += 1;
+                index = match index.checked_add(1) {
+                    Some(next) => next,
+                    None => break,
+                };
             }
         }
         env.storage().persistent().set(&key, &ids);
@@ -385,15 +412,23 @@ impl Storage {
 
     pub fn set_reentrancy_guard(env: &Env) -> Result<(), Error> {
         let key = DataKey::Reentrancy;
-        let already_set = env
+        Self::require_no_reentrancy(env)?;
+        env.storage().persistent().set(&key, &true);
+        Self::extend_key_ttl(env, &key);
+        Ok(())
+    }
+
+    pub fn require_no_reentrancy(env: &Env) -> Result<(), Error> {
+        let key = DataKey::Reentrancy;
+        let entered = env
             .storage()
             .persistent()
             .get::<_, bool>(&key)
             .unwrap_or(false);
-        ensure(!already_set, Error::ReentrancyGuard)?;
-        env.storage().persistent().set(&key, &true);
-        Self::extend_key_ttl(env, &key);
-        Ok(())
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        ensure(!entered, Error::ReentrancyGuard)
     }
 
     pub fn clear_reentrancy_guard(env: &Env) {

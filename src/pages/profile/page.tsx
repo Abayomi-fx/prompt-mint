@@ -35,8 +35,7 @@ import { UnlockExplainer, type UnlockState } from "@/components/UnlockExplainer"
 import { WebhookSettings } from "@/components/WebhookSettings";
 import { NotificationPreferences } from "@/components/NotificationPreferences";
 import { PostVersionUpdate } from "@/components/PostVersionUpdate";
-import { RecentlyViewed } from "@/components/RecentlyViewed";
-import { SkeletonCard } from "@/components/Skeleton";
+import { CreatorReputationPanel } from "@/components/CreatorReputation";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1045,6 +1044,10 @@ export default function ProfilePage() {
             </div>
           )}
         </section>
+
+        {profileAddress ? (
+          <CreatorReputationPanel address={profileAddress} />
+        ) : null}
 
         <div>
           {isPublicView && profileAddress ? (
