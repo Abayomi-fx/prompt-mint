@@ -496,16 +496,17 @@ const FetchAllPrompts = ({
             </p>
           </div>
         ) : (
-        <EmptyState
-          variant={searchQuery || selectedCategory || selectedTag ? "search-empty" : "no-results"}
-          title={searchQuery || selectedCategory || selectedTag ? "No matching prompts" : "No prompts found"}
-          description={
-            searchQuery || selectedCategory || selectedTag
-              ? "Try adjusting your filters or search terms to find what you're looking for."
-              : "The marketplace has no active listings at the moment. Check back soon."
-          }
-          size="lg"
-        />
+          <EmptyState
+            variant={searchQuery || selectedCategory || selectedTag ? "search-empty" : "no-results"}
+            title={searchQuery || selectedCategory || selectedTag ? "No matching prompts" : "No prompts found"}
+            description={
+              searchQuery || selectedCategory || selectedTag
+                ? "Try adjusting your filters or search terms to find what you're looking for."
+                : "The marketplace has no active listings at the moment. Check back soon."
+            }
+            size="lg"
+          />
+        )
       ) : (
         <>
           <div className="grid grid-cols-1 gap-8 md:grid-cols-2 xl:grid-cols-3">

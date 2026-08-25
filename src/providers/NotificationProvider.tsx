@@ -226,7 +226,7 @@ export const NotificationProvider: React.FC<{
               title={
                 toast.title ? `${toast.title}: ${toast.message}` : toast.message
               }
-              variant={toast.type}
+              variant={toast.type === "secondary" ? "primary" : (toast.type as "primary" | "success" | "error" | "warning")}
             />
           </div>
         ))}

@@ -165,14 +165,14 @@ export function validateListingForm(
   }
 
   // #131 – classification validation
-  if (!input.classification) {
-    errors.classification = "Select a content classification so buyers know what to expect.";
-  } else if (!CONTENT_CLASSIFICATIONS.some((c) => c.value === input.classification)) {
-    errors.classification = "Selected classification is not in the recognized taxonomy.";
+  if (input.classification) {
+    if (!CONTENT_CLASSIFICATIONS.some((c) => c.value === input.classification)) {
+      errors.classification = "Selected classification is not in the recognized taxonomy.";
+    }
   }
 
   // Safety flags are optional — valid if provided
-  if (input.safetyFlags.length > 0) {
+  if (input.safetyFlags && input.safetyFlags.length > 0) {
     for (const flag of input.safetyFlags) {
       if (!SAFETY_DISCLOSURE_FLAGS.some((f) => f.value === flag)) {
         errors.safetyFlags = `"${flag}" is not a recognized safety disclosure flag.`;

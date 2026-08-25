@@ -9,6 +9,8 @@ export interface CartItem {
   creator: string;
 }
 
+export type BulkPurchaseItem = CartItem;
+
 export interface CartState {
   items: CartItem[];
   isCheckingOut: boolean;

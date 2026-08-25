@@ -88,7 +88,6 @@ export default function SellPage() {
             Create bundle
           </button>
           <button
-            onClick={() => setView("manage")}
             onClick={() => switchView("manage")}
             aria-pressed={view === "manage"}
             className={`min-h-11 flex flex-1 items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium transition-all sm:px-4 ${
@@ -103,10 +102,9 @@ export default function SellPage() {
         </div>
 
         {view === "create" ? (
-          <CreatePromptForm onCreated={() => setView("manage")} />
-        ) : view === "bundle" ? (
-          <CreateBundleForm onCreated={() => setView("manage")} />
           <CreatePromptForm onCreated={() => switchView("manage")} onDirtyChange={setIsCreateDirty} />
+        ) : view === "bundle" ? (
+          <CreateBundleForm onCreated={() => switchView("manage")} />
         ) : (
           <MyPrompts onCreateNew={() => switchView("create")} />
         )}

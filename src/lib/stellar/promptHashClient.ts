@@ -256,6 +256,14 @@ export class PromptHashClient {
     });
   }
 
+  static async giftPrompt(
+    _promptId: bigint | string,
+    _sender: string,
+    _recipient: string,
+  ): Promise<{ txHash: string }> {
+    return { txHash: "mock_gift_tx_hash" };
+  }
+
   /**
    * Invokes the Soroban contract to purchase multiple prompts atomically.
    * The entire transaction reverts if any individual purchase fails.

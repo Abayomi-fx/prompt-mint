@@ -29,7 +29,9 @@
     "test:synthetic": "npx tsx scripts/synthetic-unlock.ts",
     "load:fixtures": "node scripts/load/generate-unlock-fixtures.mjs",
     "load:test": "k6 run load-tests/prompt-mint.js",
-    "load:compare": "node scripts/load/compare-results.mjs"
+    "load:compare": "node scripts/load/compare-results.mjs",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build"
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "^1.9.5",

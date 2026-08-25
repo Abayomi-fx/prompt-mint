@@ -114,7 +114,7 @@ function RecentlyViewedCard({
           <div className="mt-2 flex items-center gap-3">
             {displayPrice && (
               <span className="text-sm font-semibold text-white">
-                {formatPriceLabel(displayPrice)} XLM
+                {formatPriceLabel(BigInt(displayPrice))} XLM
               </span>
             )}
             <span className="text-xs text-slate-500">{timeAgo}</span>
