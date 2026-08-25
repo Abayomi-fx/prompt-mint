@@ -447,6 +447,24 @@ impl Storage {
         Self::extend_key_ttl(env, &key);
     }
 
+    /// #32 – records that contract setup (`__constructor`) has completed, so
+    /// callers can detect and reject an attempt to run it again.
+    pub fn set_initialized(env: &Env) {
+        let key = DataKey::Initialized;
+        env.storage().persistent().set(&key, &true);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    /// #32 – true once `__constructor` has run for this contract instance.
+    pub fn is_initialized(env: &Env) -> bool {
+        let key = DataKey::Initialized;
+        let initialized = env.storage().persistent().get(&key).unwrap_or(false);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        initialized
+    }
+
     pub fn set_pause_status(env: &Env, is_paused: bool) {
         let key = DataKey::IsPaused;
         env.storage().persistent().set(&key, &is_paused);

@@ -35,9 +35,9 @@
     "success": "Prompt listed successfully!"
   },
   "errors": {
-    "not_found": "Prompt not found.",
-    "unauthorized": "You are not authorized.",
-    "paused": "The marketplace is currently paused.",
+    "not_found": "This prompt could not be found. It may have been removed by its creator, or the link may be incorrect — double-check the link or browse the marketplace for similar prompts.",
+    "unauthorized": "You don't have permission to do that. Make sure you're connected with the wallet that owns this prompt or purchase, then try again.",
+    "paused": "The marketplace is temporarily paused for maintenance. Your funds and listings are safe — please try again in a few minutes.",
     "validation": {
       "required": "This field is required.",
       "min_length": "Must be at least {{min}} characters.",
@@ -52,32 +52,32 @@
     },
     "transaction": {
       "user_rejected": "Transaction was rejected by the user.",
-      "insufficient_funds": "Insufficient funds to complete this transaction.",
-      "insufficient_gas": "Insufficient gas to complete this transaction.",
-      "invalid_signature": "Transaction signature is invalid.",
-      "network_error": "Network error. Please try again.",
-      "expired": "Transaction request has expired.",
-      "unknown": "An unexpected error occurred. Please try again.",
+      "insufficient_funds": "Insufficient funds to complete this transaction. Add more funds to your wallet and try again.",
+      "insufficient_gas": "Insufficient gas to complete this transaction. Top up your wallet's XLM balance to cover network fees, then try again.",
+      "invalid_signature": "Transaction signature is invalid. Reconnect your wallet and try signing the transaction again.",
+      "network_error": "Network error. Please check your internet connection and try again.",
+      "expired": "Transaction request has expired. Please start the transaction again.",
+      "unknown": "An unexpected error occurred. Please try again. If this keeps happening, please contact support with the time this occurred.",
       "pending": "Processing transaction on the Stellar network..."
     },
     "wallet": {
       "connect_required": "Please connect your wallet first.",
-      "network_mismatch": "Wrong network configured in your wallet.",
-      "disconnect_failed": "Failed to disconnect wallet."
+      "network_mismatch": "Your wallet is connected to the wrong network. Switch your wallet to the correct network and try again.",
+      "disconnect_failed": "Failed to disconnect wallet. Please try again, or close and reopen your wallet extension."
     },
     "review": {
       "self_vote": "You cannot vote on your own review.",
       "duplicate_vote": "You have already voted on this review.",
-      "not_eligible": "Only verified purchasers can submit reviews.",
-      "already_reviewed": "You have already submitted a review for this prompt.",
+      "not_eligible": "Only verified purchasers can submit reviews. Purchase this prompt to leave a review.",
+      "already_reviewed": "You have already submitted a review for this prompt. You can edit your existing review instead.",
       "seller_only": "Only the verified seller can respond to reviews.",
       "vote_success": "Vote recorded successfully.",
       "vote_removed": "Vote removed successfully.",
       "response_submitted": "Seller response submitted successfully."
     },
     "moderation": {
-      "unauthorized": "Only authorized moderators can view audit logs.",
-      "address_required": "Moderator address is required."
+      "unauthorized": "Only authorized moderators can view audit logs. If you believe this is a mistake, contact support to request moderator access.",
+      "address_required": "Enter a moderator wallet address before continuing."
     }
   },
   "language": {

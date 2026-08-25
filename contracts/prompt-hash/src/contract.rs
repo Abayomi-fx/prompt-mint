@@ -50,12 +50,22 @@ impl PromptHashTrait for PromptHashContract {
         fee_wallet: Address,
         xlm_sac: Address,
     ) -> Result<(), Error> {
+        // #32 – the Soroban host only invokes `__constructor` once, as part
+        // of contract creation, so this can't normally be re-entered through
+        // a regular contract call. We still guard explicitly so that setup
+        // state (owner, fee wallet, fee bps, XLM SAC address, pause status,
+        // schema version) can never be silently overwritten or corrupted by
+        // a repeated/duplicate setup call, and so the failure mode is a
+        // clear, typed error instead of relying solely on host behavior.
+        ensure(!Storage::is_initialized(&env), Error::AlreadyInitialized)?;
+
         ownable::set_owner(&env, &admin);
         Storage::set_fee_wallet(&env, &fee_wallet);
         Storage::set_fee_percentage(&env, &DEFAULT_FEE_BPS);
         Storage::set_xlm_address(&env, &xlm_sac);
         Storage::set_pause_status(&env, false);
         Storage::set_schema_version(&env, CONTRACT_SCHEMA_VERSION);
+        Storage::set_initialized(&env);
         env.storage().instance().extend_ttl(
             super::storage::PERSISTENT_LIFETIME_THRESHOLD,
             super::storage::PERSISTENT_BUMP_AMOUNT,
