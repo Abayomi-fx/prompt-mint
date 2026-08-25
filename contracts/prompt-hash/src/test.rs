@@ -1,5 +1,6 @@
 use crate::contract::{PromptHashContract, PromptHashContractClient};
 use crate::mock_asset::FungibleTokenContract;
+use crate::storage::Storage;
 use crate::types::{Error, ListingConfig, Split};
 extern crate std;
 use soroban_sdk::{
@@ -10,6 +11,8 @@ use soroban_sdk::{
 #[derive(Clone, Debug, PartialEq)]
 struct PromptHashContext {
     admin: Address,
+    admin_two: Address,
+    admin_three: Address,
     fee_wallet: Address,
     xlm: Address,
     contract: Address,
@@ -19,19 +22,41 @@ fn setup(env: &Env) -> PromptHashContext {
     env.mock_all_auths();
 
     let admin = Address::generate(env);
+    let admin_two = Address::generate(env);
+    let admin_three = Address::generate(env);
     let fee_wallet = Address::generate(env);
     let xlm = env.register(FungibleTokenContract, (admin.clone(),));
     let contract = env.register(
         PromptHashContract,
-        (admin.clone(), fee_wallet.clone(), xlm.clone()),
+        (
+            admin.clone(),
+            admin_two.clone(),
+            admin_three.clone(),
+            fee_wallet.clone(),
+            xlm.clone(),
+        ),
     );
 
     PromptHashContext {
         admin,
+        admin_two,
+        admin_three,
         fee_wallet,
         xlm,
         contract,
     }
+}
+
+fn set_pause(client: &PromptHashContractClient<'_>, context: &PromptHashContext, paused: bool) {
+    client.set_pause_status(&paused, &context.admin, &context.admin_two);
+}
+
+fn set_fee_percentage(
+    client: &PromptHashContractClient<'_>,
+    context: &PromptHashContext,
+    fee_bps: u32,
+) {
+    client.set_fee_percentage(&fee_bps, &context.admin, &context.admin_two);
 }
 
 fn hash(env: &Env, byte: u8) -> BytesN<32> {
@@ -703,7 +728,7 @@ fn test_buy_prompt_with_zero_fee() {
     let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
 
     // Set fee to 0
-    client.set_fee_percentage(&0);
+    set_fee_percentage(&client, &context, 0);
 
     let creator = Address::generate(&env);
     let buyer = Address::generate(&env);
@@ -736,7 +761,7 @@ fn test_buy_prompt_with_max_fee() {
     let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
 
     // Set fee to 100% (10,000 BPS)
-    client.set_fee_percentage(&10_000);
+    set_fee_percentage(&client, &context, 10_000);
 
     let creator = Address::generate(&env);
     let buyer = Address::generate(&env);
@@ -759,6 +784,50 @@ fn test_buy_prompt_with_max_fee() {
 
     assert_eq!(xlm_client.balance(&creator), seller_start);
     assert_eq!(xlm_client.balance(&context.fee_wallet), fee_start + price);
+}
+
+#[test]
+fn test_sensitive_admin_functions_accept_two_distinct_configured_signers() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let replacement_wallet = Address::generate(&env);
+
+    client.set_fee_wallet(
+        &replacement_wallet,
+        &context.admin_two,
+        &context.admin_three,
+    );
+
+    assert_eq!(client.get_fee_wallet(), Some(replacement_wallet));
+}
+
+#[test]
+fn test_sensitive_admin_functions_reject_duplicate_or_unknown_approvers() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let outsider = Address::generate(&env);
+
+    let duplicate = client.try_set_pause_status(&true, &context.admin, &context.admin);
+    match duplicate {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!(
+            "expected Unauthorized for duplicate approvals, got {:?}",
+            other
+        ),
+    }
+    assert!(!client.is_paused());
+
+    let unknown = client.try_set_fee_percentage(&1_000, &context.admin, &outsider);
+    match unknown {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!(
+            "expected Unauthorized for unknown approver, got {:?}",
+            other
+        ),
+    }
+    assert_eq!(client.get_fee_percentage(), 500);
 }
 
 #[test]
@@ -858,13 +927,56 @@ fn test_arithmetic_safety_for_massive_prices() {
 }
 
 #[test]
+fn test_reentrant_mutations_are_rejected_while_cross_contract_guard_is_held() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Reentrancy Stress",
+        5_000,
+        &context.xlm,
+    );
+
+    env.as_contract(&context.contract, || {
+        Storage::set_reentrancy_guard(&env).unwrap();
+    });
+
+    for _ in 0..32 {
+        let update = client.try_update_prompt_price(&creator, &prompt_id, &6_000);
+        match update {
+            Err(Ok(Error::ReentrancyGuard)) => {}
+            other => panic!("expected reentrant update rejection, got {:?}", other),
+        }
+
+        let purchase =
+            client.try_buy_prompt(&buyer, &prompt_id, &None::<Address>, &5_000, &None::<Bytes>);
+        match purchase {
+            Err(Ok(Error::ReentrancyGuard)) => {}
+            other => panic!("expected reentrant purchase rejection, got {:?}", other),
+        }
+    }
+
+    assert_eq!(client.get_prompt(&prompt_id).price_stroops, 5_000);
+    assert!(!client.has_access(&buyer, &prompt_id));
+
+    env.as_contract(&context.contract, || {
+        Storage::clear_reentrancy_guard(&env);
+    });
+}
+
+#[test]
 fn test_global_pause_blocks_mutations_but_not_reads() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
     let creator = Address::generate(&env);
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
     assert!(client.is_paused());
 
     let create_res = client.try_create_prompt(
@@ -892,7 +1004,7 @@ fn test_global_pause_blocks_mutations_but_not_reads() {
         ),
     }
 
-    client.set_pause_status(&false);
+    set_pause(&client, &context, false);
     let prompt_id = create_prompt(
         &env,
         &client,
@@ -901,7 +1013,7 @@ fn test_global_pause_blocks_mutations_but_not_reads() {
         10_000,
         &context.xlm,
     );
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
 
     assert!(client.get_prompt(&prompt_id).id == prompt_id);
     assert!(client.has_access(&creator, &prompt_id));
@@ -1140,7 +1252,7 @@ fn test_create_prompt_blocked_when_paused() {
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
     assert!(client.is_paused());
 
     let creator = Address::generate(&env);
@@ -1191,7 +1303,7 @@ fn test_buy_prompt_blocked_when_paused() {
 
     fund_buyer(&xlm_client, &buyer, &context.contract, price);
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
 
     let result =
         client.try_buy_prompt(&buyer, &prompt_id, &None::<Address>, &price, &None::<Bytes>);
@@ -1217,7 +1329,7 @@ fn test_update_prompt_price_blocked_when_paused() {
         &context.xlm,
     );
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
 
     let result = client.try_update_prompt_price(&creator, &prompt_id, &9_000i128);
     match result {
@@ -1245,7 +1357,7 @@ fn test_read_only_methods_work_when_paused() {
         &context.xlm,
     );
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
 
     // These should all succeed while paused
     let prompt = client.get_prompt(&prompt_id);
@@ -1277,8 +1389,8 @@ fn test_unpause_restores_operations() {
         &context.xlm,
     );
 
-    client.set_pause_status(&true);
-    client.set_pause_status(&false);
+    set_pause(&client, &context, true);
+    set_pause(&client, &context, false);
     assert!(!client.is_paused());
 
     fund_buyer(&xlm_client, &buyer, &context.contract, price);
@@ -1288,9 +1400,8 @@ fn test_unpause_restores_operations() {
 
 // ─── Issue #28: Emergency Pause – additional coverage ─────────────────────────
 
-/// Verifies that set_pause_status is restricted to the owner. The #[only_owner]
-/// macro enforces this at the auth level; here we confirm the happy path works
-/// and that extend_listing is also blocked while paused.
+/// Confirms the multisig pause path works and that extend_listing is blocked
+/// while the contract is paused.
 #[test]
 fn test_extend_listing_blocked_when_paused() {
     let env: Env = Default::default();
@@ -1309,7 +1420,7 @@ fn test_extend_listing_blocked_when_paused() {
         &context.xlm,
     );
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
 
     let result = client.try_extend_listing(&creator, &prompt_id, &2_000u64);
     match result {
@@ -1331,7 +1442,7 @@ fn test_bulk_purchase_blocked_when_paused() {
     let buyer = Address::generate(&env);
     let prompt_id = create_prompt(&env, &client, &creator, "Bulk Pause", 1_000, &context.xlm);
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
 
     let mut ids = Vec::new(&env);
     ids.push_back(prompt_id);

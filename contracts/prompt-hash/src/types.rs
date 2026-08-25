@@ -62,6 +62,7 @@ pub enum DataKey {
     SubscriptionConfig(Address),
     Subscription(Address, Address),
     SubscriptionEligible(u128),
+    AdminSigners,
 }
 
 #[contracttype]
@@ -158,6 +159,8 @@ pub trait PromptHashTrait {
     fn __constructor(
         env: Env,
         admin: Address,
+        admin_two: Address,
+        admin_three: Address,
         fee_wallet: Address,
         xlm_sac: Address,
     ) -> Result<(), Error>;
@@ -281,13 +284,28 @@ pub trait PromptHashTrait {
     ) -> Result<Subscription, Error>;
     fn get_subscription_config(env: Env, creator: Address) -> Result<SubscriptionConfig, Error>;
     fn is_subscription_eligible(env: Env, prompt_id: u128) -> Result<bool, Error>;
-    fn set_fee_percentage(env: Env, new_fee_percentage: u32) -> Result<(), Error>;
-    fn set_fee_wallet(env: Env, new_fee_wallet: Address) -> Result<(), Error>;
+    fn set_fee_percentage(
+        env: Env,
+        new_fee_percentage: u32,
+        approver_a: Address,
+        approver_b: Address,
+    ) -> Result<(), Error>;
+    fn set_fee_wallet(
+        env: Env,
+        new_fee_wallet: Address,
+        approver_a: Address,
+        approver_b: Address,
+    ) -> Result<(), Error>;
     fn get_fee_percentage(env: Env) -> u32;
     fn get_fee_wallet(env: Env) -> Option<Address>;
     fn set_referral_percentage(env: Env, new_referral_percentage: u32) -> Result<(), Error>;
     fn get_referral_percentage(env: Env) -> u32;
-    fn set_pause_status(env: Env, paused: bool) -> Result<(), Error>;
+    fn set_pause_status(
+        env: Env,
+        paused: bool,
+        approver_a: Address,
+        approver_b: Address,
+    ) -> Result<(), Error>;
     fn is_paused(env: Env) -> bool;
     fn add_voucher(
         env: Env,
@@ -303,6 +321,11 @@ pub trait PromptHashTrait {
         hashed_code: BytesN<32>,
     ) -> Result<(), Error>;
     fn get_xlm_sac(env: Env) -> Option<Address>;
-    fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error>;
+    fn upgrade(
+        env: Env,
+        new_wasm_hash: BytesN<32>,
+        approver_a: Address,
+        approver_b: Address,
+    ) -> Result<(), Error>;
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error>;
 }

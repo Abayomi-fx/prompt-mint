@@ -11,6 +11,7 @@ import { governanceRouter } from "./routes/governanceRoutes"; // Issue #113
 import { runBackup, getBackupHealth } from "./services/backupService";
 import { runRestoreDrill } from "./services/restoreService";
 import { IndexerState } from "./models/IndexerState"; 
+import creatorReputationHandler from "./controllers/creatorReputationController";
 import cron from "node-cron";
 // import { startIndexer } from "./services/indexerService"; // TODO: Update path when ready
 
@@ -30,6 +31,7 @@ app.use("/api/chat", chatRouter);
 app.use("/api/webhooks", webhookRouter);
 app.use("/api/versions", versioningRouter);
 app.use("/api/governance", governanceRouter); // Issue #113
+app.get("/api/creators/reputation", creatorReputationHandler);
 
 app.post("/api/test-prompt", TestPromptProxy);
 

@@ -5,7 +5,7 @@ use super::types::{
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
-use stellar_macros::{default_impl, only_owner};
+use stellar_macros::only_owner;
 
 const DEFAULT_FEE_BPS: u32 = 500;
 const ROYALTY_BPS: u32 = 500;
@@ -29,10 +29,21 @@ impl PromptHashTrait for PromptHashContract {
     fn __constructor(
         env: Env,
         admin: Address,
+        admin_two: Address,
+        admin_three: Address,
         fee_wallet: Address,
         xlm_sac: Address,
     ) -> Result<(), Error> {
+        ensure(
+            admin != admin_two && admin != admin_three && admin_two != admin_three,
+            Error::Unauthorized,
+        )?;
         ownable::set_owner(&env, &admin);
+        let admin_signers = Vec::from_array(
+            &env,
+            [admin.clone(), admin_two.clone(), admin_three.clone()],
+        );
+        Storage::set_admin_signers(&env, &admin_signers);
         Storage::set_fee_wallet(&env, &fee_wallet);
         Storage::set_fee_percentage(&env, &DEFAULT_FEE_BPS);
         Storage::set_xlm_address(&env, &xlm_sac);
@@ -59,6 +70,7 @@ impl PromptHashTrait for PromptHashContract {
         listing: ListingConfig,
     ) -> Result<u128, Error> {
         creator.require_auth();
+        Storage::require_no_reentrancy(&env)?;
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
         validate_prompt_fields(
             &image_url,
@@ -72,7 +84,7 @@ impl PromptHashTrait for PromptHashContract {
         )?;
 
         // Validate that the asset address implements the token interface
-        token::Client::new(&env, &listing.asset).decimals();
+        validate_token_contract(&env, &listing.asset)?;
 
         // #49: optional listing expiry must be in the future when provided
         if listing.expires_at != 0 {
@@ -119,6 +131,7 @@ impl PromptHashTrait for PromptHashContract {
         active: bool,
     ) -> Result<(), Error> {
         creator.require_auth();
+        Storage::require_no_reentrancy(&env)?;
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
         let mut prompt = Storage::require_prompt(&env, prompt_id)?;
         ensure(prompt.creator == creator, Error::Unauthorized)?;
@@ -136,6 +149,7 @@ impl PromptHashTrait for PromptHashContract {
         max_supply: u64,
     ) -> Result<(), Error> {
         creator.require_auth();
+        Storage::require_no_reentrancy(&env)?;
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
         let mut prompt = Storage::require_prompt(&env, prompt_id)?;
         ensure(prompt.creator == creator, Error::Unauthorized)?;
@@ -151,6 +165,7 @@ impl PromptHashTrait for PromptHashContract {
         price_stroops: i128,
     ) -> Result<(), Error> {
         creator.require_auth();
+        Storage::require_no_reentrancy(&env)?;
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
         ensure(price_stroops > 0, Error::InvalidPrice)?;
 
@@ -258,6 +273,7 @@ impl PromptHashTrait for PromptHashContract {
         new_expires_at: u64,
     ) -> Result<(), Error> {
         creator.require_auth();
+        Storage::require_no_reentrancy(&env)?;
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
         let mut prompt = Storage::require_prompt(&env, prompt_id)?;
         ensure(prompt.creator == creator, Error::Unauthorized)?;
@@ -406,13 +422,14 @@ impl PromptHashTrait for PromptHashContract {
         active: bool,
     ) -> Result<(), Error> {
         creator.require_auth();
+        Storage::require_no_reentrancy(&env)?;
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
         ensure(
             duration_secs > 0 && duration_secs <= MAX_SUBSCRIPTION_DURATION_SECS,
             Error::InvalidSubscriptionDuration,
         )?;
         ensure(price > 0, Error::InvalidSubscriptionPrice)?;
-        token::Client::new(&env, &asset).decimals();
+        validate_token_contract(&env, &asset)?;
         Storage::save_subscription_config(
             &env,
             &SubscriptionConfig {
@@ -434,6 +451,7 @@ impl PromptHashTrait for PromptHashContract {
         eligible: bool,
     ) -> Result<(), Error> {
         creator.require_auth();
+        Storage::require_no_reentrancy(&env)?;
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
         let prompt = Storage::require_prompt(&env, prompt_id)?;
         ensure(prompt.creator == creator, Error::Unauthorized)?;
@@ -483,16 +501,28 @@ impl PromptHashTrait for PromptHashContract {
         Ok(Storage::is_subscription_eligible(&env, prompt_id))
     }
 
-    #[only_owner]
-    fn set_fee_percentage(env: Env, new_fee_percentage: u32) -> Result<(), Error> {
+    fn set_fee_percentage(
+        env: Env,
+        new_fee_percentage: u32,
+        approver_a: Address,
+        approver_b: Address,
+    ) -> Result<(), Error> {
+        require_admin_multisig(&env, &approver_a, &approver_b)?;
+        Storage::require_no_reentrancy(&env)?;
         ensure(new_fee_percentage <= MAX_BPS, Error::InvalidFeePercentage)?;
         Storage::set_fee_percentage(&env, &new_fee_percentage);
         Events::emit_fee_updated(&env, new_fee_percentage);
         Ok(())
     }
 
-    #[only_owner]
-    fn set_fee_wallet(env: Env, new_fee_wallet: Address) -> Result<(), Error> {
+    fn set_fee_wallet(
+        env: Env,
+        new_fee_wallet: Address,
+        approver_a: Address,
+        approver_b: Address,
+    ) -> Result<(), Error> {
+        require_admin_multisig(&env, &approver_a, &approver_b)?;
+        Storage::require_no_reentrancy(&env)?;
         Storage::set_fee_wallet(&env, &new_fee_wallet);
         Events::emit_fee_wallet_updated(&env, new_fee_wallet);
         Ok(())
@@ -510,8 +540,14 @@ impl PromptHashTrait for PromptHashContract {
         Storage::get_xlm_address(&env)
     }
 
-    #[only_owner]
-    fn set_pause_status(env: Env, paused: bool) -> Result<(), Error> {
+    fn set_pause_status(
+        env: Env,
+        paused: bool,
+        approver_a: Address,
+        approver_b: Address,
+    ) -> Result<(), Error> {
+        require_admin_multisig(&env, &approver_a, &approver_b)?;
+        Storage::require_no_reentrancy(&env)?;
         Storage::set_pause_status(&env, paused);
         Events::emit_contract_paused_state_changed(&env, paused);
         Ok(())
@@ -523,6 +559,7 @@ impl PromptHashTrait for PromptHashContract {
 
     #[only_owner]
     fn set_referral_percentage(env: Env, new_referral_percentage: u32) -> Result<(), Error> {
+        Storage::require_no_reentrancy(&env)?;
         ensure(
             new_referral_percentage <= MAX_BPS,
             Error::InvalidReferralPercentage,
@@ -543,6 +580,7 @@ impl PromptHashTrait for PromptHashContract {
         discount_bps: u32,
     ) -> Result<(), Error> {
         creator.require_auth();
+        Storage::require_no_reentrancy(&env)?;
         ensure(discount_bps <= MAX_BPS, Error::InvalidDiscountPercentage)?;
         let prompt = Storage::require_prompt(&env, prompt_id)?;
         ensure(prompt.creator == creator, Error::Unauthorized)?;
@@ -559,6 +597,7 @@ impl PromptHashTrait for PromptHashContract {
         hashed_code: BytesN<32>,
     ) -> Result<(), Error> {
         creator.require_auth();
+        Storage::require_no_reentrancy(&env)?;
         let prompt = Storage::require_prompt(&env, prompt_id)?;
         ensure(prompt.creator == creator, Error::Unauthorized)?;
 
@@ -567,8 +606,14 @@ impl PromptHashTrait for PromptHashContract {
         Ok(())
     }
 
-    #[only_owner]
-    fn upgrade(env: Env, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+    fn upgrade(
+        env: Env,
+        new_wasm_hash: BytesN<32>,
+        approver_a: Address,
+        approver_b: Address,
+    ) -> Result<(), Error> {
+        require_admin_multisig(&env, &approver_a, &approver_b)?;
+        Storage::require_no_reentrancy(&env)?;
         env.deployer().update_current_contract_wasm(new_wasm_hash);
         env.storage().instance().extend_ttl(
             super::storage::PERSISTENT_LIFETIME_THRESHOLD,
@@ -578,14 +623,33 @@ impl PromptHashTrait for PromptHashContract {
     }
 
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error> {
+        Storage::require_no_reentrancy(&env)?;
         Storage::extend_key_ttl(&env, &key);
         Ok(())
     }
 }
 
-#[default_impl]
 #[contractimpl]
-impl Ownable for PromptHashContract {}
+impl Ownable for PromptHashContract {
+    fn get_owner(env: &Env) -> Option<Address> {
+        ownable::get_owner(env)
+    }
+
+    fn transfer_ownership(env: &Env, new_owner: Address, live_until_ledger: u32) {
+        assert_no_reentrancy(env);
+        ownable::transfer_ownership(env, &new_owner, live_until_ledger);
+    }
+
+    fn accept_ownership(env: &Env) {
+        assert_no_reentrancy(env);
+        ownable::accept_ownership(env);
+    }
+
+    fn renounce_ownership(env: &Env) {
+        assert_no_reentrancy(env);
+        ownable::renounce_ownership(env);
+    }
+}
 
 // ─── Core buy logic (shared by buy_prompt and buy_prompts_bulk) ──────────────
 
@@ -829,12 +893,10 @@ fn execute_buy(
     );
 
     if payment_amount_stroops > required_price {
-        Events::emit_prompt_tipped(
-            env,
-            prompt_id,
-            buyer.clone(),
-            payment_amount_stroops - required_price,
-        );
+        let tip_amount = payment_amount_stroops
+            .checked_sub(required_price)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Events::emit_prompt_tipped(env, prompt_id, buyer.clone(), tip_amount);
     }
 
     Ok(())
@@ -902,5 +964,33 @@ fn ensure(condition: bool, error: Error) -> Result<(), Error> {
         Ok(())
     } else {
         Err(error)
+    }
+}
+
+fn require_admin_multisig(
+    env: &Env,
+    approver_a: &Address,
+    approver_b: &Address,
+) -> Result<(), Error> {
+    ensure(approver_a != approver_b, Error::Unauthorized)?;
+    ensure(
+        Storage::is_admin_signer(env, approver_a) && Storage::is_admin_signer(env, approver_b),
+        Error::Unauthorized,
+    )?;
+    approver_a.require_auth();
+    approver_b.require_auth();
+    Ok(())
+}
+
+fn validate_token_contract(env: &Env, asset: &Address) -> Result<(), Error> {
+    Storage::set_reentrancy_guard(env)?;
+    token::Client::new(env, asset).decimals();
+    Storage::clear_reentrancy_guard(env);
+    Ok(())
+}
+
+fn assert_no_reentrancy(env: &Env) {
+    if Storage::require_no_reentrancy(env).is_err() {
+        soroban_sdk::panic_with_error!(env, Error::ReentrancyGuard);
     }
 }

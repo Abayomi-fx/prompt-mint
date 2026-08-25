@@ -1,6 +1,7 @@
 import { scValToNative } from "@stellar/stellar-sdk";
 import { Server } from "@stellar/stellar-sdk/rpc";
 import Prompt from "../models/Prompt";
+import Purchase from "../models/Purchase";
 import User from "../models/User";
 import { IndexerState } from "../models/IndexerState";
 import { scanForSimilarity } from "./similarityDetection";
@@ -99,11 +100,26 @@ async function processEvent(event: any) {
     }
 
     case "PromptPurchased": {
-      const { prompt_id } = data;
+      const { prompt_id, buyer } = data;
       await Prompt.findOneAndUpdate(
         { onChainId: prompt_id.toString() },
         { $inc: { salesCount: 1 } },
       );
+      if (buyer && event.txHash) {
+        await Purchase.updateOne(
+          {
+            promptId: prompt_id.toString(),
+            buyerWallet: buyer.toLowerCase(),
+          },
+          {
+            $setOnInsert: {
+              versionIndex: 1,
+              txHash: event.txHash,
+            },
+          },
+          { upsert: true },
+        );
+      }
       break;
     }
 
