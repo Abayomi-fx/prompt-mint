@@ -1,14 +1,10 @@
 use super::events::Events;
 use super::storage::Storage;
 use super::types::{
-    Bundle, BundlePurchase, DataKey, Error, ListingConfig, Prompt, PromptHashTrait, Split,
-    MAX_BUNDLE_DESC_LEN, MAX_BUNDLE_ITEMS, MAX_BUNDLE_TITLE_LEN,
-    ClassificationOverride, DataKey, Error, ListingConfig, Prompt, PromptEncryptedPayload,
-    PromptHashTrait, Purchase, ReferralCode, Settlement, Split, Stake, Subscription,
-    SubscriptionConfig,
-    Bundle, ClassificationOverride, DataKey, Discount, Error, ListingConfig, Prompt,
-    PromptEncryptedPayload, PromptHashTrait, Purchase, ReferralCode, Settlement, Split, Stake,
-    Subscription, SubscriptionConfig, ALL_CLASSIFICATIONS, VALID_DISCLOSURE_FLAGS,
+    Bundle, BundlePurchase, ClassificationOverride, DataKey, Discount, Error, ListingConfig,
+    Prompt, PromptEncryptedPayload, PromptHashTrait, Purchase, ReferralCode, Settlement, Split,
+    Stake, Subscription, SubscriptionConfig, ALL_CLASSIFICATIONS, MAX_BUNDLE_DESC_LEN,
+    MAX_BUNDLE_ITEMS, MAX_BUNDLE_TITLE_LEN, VALID_DISCLOSURE_FLAGS,
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
@@ -355,128 +351,6 @@ impl PromptHashTrait for PromptHashContract {
             )?;
         }
         Ok(())
-    }
-
-    // ─── Issue #272: Prompt Bundling ─────────────────────────────────────────
-
-    fn create_bundle(
-        env: Env,
-        creator: Address,
-        prompt_ids: Vec<u128>,
-        price: i128,
-        asset: Address,
-    ) -> Result<u128, Error> {
-        creator.require_auth();
-        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
-        ensure(price > 0, Error::InvalidPrice)?;
-        ensure(!prompt_ids.is_empty(), Error::InvalidPrice)?;
-
-        // Validate the asset implements the token interface.
-        token::Client::new(&env, &asset).decimals();
-
-        // The creator must own/have created every prompt in the bundle.
-        for i in 0..prompt_ids.len() {
-            let pid = prompt_ids.get(i).unwrap();
-            let prompt = Storage::require_prompt(&env, pid)?;
-            ensure(prompt.creator == creator, Error::Unauthorized)?;
-        }
-
-        let bundle_id = Storage::get_bundle_counter(&env);
-        let bundle = Bundle {
-            id: bundle_id,
-            creator: creator.clone(),
-            prompt_ids,
-            price,
-            asset: asset.clone(),
-        };
-        Storage::save_bundle(&env, &bundle)?;
-        Events::emit_bundle_created(&env, bundle_id, creator, price, asset);
-        Ok(bundle_id)
-    }
-
-    fn purchase_bundle(
-        env: Env,
-        buyer: Address,
-        bundle_id: u128,
-        payment_amount: i128,
-    ) -> Result<(), Error> {
-        buyer.require_auth();
-        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
-
-        let bundle = Storage::get_bundle(&env, bundle_id).ok_or(Error::BundleNotFound)?;
-        ensure(bundle.creator != buyer, Error::CreatorCannotBuy)?;
-        ensure(payment_amount >= bundle.price, Error::InvalidPaymentAmount)?;
-
-        Storage::set_reentrancy_guard(&env)?;
-
-        let fee_wallet = Storage::get_fee_wallet(&env).ok_or(Error::FeeWalletNotSet)?;
-        let this_contract = env.current_contract_address();
-        let fee_percentage = Storage::get_fee_percentage(&env);
-        ensure(fee_percentage <= MAX_BPS, Error::InvalidFeePercentage)?;
-
-        // Split proceeds exactly like a single purchase: platform fee first,
-        // creator receives the remainder.
-        let fee_amount = bundle
-            .price
-            .checked_mul(fee_percentage as i128)
-            .ok_or(Error::ArithmeticOverflow)?
-            / MAX_BPS as i128;
-        let creator_amount = bundle
-            .price
-            .checked_sub(fee_amount)
-            .ok_or(Error::ArithmeticOverflow)?;
-
-        let asset_client = token::StellarAssetClient::new(&env, &bundle.asset);
-        if creator_amount > 0 {
-            asset_client.transfer_from(&this_contract, &buyer, &bundle.creator, &creator_amount);
-        }
-        if fee_amount > 0 {
-            asset_client.transfer_from(&this_contract, &buyer, &fee_wallet, &fee_amount);
-        }
-
-        // Grant the buyer an entitlement for every prompt in the bundle, reusing
-        // the single-purchase license-granting path.
-        for i in 0..bundle.prompt_ids.len() {
-            let pid = bundle.prompt_ids.get(i).unwrap();
-            if let Some(mut prompt) = Storage::get_prompt(&env, pid) {
-                prompt.sales_count = prompt
-                    .sales_count
-                    .checked_add(1)
-                    .ok_or(Error::ArithmeticOverflow)?;
-                Storage::update_prompt(&env, &prompt);
-                Storage::grant_purchase(
-                    &env,
-                    &prompt,
-                    &buyer,
-                    0,
-                    MAX_ACCESS_EXPIRY,
-                    Settlement {
-                        buyer_amount: 0,
-                        creator_amount: 0,
-                        platform_amount: 0,
-                        referrer: None,
-                        referrer_amount: 0,
-                        split_amount: 0,
-                    },
-                );
-            }
-        }
-
-        Storage::clear_reentrancy_guard(&env);
-        Events::emit_bundle_purchased(
-            &env,
-            bundle_id,
-            buyer,
-            bundle.creator,
-            bundle.price,
-            creator_amount,
-            fee_amount,
-        );
-        Ok(())
-    }
-
-    fn get_bundle(env: Env, bundle_id: u128) -> Result<Bundle, Error> {
-        Storage::get_bundle(&env, bundle_id).ok_or(Error::BundleNotFound)
     }
 
     fn transfer_license(
@@ -887,23 +761,20 @@ impl PromptHashTrait for PromptHashContract {
         // Field length validation
         ensure(
             title.len() > 0 && title.len() <= MAX_BUNDLE_TITLE_LEN,
-            Error::InvalidBundleTitleLength,
+            Error::InvalidFieldLength,
         )?;
         ensure(
             description.len() <= MAX_BUNDLE_DESC_LEN,
-            Error::InvalidBundleDescriptionLength,
+            Error::InvalidFieldLength,
         )?;
         ensure(
             image_url.len() <= MAX_IMAGE_URL_LEN,
-            Error::InvalidImageUrlLength,
+            Error::InvalidFieldLength,
         )?;
         ensure(price_stroops > 0, Error::InvalidPrice)?;
         // At least one item, at most MAX_BUNDLE_ITEMS
-        ensure(prompt_ids.len() > 0, Error::BundleEmpty)?;
-        ensure(
-            prompt_ids.len() <= MAX_BUNDLE_ITEMS,
-            Error::InvalidBundleItemCount,
-        )?;
+        ensure(prompt_ids.len() > 0, Error::InvalidPrice)?;
+        ensure(prompt_ids.len() <= MAX_BUNDLE_ITEMS, Error::InvalidPrice)?;
 
         // Validate token interface
         token::Client::new(&env, &asset).decimals();
@@ -914,12 +785,10 @@ impl PromptHashTrait for PromptHashContract {
             let prompt = Storage::require_prompt(&env, pid)?;
             ensure(prompt.creator == creator, Error::Unauthorized)?;
             ensure(prompt.active, Error::PromptInactive)?;
+            ensure(prompt.asset == asset, Error::InvalidPrice)?;
             // Check for duplicates within the supplied list
             for j in (i + 1)..prompt_ids.len() {
-                ensure(
-                    prompt_ids.get(j).unwrap() != pid,
-                    Error::PromptAlreadyInBundle,
-                )?;
+                ensure(prompt_ids.get(j).unwrap() != pid, Error::InvalidPrice)?;
             }
         }
 
@@ -958,19 +827,20 @@ impl PromptHashTrait for PromptHashContract {
         // Capacity check
         ensure(
             bundle.prompt_ids.len() < MAX_BUNDLE_ITEMS,
-            Error::InvalidBundleItemCount,
+            Error::InvalidPrice,
         )?;
 
         // Prompt must exist, be active, and belong to this creator
         let prompt = Storage::require_prompt(&env, prompt_id)?;
         ensure(prompt.creator == creator, Error::Unauthorized)?;
         ensure(prompt.active, Error::PromptInactive)?;
+        ensure(prompt.asset == bundle.asset, Error::InvalidPrice)?;
 
         // Must not already be a member
         for i in 0..bundle.prompt_ids.len() {
             ensure(
                 bundle.prompt_ids.get(i).unwrap() != prompt_id,
-                Error::PromptAlreadyInBundle,
+                Error::InvalidPrice,
             )?;
         }
 
@@ -1001,9 +871,9 @@ impl PromptHashTrait for PromptHashContract {
             }
             idx += 1;
         }
-        ensure(found, Error::PromptNotInBundle)?;
+        ensure(found, Error::PromptNotFound)?;
         // Bundle must retain at least one item
-        ensure(bundle.prompt_ids.len() > 0, Error::BundleEmpty)?;
+        ensure(bundle.prompt_ids.len() > 0, Error::InvalidPrice)?;
 
         Storage::update_bundle(&env, &bundle);
         Events::emit_bundle_item_removed(&env, bundle_id, prompt_id);
@@ -1056,16 +926,42 @@ impl PromptHashTrait for PromptHashContract {
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
 
         let mut bundle = Storage::require_bundle(&env, bundle_id)?;
-        ensure(bundle.active, Error::BundleInactive)?;
+        ensure(bundle.active, Error::PromptInactive)?;
         ensure(bundle.creator != buyer, Error::CreatorCannotBuy)?;
         ensure(
             !Storage::has_bundle_purchase(&env, bundle_id, &buyer),
-            Error::BundleAlreadyPurchased,
+            Error::AlreadyPurchased,
         )?;
         ensure(
             payment_amount_stroops >= bundle.price_stroops,
             Error::InvalidPaymentAmount,
         )?;
+
+        ensure(bundle.prompt_ids.len() > 0, Error::InvalidPrice)?;
+
+        let now = env.ledger().timestamp();
+        let mut prompts = Vec::new(&env);
+        for i in 0..bundle.prompt_ids.len() {
+            let prompt_id = bundle.prompt_ids.get(i).unwrap();
+            let prompt = Storage::require_prompt(&env, prompt_id)?;
+            ensure(prompt.creator == bundle.creator, Error::Unauthorized)?;
+            ensure(prompt.asset == bundle.asset, Error::InvalidPrice)?;
+            ensure(prompt.active, Error::PromptInactive)?;
+            ensure(
+                !Storage::has_active_purchase(&env, prompt_id, &buyer, now),
+                Error::AlreadyPurchased,
+            )?;
+            if prompt.expires_at != 0 {
+                ensure(prompt.expires_at >= now, Error::ListingExpired)?;
+            }
+            if prompt.max_supply > 0 {
+                ensure(
+                    prompt.sales_count < prompt.max_supply,
+                    Error::MaxSupplyReached,
+                )?;
+            }
+            prompts.push_back(prompt);
+        }
 
         // Validate referrer
         if let Some(ref r) = referrer {
@@ -1080,6 +976,11 @@ impl PromptHashTrait for PromptHashContract {
         let fee_wallet = Storage::get_fee_wallet(&env).ok_or(Error::FeeWalletNotSet)?;
         let fee_percentage = Storage::get_fee_percentage(&env);
         let referral_percentage = Storage::get_referral_percentage(&env);
+        ensure(fee_percentage <= MAX_BPS, Error::InvalidFeePercentage)?;
+        ensure(
+            referral_percentage <= MAX_BPS,
+            Error::InvalidReferralPercentage,
+        )?;
         let this_contract = env.current_contract_address();
         let asset_client = token::StellarAssetClient::new(&env, &bundle.asset);
         let price = bundle.price_stroops;
@@ -1103,6 +1004,7 @@ impl PromptHashTrait for PromptHashContract {
             .ok_or(Error::ArithmeticOverflow)?
             .checked_sub(referral_amount)
             .ok_or(Error::ArithmeticOverflow)?;
+        ensure(creator_amount >= 0, Error::InvalidFeePercentage)?;
 
         // Route payments
         asset_client.transfer_from(&this_contract, &buyer, &bundle.creator, &creator_amount);
@@ -1115,13 +1017,73 @@ impl PromptHashTrait for PromptHashContract {
             }
         }
 
+        let item_count = prompts.len() as i128;
+        let per_item_price = price / item_count;
+        let price_remainder = price % item_count;
+        let per_item_creator_amount = creator_amount / item_count;
+        let creator_remainder = creator_amount % item_count;
+        let per_item_fee_amount = fee_amount / item_count;
+        let fee_remainder = fee_amount % item_count;
+        let per_item_referral_amount = referral_amount / item_count;
+        let referral_remainder = referral_amount % item_count;
+        for i in 0..prompts.len() {
+            let mut prompt = prompts.get(i).unwrap();
+            let item_price = if i == 0 {
+                per_item_price
+                    .checked_add(price_remainder)
+                    .ok_or(Error::ArithmeticOverflow)?
+            } else {
+                per_item_price
+            };
+            let item_creator_amount = if i == 0 {
+                per_item_creator_amount
+                    .checked_add(creator_remainder)
+                    .ok_or(Error::ArithmeticOverflow)?
+            } else {
+                per_item_creator_amount
+            };
+            let item_fee_amount = if i == 0 {
+                per_item_fee_amount
+                    .checked_add(fee_remainder)
+                    .ok_or(Error::ArithmeticOverflow)?
+            } else {
+                per_item_fee_amount
+            };
+            let item_referral_amount = if i == 0 {
+                per_item_referral_amount
+                    .checked_add(referral_remainder)
+                    .ok_or(Error::ArithmeticOverflow)?
+            } else {
+                per_item_referral_amount
+            };
+            prompt.sales_count = prompt
+                .sales_count
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?;
+            Storage::update_prompt(&env, &prompt);
+            Storage::grant_purchase(
+                &env,
+                &prompt,
+                &buyer,
+                item_price,
+                MAX_ACCESS_EXPIRY,
+                Settlement {
+                    buyer_amount: item_price,
+                    creator_amount: item_creator_amount,
+                    platform_amount: item_fee_amount,
+                    referrer: referrer.clone(),
+                    referrer_amount: item_referral_amount,
+                    split_amount: 0,
+                },
+            );
+        }
+
         // Record purchase with snapshot of current prompt_ids
-        let now = env.ledger().timestamp();
         let purchase = BundlePurchase {
             bundle_id,
             owner: buyer.clone(),
             original_creator: bundle.creator.clone(),
-            paid_price: payment_amount_stroops,
+            paid_price: price,
             purchased_at: now,
             purchased_prompt_ids: bundle.prompt_ids.clone(),
         };
@@ -1136,14 +1098,7 @@ impl PromptHashTrait for PromptHashContract {
 
         Storage::clear_reentrancy_guard(&env);
 
-        Events::emit_bundle_purchased(
-            &env,
-            bundle_id,
-            buyer,
-            bundle.creator,
-            payment_amount_stroops,
-            referrer,
-        );
+        Events::emit_bundle_purchased(&env, bundle_id, buyer, bundle.creator, price, referrer);
         Ok(())
     }
 
@@ -1169,6 +1124,8 @@ impl PromptHashTrait for PromptHashContract {
 
     fn get_bundles_by_buyer(env: Env, buyer: Address) -> Result<Vec<Bundle>, Error> {
         Ok(Storage::get_bundles_by_buyer(&env, &buyer))
+    }
+
     fn get_schema_version(env: Env) -> u32 {
         Storage::get_schema_version(&env)
     }

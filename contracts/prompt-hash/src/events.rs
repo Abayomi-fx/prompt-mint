@@ -145,66 +145,6 @@ struct SubscriptionRenewed {
     pub renewal_count: u32,
 }
 
-// ─── #272: Prompt Bundle Events ───────────────────────────────────────────
-
-#[contractevent]
-struct BundleCreated {
-    #[topic]
-    pub bundle_id: u128,
-    pub creator: Address,
-    pub price: i128,
-    pub asset: Address,
-}
-
-#[contractevent]
-struct BundlePurchased {
-    #[topic]
-    pub bundle_id: u128,
-    pub buyer: Address,
-    pub creator: Address,
-    pub price: i128,
-    pub creator_amount: i128,
-    pub platform_amount: i128,
-}
-
-impl Events {
-    pub fn emit_bundle_created(
-        env: &Env,
-        bundle_id: u128,
-        creator: Address,
-        price: i128,
-        asset: Address,
-    ) {
-        BundleCreated {
-            bundle_id,
-            creator,
-            price,
-            asset,
-        }
-        .publish(env);
-    }
-
-    pub fn emit_bundle_purchased(
-        env: &Env,
-        bundle_id: u128,
-        buyer: Address,
-        creator: Address,
-        price: i128,
-        creator_amount: i128,
-        platform_amount: i128,
-    ) {
-        BundlePurchased {
-            bundle_id,
-            buyer,
-            creator,
-            price,
-            creator_amount,
-            platform_amount,
-        }
-        .publish(env);
-    }
-}
-
 pub struct Events;
 
 impl Events {
