@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 
 export interface TransactionProgressProps {
   /** The step currently in progress, or null if not yet started. */
-  currentStepId: TransactionStepId | null;
+  currentStepId?: TransactionStepId | null;
   /** True if the current step failed. */
   hasError?: boolean;
   /** Optional message to show alongside a failed step. */
@@ -25,7 +25,7 @@ export interface TransactionProgressProps {
  * transitions reported by the transaction flow, not a fake timer.
  */
 export function TransactionProgress({
-  currentStepId,
+  currentStepId = null,
   hasError = false,
   errorMessage,
   className,

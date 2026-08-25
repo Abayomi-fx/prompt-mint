@@ -63,9 +63,6 @@ export const ErrorCode = {
 
   /** The version requested via Accept-Version is not supported by this server. */
   UNSUPPORTED_VERSION: "UNSUPPORTED_VERSION",
-
-  /** The input value provided in the request body or query is invalid. */
-  INVALID_INPUT: "INVALID_INPUT",
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];
@@ -132,6 +129,4 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   TEMPORARY_FAILURE: "A temporary server error occurred. Please try again in a moment — your data has not been lost.",
   UNSUPPORTED_VERSION:
     "Your app version is out of date for this request. Please refresh or update the app and try again.",
-  // NOTE: INVALID_INPUT is used by image validation; keep it in sync with ErrorCode above.
-  INVALID_INPUT: "The input provided is invalid. Please check the value and try again.",
 };

@@ -30,6 +30,8 @@ Core contract methods:
 - `set_fee_percentage`
 - `set_fee_wallet`
 
+> For a comprehensive technical reference on storage layout, Mermaid sequence diagrams, basis point fee mathematics, two-step timelocked upgrade mechanisms, and the complete event schema, see the [Smart Contract Architecture Deep-Dive](./smart-contract-architecture.md).
+
 ## 2. Frontend Application Layer
 
 Path: `src`
