@@ -8,6 +8,7 @@ import { asyncRoute } from "../lib/asyncRoute";
 import { validateWebhookUrl } from "../lib/validateWebhookUrl";
 import { sendTestEvent, replayDeadLetter } from "../services/webhookDispatcher";
 import { isValidAdminToken } from "../services/adminAuth";
+import { recordAuditEvent } from "../services/auditTrail";
 
 /**
  * Real contract events a creator can subscribe a webhook to (issue #23:
@@ -206,6 +207,7 @@ export const ReplayWebhookDeadLetter = asyncRoute(async (req, res) => {
   await connectDb();
 
   if (!isValidAdminToken(req.headers.authorization, process.env.ADMIN_API_TOKEN)) {
+    void recordAuditEvent({ action: "auth_failure", result: "failure", reason: "invalid_admin_token", clientIp: req.ip });
     throw new AppError("Unauthorized: a valid admin token is required", 401);
   }
 
@@ -216,6 +218,7 @@ export const ReplayWebhookDeadLetter = asyncRoute(async (req, res) => {
 
   try {
     const result = await replayDeadLetter(id);
+    void recordAuditEvent({ action: "admin_action", result: "success", reason: "replay_webhook_dead_letter", clientIp: req.ip, metadata: { deadLetterId: id } });
     res.status(200).json(result);
   } catch (err) {
     throw new AppError(err instanceof Error ? err.message : "Replay failed.", 404, "NOT_FOUND");

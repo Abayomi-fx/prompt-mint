@@ -19,8 +19,21 @@ import creatorReputationHandler from "./controllers/creatorReputationController"
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
 import { idempotency } from "./middleware/idempotency";
+import type { Server } from "node:http";
+import type { Socket } from "node:net";
+import { closeDb } from "./db/connectDb";
+import { closeRedis } from "./lib/redisConnection";
+import { flushPendingWebhooks } from "./services/webhookDispatcher";
+import { closeCache } from "./services/cacheService";
 
 const app = express();
+
+let acceptingRequests = true;
+app.use((req, res, next) => {
+  if (acceptingRequests) return next();
+  res.setHeader("Connection", "close");
+  res.status(503).json({ error: "Server is shutting down. Please retry shortly." });
+});
 
 const port = 5000;
 
@@ -68,7 +81,7 @@ app.get("/health", async (req, res) => {
   });
 });
 
-app.listen(port, () => {
+export const server = app.listen(port, () => {
   console.log(`Listening on port ${port}`);
 
   // STARTS THE INDEXER HERE
@@ -101,3 +114,53 @@ app.listen(port, () => {
     }
   }
 });
+
+const sockets = new Set<Socket>();
+server.on("connection", (socket) => {
+  sockets.add(socket);
+  socket.on("close", () => sockets.delete(socket));
+});
+
+function waitForServerClose(httpServer: Server, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (closed: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolve(closed);
+    };
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    httpServer.close((err) => finish(!err));
+    httpServer.closeIdleConnections?.();
+  });
+}
+
+let shutdownPromise: Promise<void> | null = null;
+
+/** Stop traffic, drain active work for up to 30 seconds, then close pools. */
+export function gracefulShutdown(timeoutMs = 30_000): Promise<void> {
+  if (shutdownPromise) return shutdownPromise;
+  shutdownPromise = (async () => {
+    acceptingRequests = false;
+    const deadline = Date.now() + timeoutMs;
+    console.log("[shutdown] Draining HTTP connections and webhook deliveries.");
+    const httpDrained = await waitForServerClose(server, Math.max(0, deadline - Date.now()));
+    const webhooksFlushed = await flushPendingWebhooks(Math.max(0, deadline - Date.now()));
+    if (!httpDrained || !webhooksFlushed) {
+      console.warn("[shutdown] Drain deadline reached; closing remaining sockets.");
+      for (const socket of sockets) socket.destroy();
+    }
+    await Promise.allSettled([closeDb(), closeRedis(), closeCache()]);
+    console.log("[shutdown] Database and Redis connections closed.");
+  })();
+  return shutdownPromise;
+}
+
+function handleSignal(signal: "SIGTERM" | "SIGINT") {
+  console.log(`[shutdown] Received ${signal}.`);
+  void gracefulShutdown().finally(() => process.exit(0));
+}
+
+process.once("SIGTERM", () => handleSignal("SIGTERM"));
+process.once("SIGINT", () => handleSignal("SIGINT"));
