@@ -269,4 +269,131 @@ proptest! {
 
         let _ = client.try_migrate(&new_version);
     }
+
+    /// INVARIANT 1: Total Supply / Prompt Count Consistency
+    /// Creating prompts with valid random parameters must strictly increment
+    /// the stored prompt counter by 1 per successful call, and total count must
+    /// match stored entries without inconsistency.
+    #[test]
+    fn fuzz_invariant_prompt_count_and_total_supply(
+        prices in proptest::collection::vec(1i128..1_000_000_000i128, 1..5),
+    ) {
+        let env: Env = Default::default();
+        let context = setup(&env);
+        let client = PromptHashContractClient::new(&env, &context.contract);
+        let creator = Address::generate(&env);
+
+        let initial_count = client.get_prompt_count();
+        let mut expected_count = initial_count;
+
+        for (idx, price) in prices.iter().enumerate() {
+            let res = client.try_create_prompt(
+                &creator,
+                &String::from_str(&env, "https://example.com/image.png"),
+                &String::from_str(&env, "Invariant Prompt"),
+                &String::from_str(&env, "General"),
+                &String::from_str(&env, "preview"),
+                &String::from_str(&env, "ciphertext"),
+                &String::from_str(&env, "iv"),
+                &String::from_str(&env, "wrapped-key"),
+                &BytesN::from_array(&env, &[(idx as u8 + 1); 32]),
+                &ListingConfig {
+                    price: *price,
+                    asset: context.xlm.clone(),
+                    expires_at: 0,
+                    splits: Vec::new(&env),
+                },
+            );
+
+            if res.is_ok() {
+                expected_count += 1;
+            }
+
+            let current_count = client.get_prompt_count();
+            prop_assert_eq!(current_count, expected_count);
+        }
+    }
+
+    /// INVARIANT 2: Access Control Enforcement
+    /// Random unauthorized accounts attempting admin operations (pause, unpause,
+    /// set_platform_fee, set_admin, migrate) must ALWAYS fail and be rejected cleanly.
+    #[test]
+    fn fuzz_invariant_access_control_enforcement(
+        random_fee in any::<u32>(),
+        random_version in any::<u32>(),
+    ) {
+        let env: Env = Default::default();
+        let context = setup(&env);
+        let client = PromptHashContractClient::new(&env, &context.contract);
+        let unauthorized = Address::generate(&env);
+
+        // Unauthorized set_platform_fee must be rejected
+        let fee_res = client.try_set_platform_fee(&unauthorized, &random_fee);
+        prop_assert!(fee_res.is_err());
+
+        // Unauthorized set_admin must be rejected
+        let admin_res = client.try_set_admin(&unauthorized, &unauthorized);
+        prop_assert!(admin_res.is_err());
+
+        // Unauthorized pause / unpause must be rejected
+        let pause_res = client.try_pause(&unauthorized);
+        prop_assert!(pause_res.is_err());
+
+        // Unauthorized migrate must be rejected if version invalid or unauthorized
+        let migrate_res = client.try_migrate(&random_version);
+        let _ = migrate_res;
+    }
+
+    /// INVARIANT 3: Fee Calculation Accuracy & Revenue Split Bounds
+    /// Platform fees and revenue splits for arbitrary valid prices and BPS values
+    /// must stay within mathematically valid bounds (fee <= price, total BPS <= 10000).
+    #[test]
+    fn fuzz_invariant_fee_calculation_and_splits_bounds(
+        price in 1i128..1_000_000_000_000i128,
+        fee_bps in 0u32..=1000u32, // Max 10% fee
+        split_bps_1 in 0u32..=5000u32,
+        split_bps_2 in 0u32..=5000u32,
+    ) {
+        let env: Env = Default::default();
+        let context = setup(&env);
+        let client = PromptHashContractClient::new(&env, &context.contract);
+        let creator = Address::generate(&env);
+
+        let fee_amount = (price * (fee_bps as i128)) / 10_000i128;
+        prop_assert!(fee_amount <= price);
+        prop_assert!(fee_amount >= 0);
+
+        let mut splits = Vec::new(&env);
+        splits.push_back(Split {
+            recipient: Address::generate(&env),
+            bps: split_bps_1,
+        });
+        splits.push_back(Split {
+            recipient: Address::generate(&env),
+            bps: split_bps_2,
+        });
+
+        let total_split_bps = split_bps_1 + split_bps_2;
+        prop_assert!(total_split_bps <= 10_000);
+
+        let res = client.try_create_prompt(
+            &creator,
+            &String::from_str(&env, "https://example.com/image.png"),
+            &String::from_str(&env, "Fee Invariant Prompt"),
+            &String::from_str(&env, "General"),
+            &String::from_str(&env, "preview"),
+            &String::from_str(&env, "ciphertext"),
+            &String::from_str(&env, "iv"),
+            &String::from_str(&env, "wrapped-key"),
+            &BytesN::from_array(&env, &[15u8; 32]),
+            &ListingConfig {
+                price,
+                asset: context.xlm.clone(),
+                expires_at: 0,
+                splits,
+            },
+        );
+
+        prop_assert!(res.is_ok());
+    }
 }

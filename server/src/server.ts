@@ -18,6 +18,7 @@ import { IndexerState } from "./models/IndexerState";
 import creatorReputationHandler from "./controllers/creatorReputationController";
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
+import { docsRouter } from "./routes/docsRoutes";
 import { idempotency } from "./middleware/idempotency";
 
 const app = express();
@@ -38,6 +39,8 @@ app.use(jsonBodyTooLargeHandler);
 app.use(idempotency());
 
 app.use(robotsRouter);
+
+app.use("/api/docs", docsRouter);
 
 app.use("/api/improve-proxy", proxyrouter);
 
