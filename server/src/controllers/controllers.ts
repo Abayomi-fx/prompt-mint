@@ -8,11 +8,12 @@ import { openai } from "@ai-sdk/openai";
 import {
   validateListingMetadata,
 } from "../services/listingValidation";
-import { cacheGet, cacheSet, cacheDel, cacheDelPattern, CACHE_KEYS } from "../services/cacheService";
+import { cacheGet, cacheSet, CACHE_KEYS, PROMPT_METADATA_TTL_SECONDS, invalidatePromptMetadata } from "../services/cacheService";
 import { getCircuitBreaker } from "../services/circuitBreaker";
 import { isValidAdminToken } from "../services/adminAuth";
 import { AppError } from "../lib/AppError";
 import { asyncRoute } from "../lib/asyncRoute";
+import { recordAuditEvent } from "../services/auditTrail";
 
 const API_BASE_URL = "https://secret-ai-gateway.onrender.com";
 
@@ -119,7 +120,7 @@ export const CreatePrompt = asyncRoute(async (req, res) => {
   await newPrompt.save();
 
   // Bust every listing cache variant since a new prompt was created
-  await cacheDelPattern("prompts:list:*");
+  await invalidatePromptMetadata(String(newPrompt._id));
 
   // Populate the owner details in the response
   const populatedPrompt = await newPrompt.populate(
@@ -164,7 +165,7 @@ export const GetPrompts = asyncRoute(async (req, res) => {
     .populate("owner", "username walletAddress")
     .sort({ createdAt: -1 });
 
-  await cacheSet(cacheKey, JSON.stringify(prompts), 60);
+  await cacheSet(cacheKey, JSON.stringify(prompts), PROMPT_METADATA_TTL_SECONDS);
 
   res.json(prompts);
 });
@@ -188,10 +189,9 @@ export const GetPromptDetail = asyncRoute(async (req, res) => {
     throw new AppError("Prompt not found.", 404, "NOT_FOUND");
   }
 
-  // Every mutation that touches this prompt (publish/archive/tags/update)
-  // already busts CACHE_KEYS.promptDetail(id) on write — see the cacheDel
-  // calls elsewhere in this file — so a short TTL here is just a backstop.
-  await cacheSet(cacheKey, JSON.stringify(prompt), 60);
+  // Cache-aside: Redis miss falls through to the canonical indexed contract
+  // state in Mongo, then stores the refreshed metadata for five minutes.
+  await cacheSet(cacheKey, JSON.stringify(prompt), PROMPT_METADATA_TTL_SECONDS);
 
   res.json(prompt);
 });
@@ -330,6 +330,7 @@ export const GetPromptReports = asyncRoute(async (req, res) => {
   await connectDb();
 
   if (!isValidAdminToken(req.headers.authorization, process.env.ADMIN_API_TOKEN)) {
+    void recordAuditEvent({ action: "auth_failure", result: "failure", reason: "invalid_admin_token", clientIp: req.ip });
     throw new AppError("Unauthorized: a valid admin token is required", 401);
   }
 
@@ -535,10 +536,7 @@ export const PublishPrompt = asyncRoute(async (req, res) => {
   prompt.isActive = true;
   await prompt.save();
 
-  await Promise.all([
-    cacheDelPattern("prompts:list:*"),
-    cacheDel(CACHE_KEYS.promptDetail(id)),
-  ]);
+  await invalidatePromptMetadata(id);
 
   res.json({ success: true, prompt });
 });
@@ -557,10 +555,7 @@ export const ArchivePrompt = asyncRoute(async (req, res) => {
     throw new AppError("Prompt not found.", 404);
   }
 
-  await Promise.all([
-    cacheDelPattern("prompts:list:*"),
-    cacheDel(CACHE_KEYS.promptDetail(id)),
-  ]);
+  await invalidatePromptMetadata(id);
 
   res.json({ success: true, prompt });
 });
@@ -592,10 +587,7 @@ export const SubmitForReview = asyncRoute(async (req, res) => {
   prompt.reviewedAt = new Date();
   await prompt.save();
 
-  await Promise.all([
-    cacheDelPattern("prompts:list:*"),
-    cacheDel(CACHE_KEYS.promptDetail(id)),
-  ]);
+  await invalidatePromptMetadata(id);
 
   res.json({ success: true, prompt, checklist });
 });
@@ -639,7 +631,7 @@ export const AddTags = asyncRoute(async (req, res) => {
   prompt.tags = updatedTags;
   await prompt.save();
 
-  await cacheDel(CACHE_KEYS.promptDetail(id));
+  await invalidatePromptMetadata(id);
 
   res.json({ success: true, tags: prompt.tags });
 });
@@ -661,7 +653,7 @@ export const RemoveTags = asyncRoute(async (req, res) => {
   prompt.tags = (prompt.tags || []).filter((tag) => !tags.includes(tag));
   await prompt.save();
 
-  await cacheDel(CACHE_KEYS.promptDetail(id));
+  await invalidatePromptMetadata(id);
 
   res.json({ success: true, tags: prompt.tags });
 });

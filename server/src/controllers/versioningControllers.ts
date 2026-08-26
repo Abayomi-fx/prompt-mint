@@ -10,6 +10,8 @@ import { AppError } from "../lib/AppError";
 import { asyncRoute } from "../lib/asyncRoute";
 import { recordMarketplaceTransaction } from "../services/transactionHistoryService";
 import { enqueuePromptUpdateNotifications } from "../services/notificationService";
+import { invalidatePromptMetadata } from "../services/cacheService";
+import { recordLargeTransaction } from "../services/auditTrail";
 
 function getWalletAddress(req: Request): string | null {
   const candidate =
@@ -70,6 +72,7 @@ export const PostPromptUpdate = asyncRoute(async (req, res) => {
     });
 
     await Prompt.findByIdAndUpdate(promptId, { currentVersionIndex: nextVersion });
+    await invalidatePromptMetadata(promptId);
 
     enqueuePromptUpdateNotifications({
       promptId,
@@ -142,6 +145,7 @@ export const PublishPromptVersion = asyncRoute(async (req, res) => {
     });
 
     await Prompt.findByIdAndUpdate(promptId, { currentVersionIndex: nextVersion });
+    await invalidatePromptMetadata(promptId);
 
     enqueuePromptUpdateNotifications({
       promptId,
@@ -307,6 +311,11 @@ export const RecordPurchase = asyncRoute(async (req, res) => {
       txHash: txHash ?? "",
       occurredAt: purchase.createdAt ?? new Date(),
     });
+    const threshold = Number(process.env.AUDIT_LARGE_TRANSACTION_STROOPS ?? 100_000_000);
+    const amountStroops = Math.round(Number(prompt.price) * 10_000_000);
+    if (amountStroops >= threshold) {
+      void recordLargeTransaction({ promptId: String(prompt._id), walletAddress: buyerWallet, amountStroops, txHash: txHash ?? null });
+    }
   }
 
   res.status(201).json({ message: "Purchase recorded.", versionIndex: purchase.versionIndex });
