@@ -1,7 +1,10 @@
 import pino from "pino";
 
-const isProduction = process.env.NODE_ENV === "production";
-const isTest = process.env.NODE_ENV === "test";
+const isTest =
+  process.env.NODE_ENV === "test" ||
+  process.env.VITEST === "true" ||
+  Boolean(import.meta.env?.VITEST) ||
+  import.meta.env?.MODE === "test";
 
 // Fields to redact from logs for privacy and security
 const redactFields = [
@@ -26,15 +29,6 @@ export const logger = pino({
     paths: redactFields,
     censor: "[REDACTED]",
   },
-  transport: (isProduction || isTest)
-    ? undefined
-    : {
-        target: "pino-pretty",
-        options: {
-          colorize: true,
-          ignore: "pid,hostname",
-        },
-      },
   base: {
     env: process.env.NODE_ENV,
     service: "prompt-hash-unlock",

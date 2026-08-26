@@ -126,16 +126,18 @@ Before initiating any deployment to staging or production:
 ## 3. Rollback Procedures
 
 ### 3.1 Frontend & API Instant Rollback
-Vercel supports atomic instant rollbacks without rebuilding:
-1. Identify previous stable deployment ID:
+Vercel supports atomic instant rollbacks without rebuilding. Prefer the automated path first:
+
+1. On a failed production deploy, `.github/workflows/auto-rollback.yml` selects the last READY production deployment with a different SHA, rolls it back, notifies Slack/Discord, and opens a GitHub incident issue. See [Automated rollback](./auto-rollback.md).
+2. If automation did not run, identify the previous stable deployment ID:
    ```bash
    vercel list prompt-mint --prod
    ```
-2. Instantly promote the previous stable deployment:
+3. Instantly promote the previous stable deployment:
    ```bash
    vercel rollback <PREVIOUS_DEPLOYMENT_ID>
    ```
-3. Purge edge cache across CDN nodes.
+4. Purge edge cache across CDN nodes.
 
 ### 3.2 Smart Contract Rollback & Emergency Freeze
 

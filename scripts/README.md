@@ -48,6 +48,15 @@ Performs a comprehensive check of the deployed contract's configuration (owner, 
 ./scripts/verify.sh local
 ```
 
+### 4. `ci-rollback.ts`
+Automates last-known-good rollback after a failed production deploy (issue #236). Invoked by `.github/workflows/auto-rollback.yml`.
+
+```bash
+yarn ops:rollback --dry-run
+```
+
+See [Automated rollback](../docs/operations/auto-rollback.md).
+
 ## Environment Consistency
 
 The `deploy.sh` script synchronizes the following variables across `.env` and `.env.local`:

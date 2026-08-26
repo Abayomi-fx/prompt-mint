@@ -3,6 +3,7 @@ import { negotiateVersion } from "../src/lib/api/versionGuard";
 import { withVersion } from "../src/lib/api/payloadVersion";
 import { apiError, ErrorCode } from "../src/lib/api/errorCodes";
 import { getCircuitBreaker, listCircuitBreakers } from "../src/lib/observability/circuitBreaker";
+import { metrics } from "../src/lib/observability/metrics";
 
 const STELLAR_RPC_URL =
   process.env.PUBLIC_STELLAR_RPC_URL ?? "https://soroban-testnet.stellar.org";
@@ -29,6 +30,7 @@ async function pingService(name: string, url: string, timeoutMs = 8000): Promise
       }),
     );
     const latencyMs = Date.now() - start;
+    metrics.trackEndpointHealth(name, res.ok, latencyMs);
     return {
       name,
       status: res.ok ? "up" : "degraded",
@@ -36,6 +38,7 @@ async function pingService(name: string, url: string, timeoutMs = 8000): Promise
       ...(res.ok ? {} : { error: `HTTP ${res.status}` }),
     };
   } catch (err) {
+    metrics.trackEndpointHealth(name, false, Date.now() - start);
     return {
       name,
       status: "down",
@@ -58,9 +61,15 @@ async function pingRpc(): Promise<ServiceCheck> {
       }),
     );
     const latencyMs = Date.now() - start;
-    if (!res.ok) return { name: "Stellar RPC", status: "degraded", latencyMs, error: `HTTP ${res.status}` };
+    if (!res.ok) {
+      metrics.trackRpcCall("getHealth", latencyMs, "error");
+      metrics.trackEndpointHealth("Stellar RPC", false, latencyMs);
+      return { name: "Stellar RPC", status: "degraded", latencyMs, error: `HTTP ${res.status}` };
+    }
     const json = (await res.json()) as { result?: { status?: string } };
     const healthy = json?.result?.status === "healthy";
+    metrics.trackRpcCall("getHealth", latencyMs, healthy ? "ok" : "error");
+    metrics.trackEndpointHealth("Stellar RPC", healthy, latencyMs);
     return {
       name: "Stellar RPC",
       status: healthy ? "up" : "degraded",
@@ -68,6 +77,8 @@ async function pingRpc(): Promise<ServiceCheck> {
       ...(healthy ? {} : { error: "RPC reported unhealthy" }),
     };
   } catch (err) {
+    metrics.trackRpcCall("getHealth", Date.now() - start, "error");
+    metrics.trackEndpointHealth("Stellar RPC", false, Date.now() - start);
     return {
       name: "Stellar RPC",
       status: "down",
@@ -91,6 +102,7 @@ async function pingUnlockService(): Promise<ServiceCheck> {
       }),
     );
     const latencyMs = Date.now() - start;
+    metrics.trackEndpointHealth("Unlock Service", res.ok, latencyMs);
     return {
       name: "Unlock Service",
       status: res.ok ? "up" : "degraded",
@@ -98,6 +110,7 @@ async function pingUnlockService(): Promise<ServiceCheck> {
       ...(res.ok ? {} : { error: `HTTP ${res.status}` }),
     };
   } catch (err) {
+    metrics.trackEndpointHealth("Unlock Service", false, Date.now() - start);
     return {
       name: "Unlock Service",
       status: "down",
@@ -129,12 +142,14 @@ async function handler(req: any, res: any) {
       ? "degraded"
       : "down";
 
+  const uptime = typeof process.uptime === "function" ? process.uptime() : 0;
+
   res.status(200).json(
     withVersion(
       {
         status: overallStatus,
         timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
+        uptime,
         services,
       },
       version,
@@ -143,7 +158,7 @@ async function handler(req: any, res: any) {
   res.status(200).json({
     status: overallStatus,
     timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
+    uptime,
     services,
     circuitBreakers: listCircuitBreakers(),
   });
