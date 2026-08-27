@@ -190,24 +190,6 @@ const FetchAllPrompts = ({
     },
   });
 
-  // Infinite scroll observer
-  useEffect(() => {
-    if (!ENABLE_INFINITE_SCROLL || !loadMoreRef.current) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const target = entries[0];
-        if (target.isIntersecting && currentPage < totalPages) {
-          setCurrentPage((prev) => prev + 1);
-        }
-      },
-      { threshold: 0.1, rootMargin: "100px" }
-    );
-
-    observer.observe(loadMoreRef.current);
-    return () => observer.disconnect();
-  }, [currentPage]);
-
   const accessQueries = useQueries({
     queries: (address ? (promptsQuery.data ?? []) : []).map((prompt) => ({
       queryKey: ["prompt-access", address, prompt.id.toString()],
@@ -320,6 +302,29 @@ const FetchAllPrompts = ({
     1,
     Math.ceil(filteredPrompts.length / ITEMS_PER_PAGE),
   );
+
+  // Infinite scroll observer: load the next page when the sentinel scrolls into view.
+  useEffect(() => {
+    if (
+      !ENABLE_INFINITE_SCROLL ||
+      !loadMoreRef.current ||
+      currentPage >= totalPages
+    )
+      return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const target = entries[0];
+        if (target.isIntersecting && currentPage < totalPages) {
+          setCurrentPage((prev) => prev + 1);
+        }
+      },
+      { threshold: 0.1, rootMargin: "100px" },
+    );
+
+    observer.observe(loadMoreRef.current);
+    return () => observer.disconnect();
+  }, [currentPage, totalPages]);
   
   // For infinite scroll, show all items up to current page
   const currentPrompts = ENABLE_INFINITE_SCROLL
