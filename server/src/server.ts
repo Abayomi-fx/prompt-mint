@@ -1,4 +1,5 @@
 import "dotenv/config";
+import "./instrumentation";
 import express from "express";
 import cors from "cors";
 import { TestPromptProxy } from "./controllers/controllers";
@@ -26,6 +27,7 @@ import { closeDb } from "./db/connectDb";
 import { closeRedis } from "./lib/redisConnection";
 import { flushPendingWebhooks } from "./services/webhookDispatcher";
 import { closeCache } from "./services/cacheService";
+import { shutdownTelemetry } from "./instrumentation";
 
 const app = express();
 
@@ -157,7 +159,7 @@ export function gracefulShutdown(timeoutMs = 30_000): Promise<void> {
       console.warn("[shutdown] Drain deadline reached; closing remaining sockets.");
       for (const socket of sockets) socket.destroy();
     }
-    await Promise.allSettled([closeDb(), closeRedis(), closeCache()]);
+    await Promise.allSettled([closeDb(), closeRedis(), closeCache(), shutdownTelemetry()]);
     console.log("[shutdown] Database and Redis connections closed.");
   })();
   return shutdownPromise;
