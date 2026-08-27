@@ -19,6 +19,7 @@ import creatorReputationHandler from "./controllers/creatorReputationController"
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
 import { idempotency } from "./middleware/idempotency";
+import { versionNegotiation } from "./middleware/versioning";
 import type { Server } from "node:http";
 import type { Socket } from "node:net";
 import { closeDb } from "./db/connectDb";
@@ -49,6 +50,10 @@ app.use(jsonBodyTooLargeHandler);
 // carries a matching Idempotency-Key header; a no-op for every other
 // request, so this is safe to apply ahead of all routers. (Issue #89)
 app.use(idempotency());
+
+// API version negotiation: resolves version from URL path, header, or query param.
+// Sets X-API-Version and Deprecation headers. (#209)
+app.use(versionNegotiation);
 
 app.use(robotsRouter);
 
