@@ -23,6 +23,7 @@ const MAX_IMAGE_URL_LEN: u32 = 512;
 const MAX_IV_LEN: u32 = 64;
 const LEASE_PRICE_BPS: u32 = 4_000;
 const MAX_ACCESS_EXPIRY: u64 = u64::MAX;
+const EXPIRY_WARNING_SECS: u64 = 7 * 24 * 60 * 60;
 const MAX_SUBSCRIPTION_DURATION_SECS: u64 = 31_536_000;
 const MAX_CLASSIFICATION_LEN: u32 = 20;
 const MAX_SAFETY_FLAGS_COUNT: u32 = 10;
@@ -335,8 +336,48 @@ impl PromptHashTrait for PromptHashContract {
 
         prompt.expires_at = new_expires_at;
         Storage::update_prompt(&env, &prompt);
+        Storage::clear_prompt_expiry_warning(&env, prompt_id);
         Events::emit_listing_extended(&env, prompt_id, new_expires_at);
         Ok(())
+    }
+
+    fn extend_prompt_lifetime(
+        env: Env,
+        creator: Address,
+        prompt_id: u128,
+        extension_secs: u64,
+    ) -> Result<u64, Error> {
+        creator.require_auth();
+        Storage::require_no_reentrancy(&env)?;
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        ensure(prompt.creator == creator, Error::Unauthorized)?;
+        ensure(prompt.expires_at != 0 && extension_secs > 0, Error::InvalidPrice)?;
+
+        let new_expires_at = prompt
+            .expires_at
+            .checked_add(extension_secs)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let mut extended_prompt = prompt;
+        extended_prompt.expires_at = new_expires_at;
+        Storage::update_prompt(&env, &extended_prompt);
+        Storage::clear_prompt_expiry_warning(&env, prompt_id);
+        Events::emit_listing_extended(&env, prompt_id, new_expires_at);
+        Ok(new_expires_at)
+    }
+
+    fn check_prompt_expiry(env: Env, prompt_id: u128) -> Result<bool, Error> {
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        let now = env.ledger().timestamp();
+        let expiring_soon = prompt.expires_at > now
+            && prompt.expires_at - now <= EXPIRY_WARNING_SECS;
+
+        if expiring_soon && !Storage::has_prompt_expiry_warning(&env, prompt_id) {
+            Storage::set_prompt_expiry_warning(&env, prompt_id);
+            Events::emit_prompt_expiring_soon(&env, prompt_id, prompt.creator, prompt.expires_at);
+        }
+
+        Ok(expiring_soon)
     }
 
     // ─── Issue #51: Bulk Purchase ────────────────────────────────────────────

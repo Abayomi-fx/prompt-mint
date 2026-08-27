@@ -135,6 +135,7 @@ pub enum DataKey {
     UpgradeProposer,
     UpgradeProposedAt,
     Discount(u128),
+    PromptExpiryWarning(u128),
 }
 
 #[contracttype]
@@ -419,6 +420,19 @@ pub trait PromptHashTrait {
         prompt_id: u128,
         new_expires_at: u64,
     ) -> Result<(), Error>;
+
+    /// Extend a prompt's expiry by `extension_secs` from its current expiry.
+    /// A never-expiring prompt (`expires_at == 0`) cannot be extended.
+    fn extend_prompt_lifetime(
+        env: Env,
+        creator: Address,
+        prompt_id: u128,
+        extension_secs: u64,
+    ) -> Result<u64, Error>;
+
+    /// Emit the expiry warning event when a prompt is within its warning
+    /// window. Anyone may call this for off-chain indexing services.
+    fn check_prompt_expiry(env: Env, prompt_id: u128) -> Result<bool, Error>;
 
     /// Purchase multiple prompts atomically in a single transaction.
     /// `prompt_ids` and `payment_amounts` must have equal length.

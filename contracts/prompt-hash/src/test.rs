@@ -2419,6 +2419,76 @@ fn test_only_creator_can_extend_listing() {
     }
 }
 
+#[test]
+fn test_prompt_expiry_warning_emits_once() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let prompt_id = client.create_prompt(
+        &creator,
+        &String::from_str(&env, "https://example.com/img.png"),
+        &String::from_str(&env, "Expiring Soon"),
+        &String::from_str(&env, "Software Development"),
+        &String::from_str(&env, "preview"),
+        &String::from_str(&env, "ciphertext"),
+        &String::from_str(&env, "iv"),
+        &String::from_str(&env, "wrapped-key"),
+        &hash(&env, 6),
+        &ListingConfig {
+            price: 5_000,
+            asset: context.xlm.clone(),
+            expires_at: 1_000 + 7 * 24 * 60 * 60,
+            splits: Vec::new(&env),
+        },
+    );
+
+    let before = env.events().all().len();
+    assert!(client.check_prompt_expiry(&prompt_id));
+    let after_first_check = env.events().all().len();
+    assert_eq!(after_first_check, before + 1);
+
+    assert!(client.check_prompt_expiry(&prompt_id));
+    assert_eq!(env.events().all().len(), after_first_check);
+}
+
+#[test]
+fn test_extend_prompt_lifetime_adds_duration_for_creator() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let prompt_id = client.create_prompt(
+        &creator,
+        &String::from_str(&env, "https://example.com/img.png"),
+        &String::from_str(&env, "Extend Lifetime"),
+        &String::from_str(&env, "Software Development"),
+        &String::from_str(&env, "preview"),
+        &String::from_str(&env, "ciphertext"),
+        &String::from_str(&env, "iv"),
+        &String::from_str(&env, "wrapped-key"),
+        &hash(&env, 8),
+        &ListingConfig {
+            price: 5_000,
+            asset: context.xlm.clone(),
+            expires_at: 2_000,
+            splits: Vec::new(&env),
+        },
+    );
+
+    assert_eq!(
+        client.extend_prompt_lifetime(&creator, &prompt_id, &3_000),
+        5_000
+    );
+    assert_eq!(client.get_prompt(&prompt_id).expires_at, 5_000);
+}
+
 // ─── Issue #50: Seller Revenue Sharing (Splits) ───────────────────────────────
 
 #[test]
