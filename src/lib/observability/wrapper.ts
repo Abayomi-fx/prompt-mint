@@ -66,6 +66,7 @@ export function withObservability(handler: ApiHandler, name: string): ApiHandler
 
       const duration = Date.now() - startTime;
       metrics.emit("api_request_duration_ms", duration, { path: name, status: res.statusCode });
+      metrics.trackEndpointHealth(name, (res.statusCode ?? 200) < 500, duration);
       
       childLogger.info(
         { statusCode: res.statusCode, duration },
@@ -81,6 +82,7 @@ export function withObservability(handler: ApiHandler, name: string): ApiHandler
       );
 
       metrics.emit("api_request_error_total", 1, { path: name, error: message });
+      metrics.trackEndpointHealth(name, false, duration);
 
       if (!res.writableEnded) {
         // Ensure security headers are applied even on error responses
