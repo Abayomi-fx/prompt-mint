@@ -15,8 +15,11 @@ mod types;
 #[cfg(test)]
 mod mock_asset;
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "isolate-gas-bench")))]
 mod test;
 
-#[cfg(test)]
+#[cfg(all(test, not(feature = "isolate-gas-bench")))]
 mod fuzz;
+
+#[cfg(test)]
+mod gas_bench;

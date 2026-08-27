@@ -2814,8 +2814,6 @@ fn test_create_bundle_stores_fields_and_is_discoverable() {
 }
 
 #[test]
-fn test_buy_bundle_grants_access_routes_fees_and_snapshots_items() {
-#[test]
 fn test_referral_rules_are_snapshotted_and_settlement_is_auditable() {
     let env: Env = Default::default();
     let context = setup(&env);
@@ -4132,6 +4130,17 @@ fn test_only_bundle_creator_can_modify_bundle() {
     match r2 {
         Err(Ok(crate::types::Error::Unauthorized)) => {}
         other => panic!("expected Unauthorized for deactivation by stranger, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stake_records_balance_and_moves_tokens_into_custody_amounts() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
     let prompt_id = create_prompt(
         &env,
         &client,
