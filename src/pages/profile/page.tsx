@@ -36,6 +36,9 @@ import { WebhookSettings } from "@/components/WebhookSettings";
 import { NotificationPreferences } from "@/components/NotificationPreferences";
 import { PostVersionUpdate } from "@/components/PostVersionUpdate";
 import { CreatorReputationPanel } from "@/components/CreatorReputation";
+import { ReputationSummary } from "@/components/ReputationSummary";
+import { RecentlyViewed } from "@/components/RecentlyViewed";
+import { SkeletonCard } from "@/components/Skeleton";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1044,6 +1047,10 @@ export default function ProfilePage() {
             </div>
           )}
         </section>
+
+        {profileAddress ? (
+          <ReputationSummary address={profileAddress} />
+        ) : null}
 
         {profileAddress ? (
           <CreatorReputationPanel address={profileAddress} />

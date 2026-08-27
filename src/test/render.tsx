@@ -12,6 +12,7 @@ import {
 } from "@/providers/WalletProvider";
 import { TransactionProvider } from "@/components/TransactionProvider";
 import { CurrencyProvider } from "@/providers/CurrencyProvider";
+import { KeyboardShortcutsProvider } from "@/providers/KeyboardShortcutsProvider";
 
 const defaultWallet: WalletContextType = {
   address: undefined,
@@ -63,7 +64,9 @@ export function renderWithProviders(
     <QueryClientProvider client={queryClient}>
       <WalletContext value={walletValue}>
         <CurrencyProvider><TransactionProvider>
-          <MemoryRouter initialEntries={[route]}>{children}</MemoryRouter>
+          <MemoryRouter initialEntries={[route]}>
+            <KeyboardShortcutsProvider>{children}</KeyboardShortcutsProvider>
+          </MemoryRouter>
         </TransactionProvider></CurrencyProvider>
       </WalletContext>
     </QueryClientProvider>
