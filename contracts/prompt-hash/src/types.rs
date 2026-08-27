@@ -135,6 +135,27 @@ pub enum DataKey {
     UpgradeProposer,
     UpgradeProposedAt,
     Discount(u128),
+    // #192 – per-prompt price history log.
+    PriceHistory(u128),
+}
+
+/// #192 – A single recorded price change for a prompt.
+///
+/// Appended to the prompt's price-history log whenever the creator changes the
+/// base listing price (and once with the prompt's initial price at creation)
+/// so buyers can see how the price has trended over time.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PriceHistoryEntry {
+    /// Price in stroops immediately before the change.
+    pub previous_price: i128,
+    /// Price in stroops after the change (or the initial listing price).
+    pub new_price: i128,
+    /// Ledger timestamp when the change was recorded.
+    pub changed_at: u64,
+    /// Monotonic per-prompt sequence number, starting at 1 for the initial
+    /// listing price. Used to keep history entries ordered and de-duplicated.
+    pub seq: u64,
 }
 
 #[contracttype]
@@ -394,6 +415,9 @@ pub trait PromptHashTrait {
         prompt_id: u128,
         price_stroops: i128,
     ) -> Result<(), Error>;
+
+    // #192 – Return the recorded price history for a prompt, oldest first.
+    fn get_price_history(env: Env, prompt_id: u128) -> Result<Vec<PriceHistoryEntry>, Error>;
 
     fn buy_prompt(
         env: Env,
