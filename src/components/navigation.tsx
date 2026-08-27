@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import {
   Activity,
@@ -22,10 +22,15 @@ import { useCart } from "@/providers/CartProvider";
 import { Cart, CartIcon } from "./Cart";
 import { Checkout } from "./Checkout";
 import { cn } from "@/lib/utils";
+import {
+  useModalShortcut,
+  useKeyboardShortcuts,
+} from "@/providers/KeyboardShortcutsProvider";
+import { ShortcutHints, Kbd } from "./ShortcutHints";
 
 const navItems = [
-  { to: "/browse", label: "Browse", icon: Search },
-  { to: "/sell", label: "Sell", icon: ShoppingBag },
+  { to: "/browse", label: "Browse", icon: Search, shortcut: "b" },
+  { to: "/sell", label: "Sell", icon: ShoppingBag, shortcut: "n" },
   { to: "/chat", label: "Chat", icon: MessageCircle },
   { to: "/profile", label: "Profile", icon: User },
   { to: "/history", label: "History", icon: ReceiptText },
@@ -59,8 +64,38 @@ const mobileLinkClasses = ({ isActive }: { isActive: boolean }) =>
 export function Navigation() {
   const [showCart, setShowCart] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const { itemCount } = useCart();
+  const { hintsOpen, setHintsOpen } = useKeyboardShortcuts();
   const location = useLocation();
+
+  useModalShortcut("cart", () => setShowCart(false), showCart);
+
+  // Swipe gestures for the mobile menu: swipe left on the sheet to close it,
+  // and swipe right from the left screen edge to open it.
+  const swipeStartX = useRef<number | null>(null);
+
+  const handleEdgeTouchStart = (e: React.TouchEvent) => {
+    swipeStartX.current = e.touches[0].clientX;
+  };
+
+  const handleEdgeTouchEnd = (e: React.TouchEvent) => {
+    if (swipeStartX.current === null) return;
+    const endX = e.changedTouches[0].clientX;
+    if (endX - swipeStartX.current > 80) setMenuOpen(true);
+    swipeStartX.current = null;
+  };
+
+  const handleSheetTouchStart = (e: React.TouchEvent) => {
+    swipeStartX.current = e.touches[0].clientX;
+  };
+
+  const handleSheetTouchEnd = (e: React.TouchEvent) => {
+    if (swipeStartX.current === null) return;
+    const endX = e.changedTouches[0].clientX;
+    if (swipeStartX.current - endX > 80) setMenuOpen(false);
+    swipeStartX.current = null;
+  };
 
   return (
     <>
@@ -89,6 +124,11 @@ export function Navigation() {
                 <NavLink key={item.to} to={item.to} className={linkClasses}>
                   <item.icon className="h-4 w-4" />
                   {item.label}
+                  {item.shortcut && (
+                    <Kbd className="ml-1 opacity-0 transition-opacity group-hover:opacity-100">
+                      {item.shortcut}
+                    </Kbd>
+                  )}
                 </NavLink>
               ))}
             </nav>
@@ -96,6 +136,16 @@ export function Navigation() {
 
           <div className="hidden sm:flex items-center gap-2 md:gap-4">
             <CurrencyToggle />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="border border-white/10 text-white hover:bg-white/10"
+              onClick={() => setHintsOpen(!hintsOpen)}
+              aria-label="Keyboard shortcuts (?)"
+              title="Keyboard shortcuts (?)"
+            >
+              <Kbd>?</Kbd>
+            </Button>
             <Button
               variant="ghost"
               size="icon"
@@ -126,7 +176,7 @@ export function Navigation() {
               )}
             </Button>
             <DisplayWallet />
-            <Sheet>
+            <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
               <SheetTrigger asChild>
                 <Button
                   variant="ghost"
@@ -137,7 +187,11 @@ export function Navigation() {
                   <Menu className="h-5 w-5" />
                 </Button>
               </SheetTrigger>
-              <SheetContent className="border-white/10 bg-slate-950 text-white">
+              <SheetContent
+                className="border-white/10 bg-slate-950 text-white"
+                onTouchStart={handleSheetTouchStart}
+                onTouchEnd={handleSheetTouchEnd}
+              >
                 <div className="mt-8 space-y-2">
                   {navItems.map((item) => (
                     <NavLink
@@ -164,6 +218,14 @@ export function Navigation() {
               </SheetContent>
             </Sheet>
           </div>
+
+          {/* Left-edge swipe zone to open the mobile menu */}
+          <div
+            className="sm:hidden fixed left-0 top-0 z-30 h-full w-4"
+            onTouchStart={handleEdgeTouchStart}
+            onTouchEnd={handleEdgeTouchEnd}
+            aria-hidden="true"
+          />
         </div>
 
         {/* Cart Drawer */}
@@ -212,6 +274,8 @@ export function Navigation() {
           </button>
         </div>
       </nav>
+
+      <ShortcutHints open={hintsOpen} onClose={() => setHintsOpen(false)} />
     </>
   );
 }

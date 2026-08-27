@@ -69,3 +69,7 @@ packages/*
 # Load-test secrets and generated results
 load-tests/fixtures/generated.json
 load-results/
+
+# Generated security / gas reports (committed baselines stay tracked)
+reports/
+contracts/prompt-hash/gas-report.json

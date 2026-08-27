@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { CartProvider } from "./providers/CartProvider";
+import { OnboardingProvider } from "./providers/OnboardingProvider";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { useReducedMotion } from "./components/ReducedMotionProvider";
 import Home from "./pages/Home";
@@ -54,7 +55,8 @@ const AppLayout = () => (
 function App() {
   return (
     <CartProvider>
-      <ErrorBoundary routeName="Application">
+      <OnboardingProvider>
+        <ErrorBoundary routeName="Application">
         <Suspense
           fallback={
             <div className="flex items-center justify-center min-h-screen bg-slate-950">
@@ -196,6 +198,7 @@ function App() {
           </Routes>
         </Suspense>
       </ErrorBoundary>
+      </OnboardingProvider>
     </CartProvider>
   );
 }

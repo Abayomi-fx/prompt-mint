@@ -20,6 +20,7 @@ import creatorReputationHandler from "./controllers/creatorReputationController"
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
 import { idempotency } from "./middleware/idempotency";
+import { versionNegotiation } from "./middleware/versioning";
 import type { Server } from "node:http";
 import type { Socket } from "node:net";
 import { closeDb } from "./db/connectDb";
@@ -51,6 +52,10 @@ app.use(jsonBodyTooLargeHandler);
 // carries a matching Idempotency-Key header; a no-op for every other
 // request, so this is safe to apply ahead of all routers. (Issue #89)
 app.use(idempotency());
+
+// API version negotiation: resolves version from URL path, header, or query param.
+// Sets X-API-Version and Deprecation headers. (#209)
+app.use(versionNegotiation);
 
 app.use(robotsRouter);
 
@@ -104,16 +109,17 @@ export const server = app.listen(port, () => {
     triggerBackup();
     setInterval(triggerBackup, TWENTY_FOUR_HOURS);
     console.log("[backup] Daily backup scheduler started.");
-    // DAILY RESTORE DRILL — optional, controlled via ENABLE_RESTORE_DRILL env var
-    if (process.env.ENABLE_RESTORE_DRILL) {
-      const schedule = process.env.RESTORE_DRILL_CRON || '0 3 * * *'; // default 03:00 UTC daily
-      cron.schedule(schedule, () => {
-        runRestoreDrill().catch((err: any) => {
-          console.error('[restore] Scheduled drill failed:', err?.message ?? err);
-        });
+  }
+
+  // Run the restore verification independently of backup export configuration.
+  if (process.env.ENABLE_RESTORE_DRILL === "true") {
+    const schedule = process.env.RESTORE_DRILL_CRON || "0 3 * * *";
+    cron.schedule(schedule, () => {
+      runRestoreDrill().catch((err: unknown) => {
+        console.error("[restore] Scheduled drill failed:", err instanceof Error ? err.message : err);
       });
-      console.log('[restore] Restore drill scheduler started.');
-    }
+    });
+    console.log(`[restore] Restore drill scheduler started (${schedule}).`);
   }
 });
 
