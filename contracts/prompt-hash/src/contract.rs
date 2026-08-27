@@ -14,6 +14,7 @@ const DEFAULT_FEE_BPS: u32 = 500;
 const MAX_FEE_BPS: u32 = 2_000; // 20% maximum platform fee safeguard (#41)
 const ROYALTY_BPS: u32 = 500;
 const MAX_BPS: u32 = 10_000;
+const MAX_SPLITS: u32 = 16;
 const MAX_TITLE_LEN: u32 = 120;
 const MAX_CATEGORY_LEN: u32 = 40;
 const MAX_PREVIEW_LEN: u32 = 280;
@@ -825,8 +826,8 @@ impl PromptHashTrait for PromptHashContract {
         ensure(prompt_ids.len() > 0, Error::InvalidPrice)?;
         ensure(prompt_ids.len() <= MAX_BUNDLE_ITEMS, Error::InvalidPrice)?;
 
-        // Validate token interface
-        token::Client::new(&env, &asset).decimals();
+        // Validate token interface through the guarded external-call helper.
+        validate_token_contract(&env, &asset)?;
 
         // Validate every prompt: must exist, be active, and be owned by creator
         for i in 0..prompt_ids.len() {
@@ -1542,7 +1543,9 @@ impl PromptHashTrait for PromptHashContract {
         // Move native XLM from the creator into contract custody.
         let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
         let this_contract = env.current_contract_address();
+        Storage::set_reentrancy_guard(&env)?;
         token::Client::new(&env, &xlm).transfer(&creator, &this_contract, &amount);
+        Storage::clear_reentrancy_guard(&env);
 
         let now = env.ledger().timestamp();
         let mut stake = Storage::get_stake(&env, prompt_id).unwrap_or(Stake {
@@ -1583,7 +1586,9 @@ impl PromptHashTrait for PromptHashContract {
             let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
             let fee_wallet = Storage::get_fee_wallet(&env).ok_or(Error::FeeWalletNotSet)?;
             let this_contract = env.current_contract_address();
+            Storage::set_reentrancy_guard(&env)?;
             token::Client::new(&env, &xlm).transfer(&this_contract, &fee_wallet, &slash_amount);
+            Storage::clear_reentrancy_guard(&env);
         }
 
         Storage::save_stake(&env, &stake);
@@ -1619,7 +1624,9 @@ impl PromptHashTrait for PromptHashContract {
         if withdraw > 0 {
             let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
             let this_contract = env.current_contract_address();
+            Storage::set_reentrancy_guard(&env)?;
             token::Client::new(&env, &xlm).transfer(&this_contract, &creator, &withdraw);
+            Storage::clear_reentrancy_guard(&env);
         }
 
         Storage::save_stake(&env, &stake);
@@ -1979,6 +1986,7 @@ fn resolve_referral(
 /// MAX_BPS minus the current platform fee, ensuring the creator always
 /// receives a non-negative payout.
 fn validate_splits(env: &Env, splits: &Vec<Split>) -> Result<(), Error> {
+    ensure(splits.len() <= MAX_SPLITS, Error::InvalidSplits)?;
     let fee_percentage = Storage::get_fee_percentage(env);
     let mut total_bps: u32 = 0;
     for i in 0..splits.len() {
