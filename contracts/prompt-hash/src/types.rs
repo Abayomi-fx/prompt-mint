@@ -93,6 +93,16 @@ pub enum Error {
     // does not currently compile as-is. `51` is chosen so this new variant
     // stays unique regardless of how that separate cleanup lands.
     AlreadyInitialized = 51,
+    // #194 – contract-upgrade safety checks
+    /// The proposed implementation is unusable (zero hash or it equals the
+    /// currently deployed bytecode), so the upgrade cannot proceed.
+    InvalidImplementation = 52,
+    /// On-chain storage failed integrity validation before an upgrade; the
+    /// upgrade is aborted to avoid losing state.
+    UpgradeStorageIntegrity = 53,
+    /// The upgrade would break existing license holders; aborted before the
+    /// new implementation is installed.
+    UpgradeLicenseIntegrity = 54,
 }
 
 #[contracttype]
@@ -521,12 +531,27 @@ pub trait PromptHashTrait {
         hashed_code: BytesN<32>,
     ) -> Result<(), Error>;
     fn get_xlm_sac(env: Env) -> Option<Address>;
-    fn upgrade(
+    /// Propose a timelocked contract upgrade. Requires 2-of-3 admin multisig.
+    /// Records the pending WASM hash, the proposer (via the two approvers) and
+    /// the proposal timestamp so that `confirm_upgrade` can enforce a safety
+    /// cooldown and validate the existing on-chain state before deploying the
+    /// new implementation.
+    fn propose_upgrade(
         env: Env,
         new_wasm_hash: BytesN<32>,
         approver_a: Address,
         approver_b: Address,
     ) -> Result<(), Error>;
+    /// Confirm and execute a previously proposed upgrade once the timelock
+    /// cooldown has elapsed. Requires 2-of-3 admin multisig. Applies upgrade
+    /// safety checks (implementation validity, storage integrity, license-holder
+    /// preservation) before atomically swapping the contract bytecode.
+    fn confirm_upgrade(env: Env, approver_a: Address, approver_b: Address) -> Result<(), Error>;
+    /// Cancel a pending upgrade before the timelock elapses (emergency abort).
+    /// Requires 2-of-3 admin multisig. Clears the pending upgrade state.
+    fn cancel_upgrade(env: Env, approver_a: Address, approver_b: Address) -> Result<(), Error>;
+    /// Returns the currently pending WASM hash, if any.
+    fn get_pending_upgrade(env: Env) -> Option<BytesN<32>>;
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error>;
 
     // ─── Bundle methods ──────────────────────────────────────────────────────

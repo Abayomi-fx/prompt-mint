@@ -714,25 +714,63 @@ impl PromptHashTrait for PromptHashContract {
         Ok(())
     }
 
-    fn upgrade(
+    fn propose_upgrade(
         env: Env,
         new_wasm_hash: BytesN<32>,
         approver_a: Address,
         approver_b: Address,
     ) -> Result<(), Error> {
         require_admin_multisig(&env, &approver_a, &approver_b)?;
-        Storage::require_no_reentrancy(&env)?;
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+        // (1) Reject an invalid implementation: a zero hash is never a deployable
+        //     WASM, and re-proposing the currently-deployed bytecode is a no-op.
+        validate_deployable_implementation(&env, &new_wasm_hash)?;
+        ensure(
+            Storage::get_pending_upgrade(&env).is_none(),
+            Error::UpgradeAlreadyProposed,
+        )?;
+
+        let proposed_at = env.ledger().timestamp();
+        Storage::set_pending_upgrade(&env, &new_wasm_hash);
+        Storage::set_upgrade_proposer(&env, &approver_a);
+        Storage::set_upgrade_proposed_at(&env, proposed_at);
+        Events::emit_upgrade_proposed(&env, new_wasm_hash, proposed_at);
+        Ok(())
+    }
+
+    fn confirm_upgrade(env: Env, approver_a: Address, approver_b: Address) -> Result<(), Error> {
+        require_admin_multisig(&env, &approver_a, &approver_b)?;
+        let pending = Storage::get_pending_upgrade(&env).ok_or(Error::UpgradeNotProposed)?;
+        // (timelock) Enforce the cooldown before executing the upgrade.
+        let proposed_at =
+            Storage::get_upgrade_proposed_at(&env).ok_or(Error::UpgradeNotProposed)?;
+        let now = env.ledger().timestamp();
+        ensure(
+            now >= proposed_at.saturating_add(UPGRADE_COOLDOWN_SECS),
+            Error::UpgradeCooldownNotElapsed,
+        )?;
+        // (1) Re-validate the implementation is still usable at confirmation time.
+        validate_deployable_implementation(&env, &pending)?;
+        // (2) Verify storage data is intact before swapping bytecode.
+        validate_storage_integrity(&env)?;
+        // (3) Verify no existing license holders would be broken by the upgrade.
+        validate_license_integrity(&env)?;
+
+        env.deployer().update_current_contract_wasm(pending.clone());
         env.storage().instance().extend_ttl(
             super::storage::PERSISTENT_LIFETIME_THRESHOLD,
             super::storage::PERSISTENT_BUMP_AMOUNT,
         );
-        Events::emit_upgrade_confirmed(&env, wasm_hash.clone(), now);
+        let confirmed_at = env.ledger().timestamp();
+        Storage::clear_pending_upgrade(&env);
+        Storage::clear_upgrade_proposer(&env);
+        Storage::clear_upgrade_proposed_at(&env);
+        Events::emit_upgrade_confirmed(&env, pending, confirmed_at);
         Ok(())
     }
 
-    fn cancel_upgrade(env: Env) -> Result<(), Error> {
-        env.current_contract_address().require_auth();
+    fn cancel_upgrade(env: Env, approver_a: Address, approver_b: Address) -> Result<(), Error> {
+        require_admin_multisig(&env, &approver_a, &approver_b)?;
         let pending = Storage::get_pending_upgrade(&env).ok_or(Error::UpgradeNotProposed)?;
         Storage::clear_pending_upgrade(&env);
         Storage::clear_upgrade_proposer(&env);
@@ -2090,4 +2128,78 @@ fn assert_no_reentrancy(env: &Env) {
     if Storage::require_no_reentrancy(env).is_err() {
         soroban_sdk::panic_with_error!(env, Error::ReentrancyGuard);
     }
+}
+
+// ─── #194: Contract upgrade safety helpers ───────────────────────────────────
+//
+// These run on-chain, immediately before `confirm_upgrade` swaps the deployed
+// bytecode. Their purpose is to fail the upgrade (returning a typed `Error`
+// instead of bricking the contract) when any of the three upgrade hazards would
+// materialise: an unusable implementation, corrupted/vanished storage, or
+// license-metadata incoherence that would break existing holders.
+
+/// Rejects a WASM implementation that cannot possibly be deployed: a zero hash
+/// (all 32 bytes zero) is never a valid uploaded WASM, so proposing/confirming
+/// it would install a broken contract.
+fn validate_deployable_implementation(env: &Env, new_wasm_hash: &BytesN<32>) -> Result<(), Error> {
+    let zero = BytesN::from_array(env, &[0u8; 32]);
+    ensure(*new_wasm_hash != zero, Error::InvalidImplementation)?;
+    Ok(())
+}
+
+/// Verifies that all persistent marketplace data required by the contract is
+/// still present and internally consistent before the implementation changes.
+/// Guards against hazard (2) — silently losing storage data on upgrade.
+fn validate_storage_integrity(env: &Env) -> Result<(), Error> {
+    // Config that every subsequent operation depends on must still exist.
+    ensure(
+        Storage::get_fee_wallet(env).is_some(),
+        Error::UpgradeStorageIntegrity,
+    )?;
+    ensure(
+        Storage::get_xlm_address(env).is_some(),
+        Error::UpgradeStorageIntegrity,
+    )?;
+    ensure(
+        Storage::get_schema_version(env) <= CONTRACT_SCHEMA_VERSION,
+        Error::VersionMismatch,
+    )?;
+
+    // Every prompt slot the counter claims to have allocated must still be
+    // readable. A missing/corrupted prompt indicates the new code (or a prior
+    // bad migration) would lose user data.
+    let prompt_count = Storage::get_prompt_counter(env);
+    for prompt_id in 0..prompt_count {
+        Storage::require_prompt(env, prompt_id).map_err(|_| Error::UpgradeStorageIntegrity)?;
+    }
+
+    // Every bundle slot must still resolve to a valid bundle.
+    let bundle_count = Storage::get_bundle_counter(env);
+    for bundle_id in 0..bundle_count {
+        Storage::require_bundle(env, bundle_id).map_err(|_| Error::UpgradeStorageIntegrity)?;
+    }
+
+    Ok(())
+}
+
+/// Verifies that license/decryption metadata remains coherent for every listing,
+/// so upgrading cannot break access for creators and existing license holders.
+/// Guards against hazard (3) — breaking existing license holders on upgrade.
+fn validate_license_integrity(env: &Env) -> Result<(), Error> {
+    let prompt_count = Storage::get_prompt_counter(env);
+    for prompt_id in 0..prompt_count {
+        let prompt =
+            Storage::require_prompt(env, prompt_id).map_err(|_| Error::UpgradeLicenseIntegrity)?;
+        // The prompt's active encryption version must match the stored
+        // per-prompt version counter; a mismatch means license decryption state
+        // is inconsistent and an upgrade could strand current holders.
+        let counter = Storage::get_encryption_version_counter(env, prompt_id);
+        if counter == 0 || counter != prompt.encryption_version {
+            return Err(Error::UpgradeLicenseIntegrity);
+        }
+        // The prompt's payment asset must still be a valid token so that
+        // license settlement and access transfers keep working after upgrade.
+        validate_token_contract(env, &prompt.asset).map_err(|_| Error::UpgradeLicenseIntegrity)?;
+    }
+    Ok(())
 }
