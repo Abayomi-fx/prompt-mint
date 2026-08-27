@@ -19,6 +19,9 @@
     "backup:status": "ts-node scripts/mongodbBackup.ts status",
     "backup:verify": "ts-node scripts/mongodbBackup.ts verify",
     "backup:test-recovery": "ts-node scripts/mongodbBackup.ts test-recovery",
+    "migrate": "ts-node scripts/migrate.ts",
+    "migrate:dry-run": "ts-node scripts/migrate.ts --dry-run",
+    "migrate:rollback": "ts-node scripts/migrate.ts --rollback",
     "reindex": "ts-node scripts/reIndexFromLedger.ts",
     "reindex:dry-run": "ts-node scripts/reIndexFromLedger.ts --dry-run"
   },
