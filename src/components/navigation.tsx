@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import {
   Activity,
@@ -59,8 +59,35 @@ const mobileLinkClasses = ({ isActive }: { isActive: boolean }) =>
 export function Navigation() {
   const [showCart, setShowCart] = useState(false);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const { itemCount } = useCart();
   const location = useLocation();
+
+  // Swipe gestures for the mobile menu: swipe left on the sheet to close it,
+  // and swipe right from the left screen edge to open it.
+  const swipeStartX = useRef<number | null>(null);
+
+  const handleEdgeTouchStart = (e: React.TouchEvent) => {
+    swipeStartX.current = e.touches[0].clientX;
+  };
+
+  const handleEdgeTouchEnd = (e: React.TouchEvent) => {
+    if (swipeStartX.current === null) return;
+    const endX = e.changedTouches[0].clientX;
+    if (endX - swipeStartX.current > 80) setMenuOpen(true);
+    swipeStartX.current = null;
+  };
+
+  const handleSheetTouchStart = (e: React.TouchEvent) => {
+    swipeStartX.current = e.touches[0].clientX;
+  };
+
+  const handleSheetTouchEnd = (e: React.TouchEvent) => {
+    if (swipeStartX.current === null) return;
+    const endX = e.changedTouches[0].clientX;
+    if (swipeStartX.current - endX > 80) setMenuOpen(false);
+    swipeStartX.current = null;
+  };
 
   return (
     <>
@@ -126,7 +153,7 @@ export function Navigation() {
               )}
             </Button>
             <DisplayWallet />
-            <Sheet>
+            <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
               <SheetTrigger asChild>
                 <Button
                   variant="ghost"
@@ -137,7 +164,11 @@ export function Navigation() {
                   <Menu className="h-5 w-5" />
                 </Button>
               </SheetTrigger>
-              <SheetContent className="border-white/10 bg-slate-950 text-white">
+              <SheetContent
+                className="border-white/10 bg-slate-950 text-white"
+                onTouchStart={handleSheetTouchStart}
+                onTouchEnd={handleSheetTouchEnd}
+              >
                 <div className="mt-8 space-y-2">
                   {navItems.map((item) => (
                     <NavLink
@@ -164,6 +195,14 @@ export function Navigation() {
               </SheetContent>
             </Sheet>
           </div>
+
+          {/* Left-edge swipe zone to open the mobile menu */}
+          <div
+            className="sm:hidden fixed left-0 top-0 z-30 h-full w-4"
+            onTouchStart={handleEdgeTouchStart}
+            onTouchEnd={handleEdgeTouchEnd}
+            aria-hidden="true"
+          />
         </div>
 
         {/* Cart Drawer */}
