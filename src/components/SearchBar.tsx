@@ -84,6 +84,8 @@ export function SearchBar({
         onBlur={() => setTimeout(() => setIsFocused(false), 150)}
         placeholder={placeholder}
         aria-label="Search prompts"
+        data-shortcut="search"
+        title="Search prompts ( / )"
         className="h-14 pl-12 pr-12 rounded-2xl border-white/5 bg-white/[0.03] text-base placeholder:text-slate-500 focus-visible:ring-emerald-500/20 transition-all"
       />
       {rawValue && (

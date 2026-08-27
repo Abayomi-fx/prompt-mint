@@ -22,10 +22,15 @@ import { useCart } from "@/providers/CartProvider";
 import { Cart, CartIcon } from "./Cart";
 import { Checkout } from "./Checkout";
 import { cn } from "@/lib/utils";
+import {
+  useModalShortcut,
+  useKeyboardShortcuts,
+} from "@/providers/KeyboardShortcutsProvider";
+import { ShortcutHints, Kbd } from "./ShortcutHints";
 
 const navItems = [
-  { to: "/browse", label: "Browse", icon: Search },
-  { to: "/sell", label: "Sell", icon: ShoppingBag },
+  { to: "/browse", label: "Browse", icon: Search, shortcut: "b" },
+  { to: "/sell", label: "Sell", icon: ShoppingBag, shortcut: "n" },
   { to: "/chat", label: "Chat", icon: MessageCircle },
   { to: "/profile", label: "Profile", icon: User },
   { to: "/history", label: "History", icon: ReceiptText },
@@ -61,7 +66,10 @@ export function Navigation() {
   const [showCheckout, setShowCheckout] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const { itemCount } = useCart();
+  const { hintsOpen, setHintsOpen } = useKeyboardShortcuts();
   const location = useLocation();
+
+  useModalShortcut("cart", () => setShowCart(false), showCart);
 
   // Swipe gestures for the mobile menu: swipe left on the sheet to close it,
   // and swipe right from the left screen edge to open it.
@@ -116,6 +124,11 @@ export function Navigation() {
                 <NavLink key={item.to} to={item.to} className={linkClasses}>
                   <item.icon className="h-4 w-4" />
                   {item.label}
+                  {item.shortcut && (
+                    <Kbd className="ml-1 opacity-0 transition-opacity group-hover:opacity-100">
+                      {item.shortcut}
+                    </Kbd>
+                  )}
                 </NavLink>
               ))}
             </nav>
@@ -123,6 +136,16 @@ export function Navigation() {
 
           <div className="hidden sm:flex items-center gap-2 md:gap-4">
             <CurrencyToggle />
+            <Button
+              variant="ghost"
+              size="icon"
+              className="border border-white/10 text-white hover:bg-white/10"
+              onClick={() => setHintsOpen(!hintsOpen)}
+              aria-label="Keyboard shortcuts (?)"
+              title="Keyboard shortcuts (?)"
+            >
+              <Kbd>?</Kbd>
+            </Button>
             <Button
               variant="ghost"
               size="icon"
@@ -251,6 +274,8 @@ export function Navigation() {
           </button>
         </div>
       </nav>
+
+      <ShortcutHints open={hintsOpen} onClose={() => setHintsOpen(false)} />
     </>
   );
 }
