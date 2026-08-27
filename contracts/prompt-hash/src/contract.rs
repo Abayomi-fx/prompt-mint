@@ -497,7 +497,7 @@ impl PromptHashTrait for PromptHashContract {
             duration_secs > 0 && duration_secs <= MAX_SUBSCRIPTION_DURATION_SECS,
             Error::InvalidSubscriptionConfig,
         )?;
-        ensure(price > 0, Error::InvalidSubscriptionPrice)?;
+        ensure(price > 0, Error::InvalidSubscriptionConfig)?;
         validate_token_contract(&env, &asset)?;
         Storage::save_subscription_config(
             &env,
@@ -2006,6 +2006,77 @@ fn require_admin_multisig(
     approver_a.require_auth();
     approver_b.require_auth();
     Ok(())
+}
+
+fn validate_classification(env: &Env, classification: &String) -> Result<(), Error> {
+    for name in ALL_CLASSIFICATIONS {
+        if classification == &String::from_str(env, name) {
+            return Ok(());
+        }
+    }
+    Err(Error::InvalidClassification)
+}
+
+fn validate_safety_flags(env: &Env, flags: &Vec<String>) -> Result<(), Error> {
+    ensure(flags.len() <= MAX_SAFETY_FLAGS_COUNT, Error::InvalidDisclosureFlags)?;
+    for i in 0..flags.len() {
+        let flag = flags.get(i).unwrap();
+        ensure(flag.len() <= MAX_FLAG_LEN, Error::InvalidDisclosureFlags)?;
+        let mut recognized = false;
+        for name in VALID_DISCLOSURE_FLAGS {
+            if flag == String::from_str(env, name) {
+                recognized = true;
+                break;
+            }
+        }
+        ensure(recognized, Error::InvalidDisclosureFlags)?;
+    }
+    Ok(())
+}
+
+fn validate_promotion_time(env: &Env, start_time: u64, end_time: u64) -> Result<(), Error> {
+    ensure(end_time > start_time, Error::InvalidPromotionTime)?;
+    ensure(
+        end_time > env.ledger().timestamp(),
+        Error::InvalidPromotionTime,
+    )?;
+    Ok(())
+}
+
+fn check_promotion_overlap(
+    env: &Env,
+    prompt_id: u128,
+    start_time: u64,
+    end_time: u64,
+) -> Result<(), Error> {
+    if let Some(existing) = Storage::get_active_promotion(env, prompt_id) {
+        let overlaps = start_time <= existing.end_time && end_time >= existing.start_time;
+        ensure(!overlaps, Error::PromotionOverlap)?;
+    }
+    Ok(())
+}
+
+fn get_effective_price_for_prompt(
+    env: &Env,
+    prompt_id: u128,
+) -> Result<(i128, Address, bool), Error> {
+    let prompt = Storage::require_prompt(env, prompt_id)?;
+    let now = env.ledger().timestamp();
+    let seq = env.ledger().sequence();
+
+    if let Some(promo) = Storage::get_active_promotion(env, prompt_id) {
+        if now >= promo.start_time && now <= promo.end_time {
+            return Ok((promo.price, promo.asset, true));
+        }
+    }
+
+    if let Some(discount) = Storage::get_discount(env, prompt_id) {
+        if seq >= discount.start_ledger && seq <= discount.end_ledger {
+            return Ok((discount.discounted_price, prompt.asset.clone(), false));
+        }
+    }
+
+    Ok((prompt.price_stroops, prompt.asset, false))
 }
 
 fn validate_token_contract(env: &Env, asset: &Address) -> Result<(), Error> {

@@ -32,6 +32,7 @@ yarn check:setup
 yarn test:frontend
 yarn build
 cargo test -p prompt-hash
+yarn test:gas
 ```
 
 If you changed the auxiliary server:

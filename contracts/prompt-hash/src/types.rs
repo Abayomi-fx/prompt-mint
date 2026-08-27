@@ -122,6 +122,19 @@ pub enum DataKey {
     Subscription(Address, Address),
     SubscriptionEligible(u128),
     AdminSigners,
+    Initialized,
+    SchemaVersion,
+    PromptEncryptedPayload(u128, u32),
+    PromptEncryptionVersion(u128),
+    ClassificationOverride(u128),
+    ModeratorAddress,
+    ActivePromotion(u128),
+    PromotionHistory(u128),
+    CreatorStake(u128),
+    PendingUpgrade,
+    UpgradeProposer,
+    UpgradeProposedAt,
+    Discount(u128),
 }
 
 #[contracttype]
@@ -313,6 +326,29 @@ pub struct Stake {
     pub staked_at: u64,
 }
 
+/// Moderator-attested classification that overrides the creator's attestation.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClassificationOverride {
+    pub classifier: Address,
+    pub classification: String,
+    pub safety_flags: Vec<String>,
+    pub reason: String,
+    pub reviewed_at: u64,
+}
+
+/// Time-windowed listing discount. While the ledger sequence is inside
+/// `[start_ledger, end_ledger]`, purchases use `discounted_price`.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Discount {
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub discounted_price: i128,
+    pub start_ledger: u32,
+    pub end_ledger: u32,
+}
+
 pub trait PromptHashTrait {
     fn __constructor(
         env: Env,
@@ -459,6 +495,11 @@ pub trait PromptHashTrait {
     fn get_fee_wallet(env: Env) -> Option<Address>;
     fn set_referral_percentage(env: Env, new_referral_percentage: u32) -> Result<(), Error>;
     fn get_referral_percentage(env: Env) -> u32;
+    fn register_referral_code(
+        env: Env,
+        referrer: Address,
+        code_hash: BytesN<32>,
+    ) -> Result<(), Error>;
     fn set_pause_status(
         env: Env,
         paused: bool,
