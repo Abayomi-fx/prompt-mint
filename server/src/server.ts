@@ -19,6 +19,7 @@ import { IndexerState } from "./models/IndexerState";
 import creatorReputationHandler from "./controllers/creatorReputationController";
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
+import { docsRouter } from "./routes/docsRoutes";
 import { idempotency } from "./middleware/idempotency";
 import { versionNegotiation } from "./middleware/versioning";
 import type { Server } from "node:http";
@@ -58,6 +59,8 @@ app.use(idempotency());
 app.use(versionNegotiation);
 
 app.use(robotsRouter);
+
+app.use("/api/docs", docsRouter);
 
 app.use("/api/improve-proxy", proxyrouter);
 
