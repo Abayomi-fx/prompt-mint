@@ -112,6 +112,22 @@ impl Storage {
         prompts
     }
 
+    pub fn get_prompts_by_category(env: &Env, category: &String) -> Vec<Prompt> {
+        let prompt_count = Self::get_prompt_counter(env);
+        let now = env.ledger().timestamp();
+        let mut prompts = Vec::new(env);
+        for prompt_id in 0..prompt_count {
+            if let Some(prompt) = Self::get_prompt(env, prompt_id) {
+                if (prompt.expires_at == 0 || prompt.expires_at >= now)
+                    && prompt.category == category.clone()
+                {
+                    prompts.push_back(prompt);
+                }
+            }
+        }
+        prompts
+    }
+
     pub fn get_prompts_by_creator(env: &Env, creator: &Address) -> Vec<Prompt> {
         let key = DataKey::CreatorPrompts(creator.clone());
         let ids: Vec<u128> = env

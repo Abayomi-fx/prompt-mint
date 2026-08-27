@@ -474,6 +474,10 @@ impl PromptHashTrait for PromptHashContract {
         Ok(Storage::get_prompts_by_creator(&env, &creator))
     }
 
+    fn get_prompts_by_category(env: Env, category: String) -> Result<Vec<Prompt>, Error> {
+        Ok(Storage::get_prompts_by_category(&env, &category))
+    }
+
     fn get_prompts_by_buyer(env: Env, buyer: Address) -> Result<Vec<Prompt>, Error> {
         Ok(Storage::get_prompts_by_buyer(&env, &buyer))
     }
