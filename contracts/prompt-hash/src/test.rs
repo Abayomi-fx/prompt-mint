@@ -5914,9 +5914,10 @@ fn test_stranger_cannot_propose_upgrade() {
     let client = PromptHashContractClient::new(&env, &context.contract);
 
     let stranger = Address::generate(&env);
+    let stranger_two = Address::generate(&env);
     let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
 
-    let result = client.try_propose_upgrade(&stranger, &wasm_hash);
+    let result = client.try_propose_upgrade(&wasm_hash, &stranger, &stranger_two);
     match result {
         Err(Ok(Error::Unauthorized)) => {}
         other => panic!("expected Unauthorized for stranger propose_upgrade, got {:?}", other),
@@ -5930,11 +5931,189 @@ fn test_stranger_cannot_confirm_upgrade() {
     let client = PromptHashContractClient::new(&env, &context.contract);
 
     let stranger = Address::generate(&env);
+    let stranger_two = Address::generate(&env);
 
-    let result = client.try_confirm_upgrade(&stranger);
+    let result = client.try_confirm_upgrade(&stranger, &stranger_two);
     match result {
         Err(Ok(Error::Unauthorized)) => {}
         other => panic!("expected Unauthorized for stranger confirm_upgrade, got {:?}", other),
+    }
+}
+
+// ─── #194: Contract upgrade safety checks ────────────────────────────────────
+
+const UPGRADE_COOLDOWN: u64 = 86_400; // UPGRADE_COOLDOWN_SECS in contract.rs
+
+#[test]
+fn test_upgrade_propose_requires_two_distinct_admins() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    // Same admin used for both approver slots must be rejected.
+    let result = client.try_propose_upgrade(&wasm_hash, &context.admin, &context.admin);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for same-admin propose_upgrade, got {:?}", other),
+    }
+    // One admin + one stranger must be rejected too.
+    let stranger = Address::generate(&env);
+    let result = client.try_propose_upgrade(&wasm_hash, &context.admin, &stranger);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for mixed-admin propose_upgrade, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_rejects_invalid_implementation() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    // A zero WASM hash is never a valid implementation.
+    let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let result = client.try_propose_upgrade(&zero_hash, &context.admin, &context.admin_two);
+    match result {
+        Err(Ok(Error::InvalidImplementation)) => {}
+        other => panic!("expected InvalidImplementation for zero wasm hash, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_propose_twice_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    client.propose_upgrade(&wasm_hash, &context.admin, &context.admin_two);
+    assert_eq!(client.get_pending_upgrade(), Some(wasm_hash));
+
+    // A second proposal while one is pending must be rejected.
+    let other_hash = BytesN::from_array(&env, &[2u8; 32]);
+    let result = client.try_propose_upgrade(&other_hash, &context.admin, &context.admin_two);
+    match result {
+        Err(Ok(Error::UpgradeAlreadyProposed)) => {}
+        other => panic!("expected UpgradeAlreadyProposed for duplicate proposal, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_confirm_without_proposal_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let result = client.try_confirm_upgrade(&context.admin, &context.admin_two);
+    match result {
+        Err(Ok(Error::UpgradeNotProposed)) => {}
+        other => panic!("expected UpgradeNotProposed when nothing is proposed, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_confirm_before_cooldown_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    client.propose_upgrade(&wasm_hash, &context.admin, &context.admin_two);
+
+    // Confirm too early, within the timelock window.
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000 + UPGRADE_COOLDOWN - 1);
+    let result = client.try_confirm_upgrade(&context.admin, &context.admin_two);
+    match result {
+        Err(Ok(Error::UpgradeCooldownNotElapsed)) => {}
+        other => panic!("expected UpgradeCooldownNotElapsed, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_cancel_clears_proposal() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    client.propose_upgrade(&wasm_hash, &context.admin, &context.admin_two);
+    assert_eq!(client.get_pending_upgrade(), Some(wasm_hash));
+
+    client.cancel_upgrade(&context.admin, &context.admin_two);
+    assert_eq!(client.get_pending_upgrade(), None);
+
+    // After cancellation, confirming must fail.
+    let result = client.try_confirm_upgrade(&context.admin, &context.admin_two);
+    match result {
+        Err(Ok(Error::UpgradeNotProposed)) => {}
+        other => panic!("expected UpgradeNotProposed after cancel, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_propose_confirm_success() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    client.propose_upgrade(&wasm_hash, &context.admin, &context.admin_two);
+    assert_eq!(client.get_pending_upgrade(), Some(wasm_hash));
+
+    // Wait out the timelock, then confirm.
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000 + UPGRADE_COOLDOWN + 1);
+    client.confirm_upgrade(&context.admin, &context.admin_two);
+    assert_eq!(client.get_pending_upgrade(), None);
+}
+
+#[test]
+fn test_upgrade_preserves_license_holders() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "SecuredPrompt", 10_000, &context.xlm);
+
+    // Establish an existing license holder.
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
+    assert!(client.has_access(&buyer, &prompt_id));
+
+    // Propose and confirm an upgrade after the timelock.
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    client.propose_upgrade(&wasm_hash, &context.admin, &context.admin_two);
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000 + UPGRADE_COOLDOWN + 1);
+    client.confirm_upgrade(&context.admin, &context.admin_two);
+
+    // The license holder keeps access and the listing data is intact.
+    assert!(client.has_access(&buyer, &prompt_id));
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(prompt.creator, creator);
+    assert_eq!(prompt.price_stroops, 10_000);
+    assert_eq!(prompt.sales_count, 1);
+}
+
+#[test]
+fn test_stranger_cannot_cancel_upgrade() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let stranger = Address::generate(&env);
+    let stranger_two = Address::generate(&env);
+
+    let result = client.try_cancel_upgrade(&stranger, &stranger_two);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger cancel_upgrade, got {:?}", other),
     }
 }
 
