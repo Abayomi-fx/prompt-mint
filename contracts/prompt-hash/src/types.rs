@@ -93,6 +93,16 @@ pub enum Error {
     // does not currently compile as-is. `51` is chosen so this new variant
     // stays unique regardless of how that separate cleanup lands.
     AlreadyInitialized = 51,
+    // #194 – contract-upgrade safety checks
+    /// The proposed implementation is unusable (zero hash or it equals the
+    /// currently deployed bytecode), so the upgrade cannot proceed.
+    InvalidImplementation = 52,
+    /// On-chain storage failed integrity validation before an upgrade; the
+    /// upgrade is aborted to avoid losing state.
+    UpgradeStorageIntegrity = 53,
+    /// The upgrade would break existing license holders; aborted before the
+    /// new implementation is installed.
+    UpgradeLicenseIntegrity = 54,
 }
 
 #[contracttype]
@@ -156,6 +166,7 @@ pub struct PriceHistoryEntry {
     /// Monotonic per-prompt sequence number, starting at 1 for the initial
     /// listing price. Used to keep history entries ordered and de-duplicated.
     pub seq: u64,
+    PromptExpiryWarning(u128),
 }
 
 #[contracttype]
@@ -444,6 +455,19 @@ pub trait PromptHashTrait {
         new_expires_at: u64,
     ) -> Result<(), Error>;
 
+    /// Extend a prompt's expiry by `extension_secs` from its current expiry.
+    /// A never-expiring prompt (`expires_at == 0`) cannot be extended.
+    fn extend_prompt_lifetime(
+        env: Env,
+        creator: Address,
+        prompt_id: u128,
+        extension_secs: u64,
+    ) -> Result<u64, Error>;
+
+    /// Emit the expiry warning event when a prompt is within its warning
+    /// window. Anyone may call this for off-chain indexing services.
+    fn check_prompt_expiry(env: Env, prompt_id: u128) -> Result<bool, Error>;
+
     /// Purchase multiple prompts atomically in a single transaction.
     /// `prompt_ids` and `payment_amounts` must have equal length.
     /// An optional `referrer` applies to every prompt in the batch.
@@ -469,6 +493,7 @@ pub trait PromptHashTrait {
     fn get_all_prompts(env: Env) -> Result<Vec<Prompt>, Error>;
     fn get_prompts_by_creator(env: Env, creator: Address) -> Result<Vec<Prompt>, Error>;
     fn get_prompts_by_buyer(env: Env, buyer: Address) -> Result<Vec<Prompt>, Error>;
+    fn get_prompts_by_category(env: Env, category: String) -> Result<Vec<Prompt>, Error>;
     fn get_purchase_details(env: Env, prompt_id: u128, buyer: Address) -> Result<Purchase, Error>;
     fn configure_subscription_pass(
         env: Env,
@@ -545,12 +570,27 @@ pub trait PromptHashTrait {
         hashed_code: BytesN<32>,
     ) -> Result<(), Error>;
     fn get_xlm_sac(env: Env) -> Option<Address>;
-    fn upgrade(
+    /// Propose a timelocked contract upgrade. Requires 2-of-3 admin multisig.
+    /// Records the pending WASM hash, the proposer (via the two approvers) and
+    /// the proposal timestamp so that `confirm_upgrade` can enforce a safety
+    /// cooldown and validate the existing on-chain state before deploying the
+    /// new implementation.
+    fn propose_upgrade(
         env: Env,
         new_wasm_hash: BytesN<32>,
         approver_a: Address,
         approver_b: Address,
     ) -> Result<(), Error>;
+    /// Confirm and execute a previously proposed upgrade once the timelock
+    /// cooldown has elapsed. Requires 2-of-3 admin multisig. Applies upgrade
+    /// safety checks (implementation validity, storage integrity, license-holder
+    /// preservation) before atomically swapping the contract bytecode.
+    fn confirm_upgrade(env: Env, approver_a: Address, approver_b: Address) -> Result<(), Error>;
+    /// Cancel a pending upgrade before the timelock elapses (emergency abort).
+    /// Requires 2-of-3 admin multisig. Clears the pending upgrade state.
+    fn cancel_upgrade(env: Env, approver_a: Address, approver_b: Address) -> Result<(), Error>;
+    /// Returns the currently pending WASM hash, if any.
+    fn get_pending_upgrade(env: Env) -> Option<BytesN<32>>;
     fn extend_ttl(env: Env, key: DataKey) -> Result<(), Error>;
 
     // ─── Bundle methods ──────────────────────────────────────────────────────
