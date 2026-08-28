@@ -168,7 +168,6 @@ pub struct PriceHistoryEntry {
     /// Monotonic per-prompt sequence number, starting at 1 for the initial
     /// listing price. Used to keep history entries ordered and de-duplicated.
     pub seq: u64,
-    PromptExpiryWarning(u128),
 }
 
 #[contracttype]

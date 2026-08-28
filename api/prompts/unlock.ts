@@ -337,33 +337,24 @@ async function handler(req: any, res: any) {
     );
     const contentHash = await hashPromptPlaintext(plaintext);
     const storedHash = normalizeContentHash(encryptedPayload.contentHash);
-    if (contentHash !== storedHash) {
-      req.logger.error(
-        { address: unlockRequest.address, promptId: unlockRequest.promptId },
-        "Prompt integrity check failed",
-      );
-      metrics.trackUnlockFailure(
-        unlockRequest.address,
-        unlockRequest.promptId,
-        "integrity_failure",
-      );
-    const storedHash = normalizeContentHash(prompt.contentHash ?? "");
 
     // Determine integrity state exposed to the buyer
     const integrity = {
       status: ((): "verified" | "failed" | "unavailable" => {
-        if (!prompt.contentHash) return "unavailable";
+        if (!encryptedPayload.contentHash) return "unavailable";
         if (contentHash !== storedHash) return "failed";
         return "verified";
       })(),
       computedHash: contentHash,
-      storedHash: prompt.contentHash ?? null,
+      storedHash: encryptedPayload.contentHash ?? null,
     };
 
     if (integrity.status === "failed") {
-      // Integrity mismatch: redact decrypted content, emit diagnostics, and return structured metadata.
-      req.logger.error({ address, promptId }, "Prompt integrity check failed");
-      metrics.trackUnlockFailure(String(address), String(promptId), "integrity_failure");
+      req.logger.error(
+        { address: unlockRequest.address, promptId: unlockRequest.promptId },
+        "Prompt integrity check failed",
+      );
+      metrics.trackUnlockFailure(unlockRequest.address, unlockRequest.promptId, "integrity_failure");
       void recordAuditEvent({
         action: "unlock_integrity_failure",
         result: "failure",
@@ -373,27 +364,17 @@ async function handler(req: any, res: any) {
         clientIp,
         reason: "integrity_failure",
       });
-      res.status(500).json(
-        apiError(ErrorCode.INTEGRITY_FAILURE, "Prompt integrity check failed.", undefined, version),
-      );
-
-      // Emit a diagnostic webhook for creators/ops without disclosing plaintext.
       void Promise.resolve(
         dispatchEvent(prompt.creator ?? "", "PromptIntegrityViolation", {
           promptId: prompt.id.toString(),
-          buyer: String(address),
+          buyer: String(unlockRequest.address),
           computedHash: integrity.computedHash,
           storedHash: integrity.storedHash,
         }),
       ).catch(() => {});
-
-      // Return structured response with redacted plaintext and integrity metadata.
-      res.status(200).json({
-        promptId: prompt.id.toString(),
-        title: prompt.title,
-        integrity,
-      });
-
+      res.status(500).json(
+        apiError(ErrorCode.INTEGRITY_FAILURE, "Prompt integrity check failed.", undefined, version),
+      );
       return;
     }
 
@@ -402,9 +383,6 @@ async function handler(req: any, res: any) {
       { address: unlockRequest.address, promptId: unlockRequest.promptId },
       "Prompt unlocked successfully",
     );
-    // Success or unavailable (no stored hash) — allow the buyer to receive plaintext but include integrity metadata.
-    metrics.trackUnlockSuccess(String(address), String(promptId));
-    req.logger.info({ address, promptId }, "Prompt unlocked successfully");
     void recordAuditEvent({
       action: "unlock_success",
       result: "success",
@@ -415,7 +393,6 @@ async function handler(req: any, res: any) {
       reason: null,
     });
 
-    // Fire-and-forget webhook dispatch so the creator is notified of the sale.
     void Promise.resolve(
       dispatchEvent(prompt.creator ?? "", "PromptPurchased", {
         promptId: prompt.id.toString(),
@@ -431,18 +408,11 @@ async function handler(req: any, res: any) {
           title: prompt.title,
           contentHash,
           plaintext,
+          integrity,
         },
         version,
       ),
     );
-    res.status(200).json({
-      promptId: prompt.id.toString(),
-      title: prompt.title,
-      contentHash,
-      plaintext,
-      // Always include integrity metadata so the client can display provenance state.
-      integrity,
-    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to unlock prompt.";
     req.logger.error(

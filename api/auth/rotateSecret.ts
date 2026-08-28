@@ -157,10 +157,8 @@ async function handler(req: any, res: any) {
   const authHeader = req.headers.authorization;
   const adminToken = process.env.ADMIN_ROTATION_TOKEN;
   
-  if (!adminToken || authHeader !== `Bearer ${adminToken}`) {
-    res.status(401).json({ apiVersion: version, error: "Unauthorized" });
   if (!isValidAdminToken(req.headers.authorization, process.env.ADMIN_ROTATION_TOKEN)) {
-    res.status(401).json({ error: "Unauthorized" });
+    res.status(401).json({ apiVersion: version, error: "Unauthorized" });
     return;
   }
 
