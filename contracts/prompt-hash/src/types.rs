@@ -103,6 +103,8 @@ pub enum Error {
     /// The upgrade would break existing license holders; aborted before the
     /// new implementation is installed.
     UpgradeLicenseIntegrity = 54,
+    /// The buyer's token balance is insufficient to cover the payment.
+    InsufficientBalance = 55,
 }
 
 #[contracttype]
