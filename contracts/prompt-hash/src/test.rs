@@ -225,6 +225,116 @@ fn test_creator_can_pause_reactivate_and_update_price() {
     assert!(prompt.active);
 }
 
+// ─── Issue #192: Price history tracking ─────────────────────────────────────
+
+#[test]
+fn test_create_prompt_records_initial_price_history() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "History Prompt",
+        5_000,
+        &context.xlm,
+    );
+
+    let history = client.get_price_history(&prompt_id);
+    assert_eq!(history.len(), 1);
+    let first = history.get(0).unwrap();
+    assert_eq!(first.previous_price, 0);
+    assert_eq!(first.new_price, 5_000);
+    assert_eq!(first.seq, 1);
+    assert!(first.changed_at > 0);
+}
+
+#[test]
+fn test_update_prompt_price_appends_history_and_emits_event() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "History Prompt",
+        5_000,
+        &context.xlm,
+    );
+
+    let before = env.events().all().len();
+    client.update_prompt_price(&creator, &prompt_id, &9_000);
+    client.update_prompt_price(&creator, &prompt_id, &7_500);
+    let after = env.events().all().len();
+    // Each update publishes a PromptPriceUpdated event.
+    assert!(
+        after >= before + 2,
+        "expected two PromptPriceUpdated events, got {} delta",
+        after - before
+    );
+
+    let history = client.get_price_history(&prompt_id);
+    assert_eq!(history.len(), 3);
+    let second = history.get(1).unwrap();
+    assert_eq!(second.previous_price, 5_000);
+    assert_eq!(second.new_price, 9_000);
+    assert_eq!(second.seq, 2);
+    let third = history.get(2).unwrap();
+    assert_eq!(third.previous_price, 9_000);
+    assert_eq!(third.new_price, 7_500);
+    assert_eq!(third.seq, 3);
+}
+
+#[test]
+fn test_price_history_is_capped() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "History Prompt",
+        1_000,
+        &context.xlm,
+    );
+
+    // Creation records 1 entry; push well past the cap with price updates.
+    for i in 0..(Storage::MAX_PRICE_HISTORY_LEN + 5) {
+        client.update_prompt_price(&creator, &prompt_id, &((i as i128 + 2) * 1_000));
+    }
+
+    let history = client.get_price_history(&prompt_id);
+    assert_eq!(
+        history.len(),
+        Storage::MAX_PRICE_HISTORY_LEN,
+        "price history log must stay bounded at MAX_PRICE_HISTORY_LEN"
+    );
+    // Oldest entries are dropped, newest are retained.
+    assert_eq!(history.get(0).unwrap().seq, 7);
+}
+
+#[test]
+fn test_get_price_history_rejects_missing_prompt() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let result = client.try_get_price_history(&999_999);
+    match result {
+        Err(Ok(Error::PromptNotFound)) => {}
+        other => panic!("expected PromptNotFound for nonexistent prompt, got {:?}", other),
+    }
+}
+
 #[test]
 fn test_buy_prompt_grants_access_to_multiple_buyers_and_tracks_exact_fees() {
     let env: Env = Default::default();

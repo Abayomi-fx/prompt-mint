@@ -1,10 +1,10 @@
 use super::events::Events;
 use super::storage::Storage;
 use super::types::{
-    Bundle, BundlePurchase, ClassificationOverride, DataKey, Discount, Error, ListingConfig,
-    Prompt, PromptEncryptedPayload, PromptHashTrait, Purchase, ReferralCode, Settlement, Split,
-    Stake, Subscription, SubscriptionConfig, ALL_CLASSIFICATIONS, MAX_BUNDLE_DESC_LEN,
-    MAX_BUNDLE_ITEMS, MAX_BUNDLE_TITLE_LEN, VALID_DISCLOSURE_FLAGS,
+    Bundle, BundlePurchase, ClassificationOverride, DataKey, Error, ListingConfig,
+    PriceHistoryEntry, Prompt, PromptEncryptedPayload, PromptHashTrait, Purchase, ReferralCode,
+    Settlement, Split, Stake, Subscription, SubscriptionConfig, ALL_CLASSIFICATIONS,
+    MAX_BUNDLE_DESC_LEN, MAX_BUNDLE_ITEMS, MAX_BUNDLE_TITLE_LEN, VALID_DISCLOSURE_FLAGS,
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
@@ -150,6 +150,18 @@ impl PromptHashTrait for PromptHashContract {
         Storage::save_prompt(&env, &prompt)?;
         Storage::set_encryption_version_counter(&env, prompt_id, 1);
         Storage::add_prompt_to_creator(&env, &creator, prompt_id);
+        // #192 – record the initial listing price as the first history entry so
+        // buyers can see the price a prompt launched at.
+        Storage::add_price_history_entry(
+            &env,
+            prompt_id,
+            &PriceHistoryEntry {
+                previous_price: 0,
+                new_price: listing.price,
+                changed_at: env.ledger().timestamp(),
+                seq: 1,
+            },
+        );
         Events::emit_prompt_created(&env, prompt_id, creator, listing.price, listing.asset);
         Ok(prompt_id)
     }
@@ -201,11 +213,41 @@ impl PromptHashTrait for PromptHashContract {
 
         let mut prompt = Storage::require_prompt(&env, prompt_id)?;
         ensure(prompt.creator == creator, Error::Unauthorized)?;
+        let previous_price = prompt.price_stroops;
         prompt.price_stroops = price_stroops;
 
         Storage::update_prompt(&env, &prompt);
-        Events::emit_prompt_price_updated(&env, prompt_id, price_stroops);
+        // #192 – append this change to the prompt's compact price-history log.
+        let history = Storage::get_price_history(&env, prompt_id);
+        // Derive the next sequence number from the most recent entry so it stays
+        // monotonic even once older entries are trimmed from the compact log.
+        let next_seq = if !history.is_empty() {
+            history
+                .get(history.len() - 1)
+                .unwrap()
+                .seq
+                .saturating_add(1)
+        } else {
+            1
+        };
+        Storage::add_price_history_entry(
+            &env,
+            prompt_id,
+            &PriceHistoryEntry {
+                previous_price,
+                new_price: price_stroops,
+                changed_at: env.ledger().timestamp(),
+                seq: next_seq,
+            },
+        );
+        Events::emit_prompt_price_updated(&env, prompt_id, previous_price, price_stroops);
         Ok(())
+    }
+
+    // #192 – Return the recorded price history for a prompt, oldest first.
+    fn get_price_history(env: Env, prompt_id: u128) -> Result<Vec<PriceHistoryEntry>, Error> {
+        Storage::require_prompt(&env, prompt_id)?;
+        Ok(Storage::get_price_history(&env, prompt_id))
     }
 
     fn buy_prompt(

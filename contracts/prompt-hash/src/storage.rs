@@ -1,6 +1,6 @@
 use super::types::{
-    Bundle, BundlePurchase, ClassificationOverride, DataKey, Discount, Error, Prompt,
-    PromptEncryptedPayload, Purchase, ReferralCode, Settlement, Stake, Subscription,
+    Bundle, BundlePurchase, ClassificationOverride, DataKey, Discount, Error, PriceHistoryEntry,
+    Prompt, PromptEncryptedPayload, Purchase, ReferralCode, Settlement, Stake, Subscription,
     SubscriptionConfig,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
@@ -8,6 +8,10 @@ use soroban_sdk::{token, Address, BytesN, Env, Vec};
 pub const DAY_IN_LEDGERS: u32 = 17280;
 pub const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 pub const PERSISTENT_LIFETIME_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
+
+/// #192 – Maximum number of price-history entries retained per prompt so the
+/// compact history log in contract storage stays bounded in size.
+pub const MAX_PRICE_HISTORY_LEN: u32 = 20;
 
 pub struct Storage;
 
@@ -689,6 +693,48 @@ impl Storage {
     pub fn get_promotion_counter(env: &Env) -> u128 {
         let key = DataKey::PromptCounter; // Reuse prompt counter for promotion IDs
         env.storage().persistent().get(&key).unwrap_or(0)
+    }
+
+    // ─── #192: Per-prompt Price History ────────────────────────────────────
+
+    /// Append an entry to a prompt's compact price-history log. The log is
+    /// capped at `MAX_PRICE_HISTORY_LEN` entries, dropping the oldest entries
+    /// once the cap is exceeded.
+    pub fn add_price_history_entry(
+        env: &Env,
+        prompt_id: u128,
+        entry: &PriceHistoryEntry,
+    ) {
+        let key = DataKey::PriceHistory(prompt_id);
+        let mut history: Vec<PriceHistoryEntry> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        history.push_back(entry.clone());
+        // Keep the log compact: drop the oldest entries once over the cap.
+        if history.len() > MAX_PRICE_HISTORY_LEN {
+            let to_remove = history.len() - MAX_PRICE_HISTORY_LEN;
+            for _ in 0..to_remove {
+                history.remove(0);
+            }
+        }
+        env.storage().persistent().set(&key, &history);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    /// Return the recorded price history for a prompt, oldest first.
+    pub fn get_price_history(env: &Env, prompt_id: u128) -> Vec<PriceHistoryEntry> {
+        let key = DataKey::PriceHistory(prompt_id);
+        let history: Vec<PriceHistoryEntry> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        history
     }
 
     // ─── #275: Creator Reputation Staking ─────────────────────────────────

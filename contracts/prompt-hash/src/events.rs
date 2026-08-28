@@ -20,6 +20,9 @@ struct PromptSaleStatusUpdated {
 struct PromptPriceUpdated {
     #[topic]
     pub prompt_id: u128,
+    /// Price in stroops before the change.
+    pub previous_price: i128,
+    /// Price in stroops after the change.
     pub price_stroops: i128,
 }
 
@@ -176,9 +179,15 @@ impl Events {
         PromptSaleStatusUpdated { prompt_id, active }.publish(env);
     }
 
-    pub fn emit_prompt_price_updated(env: &Env, prompt_id: u128, price_stroops: i128) {
+    pub fn emit_prompt_price_updated(
+        env: &Env,
+        prompt_id: u128,
+        previous_price: i128,
+        price_stroops: i128,
+    ) {
         PromptPriceUpdated {
             prompt_id,
+            previous_price,
             price_stroops,
         }
         .publish(env);
