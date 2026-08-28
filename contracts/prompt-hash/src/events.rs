@@ -119,6 +119,14 @@ struct ListingExtended {
 }
 
 #[contractevent]
+struct PromptExpiringSoon {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub expires_at: u64,
+}
+
+#[contractevent]
 struct SubscriptionConfigured {
     #[topic]
     pub creator: Address,
@@ -306,6 +314,20 @@ impl Events {
         ListingExtended {
             prompt_id,
             new_expires_at,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_prompt_expiring_soon(
+        env: &Env,
+        prompt_id: u128,
+        creator: Address,
+        expires_at: u64,
+    ) {
+        PromptExpiringSoon {
+            prompt_id,
+            creator,
+            expires_at,
         }
         .publish(env);
     }

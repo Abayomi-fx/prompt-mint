@@ -88,6 +88,22 @@ impl Storage {
         Self::extend_key_ttl(env, &key);
     }
 
+    pub fn has_prompt_expiry_warning(env: &Env, prompt_id: u128) -> bool {
+        let key = DataKey::PromptExpiryWarning(prompt_id);
+        env.storage().persistent().has(&key)
+    }
+
+    pub fn set_prompt_expiry_warning(env: &Env, prompt_id: u128) {
+        let key = DataKey::PromptExpiryWarning(prompt_id);
+        env.storage().persistent().set(&key, &true);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn clear_prompt_expiry_warning(env: &Env, prompt_id: u128) {
+        let key = DataKey::PromptExpiryWarning(prompt_id);
+        env.storage().persistent().remove(&key);
+    }
+
     pub fn get_prompt_counter(env: &Env) -> u128 {
         let key = DataKey::PromptCounter;
         let count = env.storage().persistent().get(&key).unwrap_or(0);

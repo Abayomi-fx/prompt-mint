@@ -14,6 +14,7 @@ const DEFAULT_FEE_BPS: u32 = 500;
 const MAX_FEE_BPS: u32 = 2_000; // 20% maximum platform fee safeguard (#41)
 const ROYALTY_BPS: u32 = 500;
 const MAX_BPS: u32 = 10_000;
+const MAX_SPLITS: u32 = 16;
 const MAX_TITLE_LEN: u32 = 120;
 const MAX_CATEGORY_LEN: u32 = 40;
 const MAX_PREVIEW_LEN: u32 = 280;
@@ -23,6 +24,7 @@ const MAX_IMAGE_URL_LEN: u32 = 512;
 const MAX_IV_LEN: u32 = 64;
 const LEASE_PRICE_BPS: u32 = 4_000;
 const MAX_ACCESS_EXPIRY: u64 = u64::MAX;
+const EXPIRY_WARNING_SECS: u64 = 7 * 24 * 60 * 60;
 const MAX_SUBSCRIPTION_DURATION_SECS: u64 = 31_536_000;
 const MAX_CLASSIFICATION_LEN: u32 = 20;
 const MAX_SAFETY_FLAGS_COUNT: u32 = 10;
@@ -335,8 +337,48 @@ impl PromptHashTrait for PromptHashContract {
 
         prompt.expires_at = new_expires_at;
         Storage::update_prompt(&env, &prompt);
+        Storage::clear_prompt_expiry_warning(&env, prompt_id);
         Events::emit_listing_extended(&env, prompt_id, new_expires_at);
         Ok(())
+    }
+
+    fn extend_prompt_lifetime(
+        env: Env,
+        creator: Address,
+        prompt_id: u128,
+        extension_secs: u64,
+    ) -> Result<u64, Error> {
+        creator.require_auth();
+        Storage::require_no_reentrancy(&env)?;
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        ensure(prompt.creator == creator, Error::Unauthorized)?;
+        ensure(prompt.expires_at != 0 && extension_secs > 0, Error::InvalidPrice)?;
+
+        let new_expires_at = prompt
+            .expires_at
+            .checked_add(extension_secs)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let mut extended_prompt = prompt;
+        extended_prompt.expires_at = new_expires_at;
+        Storage::update_prompt(&env, &extended_prompt);
+        Storage::clear_prompt_expiry_warning(&env, prompt_id);
+        Events::emit_listing_extended(&env, prompt_id, new_expires_at);
+        Ok(new_expires_at)
+    }
+
+    fn check_prompt_expiry(env: Env, prompt_id: u128) -> Result<bool, Error> {
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        let now = env.ledger().timestamp();
+        let expiring_soon = prompt.expires_at > now
+            && prompt.expires_at - now <= EXPIRY_WARNING_SECS;
+
+        if expiring_soon && !Storage::has_prompt_expiry_warning(&env, prompt_id) {
+            Storage::set_prompt_expiry_warning(&env, prompt_id);
+            Events::emit_prompt_expiring_soon(&env, prompt_id, prompt.creator, prompt.expires_at);
+        }
+
+        Ok(expiring_soon)
     }
 
     // ─── Issue #51: Bulk Purchase ────────────────────────────────────────────
@@ -784,8 +826,8 @@ impl PromptHashTrait for PromptHashContract {
         ensure(prompt_ids.len() > 0, Error::InvalidPrice)?;
         ensure(prompt_ids.len() <= MAX_BUNDLE_ITEMS, Error::InvalidPrice)?;
 
-        // Validate token interface
-        token::Client::new(&env, &asset).decimals();
+        // Validate token interface through the guarded external-call helper.
+        validate_token_contract(&env, &asset)?;
 
         // Validate every prompt: must exist, be active, and be owned by creator
         for i in 0..prompt_ids.len() {
@@ -1501,7 +1543,9 @@ impl PromptHashTrait for PromptHashContract {
         // Move native XLM from the creator into contract custody.
         let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
         let this_contract = env.current_contract_address();
+        Storage::set_reentrancy_guard(&env)?;
         token::Client::new(&env, &xlm).transfer(&creator, &this_contract, &amount);
+        Storage::clear_reentrancy_guard(&env);
 
         let now = env.ledger().timestamp();
         let mut stake = Storage::get_stake(&env, prompt_id).unwrap_or(Stake {
@@ -1542,7 +1586,9 @@ impl PromptHashTrait for PromptHashContract {
             let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
             let fee_wallet = Storage::get_fee_wallet(&env).ok_or(Error::FeeWalletNotSet)?;
             let this_contract = env.current_contract_address();
+            Storage::set_reentrancy_guard(&env)?;
             token::Client::new(&env, &xlm).transfer(&this_contract, &fee_wallet, &slash_amount);
+            Storage::clear_reentrancy_guard(&env);
         }
 
         Storage::save_stake(&env, &stake);
@@ -1578,7 +1624,9 @@ impl PromptHashTrait for PromptHashContract {
         if withdraw > 0 {
             let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
             let this_contract = env.current_contract_address();
+            Storage::set_reentrancy_guard(&env)?;
             token::Client::new(&env, &xlm).transfer(&this_contract, &creator, &withdraw);
+            Storage::clear_reentrancy_guard(&env);
         }
 
         Storage::save_stake(&env, &stake);
@@ -1938,6 +1986,7 @@ fn resolve_referral(
 /// MAX_BPS minus the current platform fee, ensuring the creator always
 /// receives a non-negative payout.
 fn validate_splits(env: &Env, splits: &Vec<Split>) -> Result<(), Error> {
+    ensure(splits.len() <= MAX_SPLITS, Error::InvalidSplits)?;
     let fee_percentage = Storage::get_fee_percentage(env);
     let mut total_bps: u32 = 0;
     for i in 0..splits.len() {
