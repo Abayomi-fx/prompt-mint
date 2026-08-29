@@ -9,6 +9,7 @@ import {
   normalizeContentHash,
   unwrapPromptKey,
 } from "../../src/lib/crypto/promptCrypto";
+import { fetchFromBlobStorage, isBlobReference } from "../../src/lib/stellar/blobStorage";
 import {
   getPrompt,
   getPromptEncryptionVersion,
@@ -438,6 +439,21 @@ async function handler(req: any, res: any) {
         wrappedKey: archived.wrappedKey,
         contentHash: archived.contentHash,
       };
+    }
+
+    if (isBlobReference(encryptedPayload.encryptedPrompt)) {
+      try {
+        encryptedPayload.encryptedPrompt = await fetchFromBlobStorage(encryptedPayload.encryptedPrompt);
+      } catch (error) {
+        req.logger.error(
+          { address: unlockRequest.address, promptId: unlockRequest.promptId, error: error instanceof Error ? error.message : String(error) },
+          "Failed to fetch encrypted prompt from blob storage"
+        );
+        res.status(502).json(
+          apiError(ErrorCode.TEMPORARY_FAILURE, "Failed to fetch prompt data from blob storage.", undefined, version),
+        );
+        return;
+      }
     }
 
     const keyBytes = await unwrapPromptKey(
