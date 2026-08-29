@@ -6,10 +6,14 @@ interface RateLimitConfig {
   windowMs: number;
 }
 
+export type UserTier = "free" | "verified" | "premium";
+
+const ONE_HOUR_MS = 60 * 60 * 1000;
+
 // Unauthenticated (no wallet address provided) requests get stricter limits.
 const limits: Record<string, { authenticated: RateLimitConfig; unauthenticated: RateLimitConfig }> = {
   challenge: {
-    unauthenticated: { max: 5, windowMs: 60_000 },
+    unauthenticated: { max: 10, windowMs: 60_000 },
     authenticated: { max: 10, windowMs: 60_000 },
   },
   unlock: {
@@ -23,6 +27,13 @@ const limits: Record<string, { authenticated: RateLimitConfig; unauthenticated: 
     unauthenticated: { max: 60, windowMs: 60_000 },
     authenticated: { max: 120, windowMs: 60_000 },
   },
+};
+
+// Tiered unlock limits per hour (#208): free=10/hr, verified=100/hr, premium=1000/hr
+const unlockTierLimits: Record<UserTier, RateLimitConfig> = {
+  free: { max: 10, windowMs: ONE_HOUR_MS },
+  verified: { max: 100, windowMs: ONE_HOUR_MS },
+  premium: { max: 1000, windowMs: ONE_HOUR_MS },
 };
 
 // In-memory LRU fallback used when Redis is unavailable.
@@ -78,6 +89,27 @@ export async function checkRateLimit(
 ): Promise<{ success: boolean; limit: number; remaining: number; reset: number }> {
   const config = limits[type][authenticated ? "authenticated" : "unauthenticated"];
   const bucketKey = `${type}:${identifier}`;
+
+  try {
+    const redis = await getRedisClient();
+    if (redis) return await redisCheck(redis, bucketKey, config);
+  } catch {
+    // Redis unavailable — fall back to in-memory.
+  }
+
+  return inMemoryCheck(bucketKey, config);
+}
+
+/**
+ * Tiered rate limit check for unlock requests (#208).
+ * Resolves the caller's wallet tier and applies the corresponding hourly quota.
+ */
+export async function checkUnlockTierLimit(
+  identifier: string,
+  tier: UserTier = "free",
+): Promise<{ success: boolean; limit: number; remaining: number; reset: number }> {
+  const config = unlockTierLimits[tier];
+  const bucketKey = `unlock_tier:${tier}:${identifier}`;
 
   try {
     const redis = await getRedisClient();

@@ -7,6 +7,9 @@ target
 
 # Tests and snapshots
 test_snapshots
+playwright-report/
+test-results/
+src/test/e2e/__screenshots__/
 
 # Frontend build output
 dist
@@ -69,3 +72,7 @@ packages/*
 # Load-test secrets and generated results
 load-tests/fixtures/generated.json
 load-results/
+
+# Generated security / gas reports (committed baselines stay tracked)
+reports/
+contracts/prompt-hash/gas-report.json

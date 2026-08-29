@@ -1,12 +1,17 @@
 use super::types::{
-    Bundle, ClassificationOverride, DataKey, Discount, Error, Prompt, PromptEncryptedPayload,
-    Purchase, ReferralCode, Settlement, Stake, Subscription, SubscriptionConfig,
+    Bundle, BundlePurchase, ClassificationOverride, DataKey, Discount, Error, PriceHistoryEntry,
+    Prompt, PromptEncryptedPayload, Purchase, ReferralCode, Settlement, Stake, Subscription,
+    SubscriptionConfig,
 };
 use soroban_sdk::{token, Address, BytesN, Env, Vec};
 
 pub const DAY_IN_LEDGERS: u32 = 17280;
 pub const PERSISTENT_BUMP_AMOUNT: u32 = 30 * DAY_IN_LEDGERS;
 pub const PERSISTENT_LIFETIME_THRESHOLD: u32 = 7 * DAY_IN_LEDGERS;
+
+/// #192 – Maximum number of price-history entries retained per prompt so the
+/// compact history log in contract storage stays bounded in size.
+pub const MAX_PRICE_HISTORY_LEN: u32 = 20;
 
 pub struct Storage;
 
@@ -19,6 +24,30 @@ fn ensure(condition: bool, error: Error) -> Result<(), Error> {
 }
 
 impl Storage {
+    pub fn set_admin_signers(env: &Env, signers: &Vec<Address>) {
+        let key = DataKey::AdminSigners;
+        env.storage().persistent().set(&key, signers);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn is_admin_signer(env: &Env, signer: &Address) -> bool {
+        let key = DataKey::AdminSigners;
+        let signers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        for index in 0..signers.len() {
+            if signers.get(index).unwrap() == signer.clone() {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn extend_key_ttl(env: &Env, key: &DataKey) {
         if env.storage().persistent().has(key) {
             env.storage().persistent().extend_ttl(
@@ -63,6 +92,22 @@ impl Storage {
         Self::extend_key_ttl(env, &key);
     }
 
+    pub fn has_prompt_expiry_warning(env: &Env, prompt_id: u128) -> bool {
+        let key = DataKey::PromptExpiryWarning(prompt_id);
+        env.storage().persistent().has(&key)
+    }
+
+    pub fn set_prompt_expiry_warning(env: &Env, prompt_id: u128) {
+        let key = DataKey::PromptExpiryWarning(prompt_id);
+        env.storage().persistent().set(&key, &true);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    pub fn clear_prompt_expiry_warning(env: &Env, prompt_id: u128) {
+        let key = DataKey::PromptExpiryWarning(prompt_id);
+        env.storage().persistent().remove(&key);
+    }
+
     pub fn get_prompt_counter(env: &Env) -> u128 {
         let key = DataKey::PromptCounter;
         let count = env.storage().persistent().get(&key).unwrap_or(0);
@@ -80,6 +125,22 @@ impl Storage {
             if let Some(prompt) = Self::get_prompt(env, prompt_id) {
                 // Skip expired listings (expires_at == 0 means never expires)
                 if prompt.expires_at == 0 || prompt.expires_at >= now {
+                    prompts.push_back(prompt);
+                }
+            }
+        }
+        prompts
+    }
+
+    pub fn get_prompts_by_category(env: &Env, category: &String) -> Vec<Prompt> {
+        let prompt_count = Self::get_prompt_counter(env);
+        let now = env.ledger().timestamp();
+        let mut prompts = Vec::new(env);
+        for prompt_id in 0..prompt_count {
+            if let Some(prompt) = Self::get_prompt(env, prompt_id) {
+                if (prompt.expires_at == 0 || prompt.expires_at >= now)
+                    && prompt.category == category.clone()
+                {
                     prompts.push_back(prompt);
                 }
             }
@@ -166,7 +227,10 @@ impl Storage {
             if ids.get(index).unwrap() == prompt_id {
                 ids.remove(index);
             } else {
-                index += 1;
+                index = match index.checked_add(1) {
+                    Some(next) => next,
+                    None => break,
+                };
             }
         }
         env.storage().persistent().set(&key, &ids);
@@ -384,15 +448,23 @@ impl Storage {
 
     pub fn set_reentrancy_guard(env: &Env) -> Result<(), Error> {
         let key = DataKey::Reentrancy;
-        let already_set = env
+        Self::require_no_reentrancy(env)?;
+        env.storage().persistent().set(&key, &true);
+        Self::extend_key_ttl(env, &key);
+        Ok(())
+    }
+
+    pub fn require_no_reentrancy(env: &Env) -> Result<(), Error> {
+        let key = DataKey::Reentrancy;
+        let entered = env
             .storage()
             .persistent()
             .get::<_, bool>(&key)
             .unwrap_or(false);
-        ensure(!already_set, Error::ReentrancyGuard)?;
-        env.storage().persistent().set(&key, &true);
-        Self::extend_key_ttl(env, &key);
-        Ok(())
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        ensure(!entered, Error::ReentrancyGuard)
     }
 
     pub fn clear_reentrancy_guard(env: &Env) {
@@ -444,6 +516,24 @@ impl Storage {
         let key = DataKey::ReferralParent(buyer.clone());
         env.storage().persistent().set(&key, referrer);
         Self::extend_key_ttl(env, &key);
+    }
+
+    /// #32 – records that contract setup (`__constructor`) has completed, so
+    /// callers can detect and reject an attempt to run it again.
+    pub fn set_initialized(env: &Env) {
+        let key = DataKey::Initialized;
+        env.storage().persistent().set(&key, &true);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    /// #32 – true once `__constructor` has run for this contract instance.
+    pub fn is_initialized(env: &Env) -> bool {
+        let key = DataKey::Initialized;
+        let initialized = env.storage().persistent().get(&key).unwrap_or(false);
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        initialized
     }
 
     pub fn set_pause_status(env: &Env, is_paused: bool) {
@@ -605,6 +695,48 @@ impl Storage {
         env.storage().persistent().get(&key).unwrap_or(0)
     }
 
+    // ─── #192: Per-prompt Price History ────────────────────────────────────
+
+    /// Append an entry to a prompt's compact price-history log. The log is
+    /// capped at `MAX_PRICE_HISTORY_LEN` entries, dropping the oldest entries
+    /// once the cap is exceeded.
+    pub fn add_price_history_entry(
+        env: &Env,
+        prompt_id: u128,
+        entry: &PriceHistoryEntry,
+    ) {
+        let key = DataKey::PriceHistory(prompt_id);
+        let mut history: Vec<PriceHistoryEntry> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        history.push_back(entry.clone());
+        // Keep the log compact: drop the oldest entries once over the cap.
+        if history.len() > MAX_PRICE_HISTORY_LEN {
+            let to_remove = history.len() - MAX_PRICE_HISTORY_LEN;
+            for _ in 0..to_remove {
+                history.remove(0);
+            }
+        }
+        env.storage().persistent().set(&key, &history);
+        Self::extend_key_ttl(env, &key);
+    }
+
+    /// Return the recorded price history for a prompt, oldest first.
+    pub fn get_price_history(env: &Env, prompt_id: u128) -> Vec<PriceHistoryEntry> {
+        let key = DataKey::PriceHistory(prompt_id);
+        let history: Vec<PriceHistoryEntry> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(env));
+        if env.storage().persistent().has(&key) {
+            Self::extend_key_ttl(env, &key);
+        }
+        history
+    }
+
     // ─── #275: Creator Reputation Staking ─────────────────────────────────
 
     pub fn get_stake(env: &Env, prompt_id: u128) -> Option<Stake> {
@@ -724,8 +856,6 @@ impl Storage {
 }
 
 // ─── Bundle storage ──────────────────────────────────────────────────────────
-
-use super::types::{Bundle, BundlePurchase};
 
 impl Storage {
     // ── Counter ──────────────────────────────────────────────────────────────

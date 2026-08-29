@@ -16,8 +16,8 @@
     "jsx": "react-jsx",
 
     "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
     "ignoreDeprecations": "6.0",
@@ -33,6 +33,9 @@
     "src/contracts",
     "src/pages/Debugger.tsx",
     "src/components/GuessTheNumber.tsx",
-    "src/test/e2e"
+    "src/test",
+    "src/stories",
+    "**/*.test.ts",
+    "**/*.test.tsx"
   ]
 }

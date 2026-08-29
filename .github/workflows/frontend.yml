@@ -57,7 +57,7 @@ jobs:
         run: corepack enable
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: yarn
@@ -79,3 +79,19 @@ jobs:
 
       - name: Build frontend
         run: yarn build
+
+      - name: Install Playwright browsers
+        run: yarn playwright install --with-deps chromium
+
+      - name: Run visual regression tests
+        run: yarn test:e2e
+
+      - name: Upload visual regression artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-visual-regression
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore

@@ -280,6 +280,9 @@ yarn test:frontend --run api/prompts/unlock.test.ts src/lib/auth/challenge.test.
 yarn build
 ```
 
+For a timed zero-to-working setup with a first Soroban contract interaction,
+see the [Developer Quickstart](docs/developer-quickstart.md).
+
 ## Setup Validation
 
 Run the one-command setup check to verify all prerequisites and environment variables before starting development:

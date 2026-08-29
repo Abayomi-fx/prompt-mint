@@ -1,11 +1,14 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowDownLeft,
+  ArrowUp,
   ArrowUpRight,
+  ArrowUpDown,
   ExternalLink,
   ReceiptText,
   Repeat2,
+  Trash2,
   Wallet,
 } from "lucide-react";
 import { Navigation } from "@/components/navigation";
@@ -51,6 +54,78 @@ function toDayEnd(value: string): number | undefined {
   if (!value) return undefined;
   const ms = new Date(`${value}T23:59:59.999`).getTime();
   return Number.isNaN(ms) ? undefined : ms;
+}
+
+type SortKey = "type" | "amount" | "status" | "date";
+type SortDirection = "asc" | "desc";
+
+const SORT_COLUMNS: { key: SortKey; label: string }[] = [
+  { key: "type", label: "Type" },
+  { key: "amount", label: "Amount" },
+  { key: "status", label: "Status" },
+  { key: "date", label: "Date" },
+];
+
+function sortValue(tx: TransactionRecord, key: SortKey): number | string {
+  switch (key) {
+    case "type":
+      return TYPE_META[tx.type].label;
+    case "amount":
+      return tx.amountStroops ? Number(tx.amountStroops) : -1;
+    case "status":
+      return tx.status;
+    case "date":
+    default:
+      return tx.timestamp;
+  }
+}
+
+function sortTransactions(
+  records: TransactionRecord[],
+  key: SortKey,
+  direction: SortDirection
+): TransactionRecord[] {
+  const sorted = [...records].sort((a, b) => {
+    const va = sortValue(a, key);
+    const vb = sortValue(b, key);
+    if (va < vb) return -1;
+    if (va > vb) return 1;
+    return 0;
+  });
+  return direction === "asc" ? sorted : sorted.reverse();
+}
+
+/* eslint-disable no-unused-vars */
+interface SortableHeaderProps {
+  column: { key: SortKey; label: string };
+  activeKey: SortKey;
+  direction: SortDirection;
+  onSort: (_key: SortKey) => void;
+}
+/* eslint-enable no-unused-vars */
+
+function SortableHeader({ column, activeKey, direction, onSort }: SortableHeaderProps) {
+  const isActive = column.key === activeKey;
+  return (
+    <th className="py-3 px-4 font-medium">
+      <button
+        type="button"
+        onClick={() => onSort(column.key)}
+        className="inline-flex items-center gap-1 uppercase text-xs font-medium text-slate-400 hover:text-white transition-colors"
+        aria-sort={isActive ? (direction === "asc" ? "ascending" : "descending") : "none"}
+      >
+        {column.label}
+        {isActive ? (
+          <ArrowUp
+            className={`h-3 w-3 transition-transform ${direction === "desc" ? "rotate-180" : ""}`}
+            aria-hidden="true"
+          />
+        ) : (
+          <ArrowUpDown className="h-3 w-3 text-slate-600" aria-hidden="true" />
+        )}
+      </button>
+    </th>
+  );
 }
 
 function TransactionRow({ tx }: { tx: TransactionRecord }) {
@@ -113,13 +188,91 @@ function TransactionRow({ tx }: { tx: TransactionRecord }) {
   );
 }
 
+function TransactionCard({ tx }: { tx: TransactionRecord }) {
+  const meta = TYPE_META[tx.type];
+  const Icon = meta.icon;
+  return (
+    <li className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <span className="inline-flex items-center gap-2 text-sm text-slate-200">
+          <Icon className="h-4 w-4 text-emerald-400" aria-hidden="true" />
+          {meta.label}
+        </span>
+        <Badge className={`border ${STATUS_STYLE[tx.status]}`}>{tx.status}</Badge>
+      </div>
+
+      <div className="mt-3">
+        {tx.title ? (
+          tx.promptId ? (
+            <Link
+              to={`/prompt/${tx.promptId}`}
+              className="text-sm font-medium text-slate-100 hover:text-emerald-400 transition-colors"
+            >
+              {tx.title}
+            </Link>
+          ) : (
+            <p className="text-sm font-medium text-slate-100">{tx.title}</p>
+          )
+        ) : (
+          <p className="text-sm text-slate-500">—</p>
+        )}
+      </div>
+
+      <dl className="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <div>
+          <dt className="text-slate-500">Amount</dt>
+          <dd className="font-mono text-slate-300">
+            {tx.amountStroops ? formatXLM(tx.amountStroops) : "—"}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-slate-500">Date</dt>
+          <dd className="text-slate-300">{new Date(tx.timestamp).toLocaleString()}</dd>
+        </div>
+      </dl>
+
+      <div className="mt-3 border-t border-slate-800 pt-3">
+        {tx.txHash ? (
+          <a
+            href={explorerTxUrl(tx.txHash)}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-emerald-400 font-mono transition-colors"
+          >
+            View on explorer <ExternalLink className="h-3 w-3" />
+          </a>
+        ) : (
+          <span className="text-slate-600 text-xs">Tx hash n/a</span>
+        )}
+      </div>
+    </li>
+  );
+}
+
 export default function TransactionHistoryPage() {
   const { address } = useWallet();
-  const { filtered, filter, setFilter, transactions } =
+  const { filtered, filter, setFilter, transactions, clear } =
     useTransactionHistory(address);
+  const [confirmingClear, setConfirmingClear] = useState(false);
 
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("date");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+
+  const sorted = useMemo(
+    () => sortTransactions(filtered, sortKey, sortDirection),
+    [filtered, sortKey, sortDirection]
+  );
+
+  const handleSort = (key: SortKey) => {
+    if (key === sortKey) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDirection("desc");
+    }
+  };
 
   const typeValue = filter.type ?? "all";
   const statusValue = filter.status ?? "all";
@@ -139,14 +292,55 @@ export default function TransactionHistoryPage() {
     <div className="min-h-screen bg-slate-950 text-white">
       <Navigation />
       <main className="max-w-5xl mx-auto px-4 py-10">
-        <header className="mb-8 flex items-center gap-3">
-          <ReceiptText className="h-7 w-7 text-emerald-400" aria-hidden="true" />
-          <div>
-            <h1 className="text-2xl font-semibold">Transaction History</h1>
-            <p className="text-sm text-slate-400">
-              Your purchases, sales and transfers on the Stellar network.
-            </p>
+        <header className="mb-8 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <ReceiptText className="h-7 w-7 text-emerald-400" aria-hidden="true" />
+            <div>
+              <h1 className="text-2xl font-semibold">Transaction History</h1>
+              <p className="text-sm text-slate-400">
+                Your purchases, sales and transfers on the Stellar network.
+              </p>
+            </div>
           </div>
+
+          {address && transactions.length > 0 && (
+            <div className="flex items-center gap-2">
+              {confirmingClear ? (
+                <>
+                  <span className="text-xs text-slate-400">
+                    Remove this device&apos;s local history for this wallet?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clear();
+                      setConfirmingClear(false);
+                    }}
+                    className="rounded border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs font-medium text-red-300 hover:bg-red-500/20 transition-colors"
+                  >
+                    Confirm clear
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmingClear(false)}
+                    className="rounded border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingClear(true)}
+                  className="inline-flex items-center gap-1.5 rounded border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 hover:text-red-300 transition-colors"
+                  title="This only clears history stored locally on this device; it does not affect your on-chain purchases or marketplace access."
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                  Clear my local history
+                </button>
+              )}
+            </div>
+          )}
         </header>
 
         {!address ? (
@@ -258,25 +452,51 @@ export default function TransactionHistoryPage() {
                 size="lg"
               />
             ) : (
-              <div className="overflow-x-auto rounded-lg border border-slate-800">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-900/60 text-xs uppercase text-slate-400">
-                    <tr>
-                      <th className="py-3 px-4 font-medium">Type</th>
-                      <th className="py-3 px-4 font-medium">Prompt</th>
-                      <th className="py-3 px-4 font-medium">Amount</th>
-                      <th className="py-3 px-4 font-medium">Status</th>
-                      <th className="py-3 px-4 font-medium">Date</th>
-                      <th className="py-3 px-4 font-medium">Explorer</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map((tx) => (
-                      <TransactionRow key={tx.id} tx={tx} />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                {/* Stacked cards on narrow viewports (below sm: 640px) */}
+                <ul className="grid grid-cols-1 gap-3 sm:hidden">
+                  {sorted.map((tx) => (
+                    <TransactionCard key={tx.id} tx={tx} />
+                  ))}
+                </ul>
+
+                {/* Sortable, horizontally-scrollable table with a sticky header at sm+ */}
+                <div className="hidden sm:block max-h-[70vh] overflow-auto rounded-lg border border-slate-800">
+                  <table className="w-full text-left">
+                    <thead className="sticky top-0 z-10 bg-slate-900/95 text-xs uppercase text-slate-400 backdrop-blur">
+                      <tr>
+                        {SORT_COLUMNS.map((column) =>
+                          column.key === "type" ? (
+                            <Fragment key={column.key}>
+                              <SortableHeader
+                                column={column}
+                                activeKey={sortKey}
+                                direction={sortDirection}
+                                onSort={handleSort}
+                              />
+                              <th className="py-3 px-4 font-medium">Prompt</th>
+                            </Fragment>
+                          ) : (
+                            <SortableHeader
+                              key={column.key}
+                              column={column}
+                              activeKey={sortKey}
+                              direction={sortDirection}
+                              onSort={handleSort}
+                            />
+                          )
+                        )}
+                        <th className="py-3 px-4 font-medium">Explorer</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sorted.map((tx) => (
+                        <TransactionRow key={tx.id} tx={tx} />
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </>
         )}

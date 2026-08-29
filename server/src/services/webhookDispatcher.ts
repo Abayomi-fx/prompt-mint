@@ -1,13 +1,15 @@
-import { createHmac, randomUUID } from "crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "crypto";
 import WebhookSubscription from "../models/WebhookSubscription";
 import WebhookDelivery from "../models/WebhookDelivery";
 import WebhookDeadLetter from "../models/WebhookDeadLetter";
 import { WEBHOOK_SCHEMA_VERSION } from "../../../src/lib/api/payloadVersion";
+import { recordAuditEvent } from "./auditTrail";
 
-const MAX_RETRIES = 3;
-const BASE_RETRY_DELAY_MS = 2_000;
-const MAX_RETRY_DELAY_MS = 30_000;
+const MAX_RETRIES = 5;
+const BASE_RETRY_DELAY_MS = 3_000;
+const MAX_RETRY_DELAY_MS = 243_000;
 const MAX_FAILURES_BEFORE_DISABLE = 10;
+const pendingDeliveries = new Set<Promise<void>>();
 
 /** Current webhook payload schema version. Bump on any breaking change to the envelope shape. */
 export const WEBHOOK_PAYLOAD_VERSION = 1;
@@ -43,18 +45,25 @@ export interface WebhookPayload {
   data: Record<string, unknown>;
 }
 
-function signPayload(secret: string, body: string): string {
+export function signWebhookPayload(secret: string, body: string): string {
   return `sha256=${createHmac("sha256", secret).update(body).digest("hex")}`;
 }
 
-/** Bounded exponential backoff: 2s, 4s, 8s, ... capped at MAX_RETRY_DELAY_MS. */
+/** Constant-time verification helper for Node.js webhook consumers. */
+export function verifyWebhookSignature(secret: string, body: string, signature: string): boolean {
+  const expected = Buffer.from(signWebhookPayload(secret, body));
+  const received = Buffer.from(signature);
+  return expected.length === received.length && timingSafeEqual(expected, received);
+}
+
+/** Bounded exponential backoff: 3s, 9s, 27s, 81s, 243s — capped at MAX_RETRY_DELAY_MS. (#210) */
 function retryDelayMs(attempt: number): number {
-  return Math.min(BASE_RETRY_DELAY_MS * 2 ** attempt, MAX_RETRY_DELAY_MS);
+  return Math.min(BASE_RETRY_DELAY_MS * 3 ** attempt, MAX_RETRY_DELAY_MS);
 }
 
 async function deliverOnce(url: string, secret: string, payload: WebhookPayload): Promise<void> {
   const body = JSON.stringify(payload);
-  const signature = signPayload(secret, body);
+  const signature = signWebhookPayload(secret, body);
 
   const res = await fetch(url, {
     method: "POST",
@@ -65,6 +74,9 @@ async function deliverOnce(url: string, secret: string, payload: WebhookPayload)
       "X-PromptHash-Event": payload.event,
       "X-PromptHash-Version": String(payload.version),
       "X-PromptHash-Schema-Version": payload.schemaVersion,
+      // Included in the signed JSON envelope; consumers should enforce a
+      // short acceptance window to prevent replay attacks.
+      "X-PromptHash-Timestamp": payload.timestamp,
     },
     body,
     signal: AbortSignal.timeout(10_000),
@@ -181,6 +193,12 @@ async function deliverWithRetry(
         lastError: message,
         lastStatusCode: statusCode,
       });
+      void recordAuditEvent({
+        action: "webhook_delivery_failure",
+        result: "failure",
+        reason: "retries_exhausted",
+        metadata: { subscriptionId, event: payload.event, statusCode },
+      });
 
       const updated = await WebhookSubscription.findByIdAndUpdate(
         subscriptionId,
@@ -225,9 +243,29 @@ export async function dispatchEvent(
 
   const payload = buildWebhookPayload(event, data);
 
-  await Promise.allSettled(
+  const work = Promise.allSettled(
     subscriptions.map((sub) => deliverWithRetry(String(sub._id), sub.url, sub.secret, payload)),
-  );
+  ).then(() => undefined);
+  pendingDeliveries.add(work);
+  try {
+    await work;
+  } finally {
+    pendingDeliveries.delete(work);
+  }
+}
+
+/** Wait for in-flight outbound deliveries during graceful shutdown. */
+export async function flushPendingWebhooks(timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (pendingDeliveries.size > 0) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return false;
+    await Promise.race([
+      Promise.allSettled([...pendingDeliveries]),
+      new Promise<void>((resolve) => setTimeout(resolve, remaining)),
+    ]);
+  }
+  return true;
 }
 
 /**

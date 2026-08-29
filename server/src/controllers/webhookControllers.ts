@@ -8,6 +8,9 @@ import { asyncRoute } from "../lib/asyncRoute";
 import { validateWebhookUrl } from "../lib/validateWebhookUrl";
 import { sendTestEvent, replayDeadLetter } from "../services/webhookDispatcher";
 import { isValidAdminToken } from "../services/adminAuth";
+import { recordAuditEvent } from "../services/auditTrail";
+import { validateBody } from "../middleware/validateRequest";
+import { z } from "zod";
 
 /**
  * Real contract events a creator can subscribe a webhook to (issue #23:
@@ -21,13 +24,22 @@ const ALLOWED_EVENTS = [
   "EncryptionRotated", // version updates
 ];
 
+// #211 — Zod schemas for webhook request validation
+const RegisterWebhookBody = z.object({
+  walletAddress: z.string().trim().min(1, "walletAddress is required."),
+  url: z.string().trim().url("url must be a valid URL."),
+  events: z.array(z.string()).optional(),
+}).strict();
+
+const WalletAddressBody = z.object({
+  walletAddress: z.string().trim().min(1, "walletAddress is required."),
+}).strict();
+
+export const validateRegisterWebhook = validateBody(RegisterWebhookBody);
+
 export const RegisterWebhook = asyncRoute(async (req, res) => {
   await connectDb();
   const { walletAddress, url, events } = req.body;
-
-  if (!walletAddress || !url) {
-    throw new AppError("walletAddress and url are required.", 400, "MISSING_FIELDS");
-  }
 
   const urlCheck = await validateWebhookUrl(url);
   if (!urlCheck.valid) {
@@ -206,6 +218,7 @@ export const ReplayWebhookDeadLetter = asyncRoute(async (req, res) => {
   await connectDb();
 
   if (!isValidAdminToken(req.headers.authorization, process.env.ADMIN_API_TOKEN)) {
+    void recordAuditEvent({ action: "auth_failure", result: "failure", reason: "invalid_admin_token", clientIp: req.ip });
     throw new AppError("Unauthorized: a valid admin token is required", 401);
   }
 
@@ -216,6 +229,7 @@ export const ReplayWebhookDeadLetter = asyncRoute(async (req, res) => {
 
   try {
     const result = await replayDeadLetter(id);
+    void recordAuditEvent({ action: "admin_action", result: "success", reason: "replay_webhook_dead_letter", clientIp: req.ip, metadata: { deadLetterId: id } });
     res.status(200).json(result);
   } catch (err) {
     throw new AppError(err instanceof Error ? err.message : "Replay failed.", 404, "NOT_FOUND");

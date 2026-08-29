@@ -192,7 +192,7 @@ export async function validateCheckout(
 /**
  * Prepares items for bulk purchase call.
  */
-export function prepareBulkPurchaseItems(cartItems: CartItem[]): BulkPurchaseItem[] {
+export function prepareBulkPurchaseItems(cartItems: CartItem[]): { promptId: string; priceStroops: bigint }[] {
   return cartItems.map((item) => ({
     promptId: item.promptId,
     priceStroops: item.priceStroops,

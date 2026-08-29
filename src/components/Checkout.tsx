@@ -24,6 +24,8 @@ import { fetchActiveLicenseTerms, type LicenseTerm } from '@/lib/checkout/licens
 import { translateError } from '@/lib/i18n-errors';
 import { estimateBulkFee, type FeeEstimate } from '@/lib/checkout/feeEstimation';
 import { FeeEstimateBanner } from '@/components/FeeEstimateBanner';
+import { TransactionProgress } from '@/components/TransactionProgress';
+import type { TransactionStepId } from '@/lib/checkout/transactionSteps';
 
 const promptImageFallback = '/images/codeguru.png';
 
@@ -60,6 +62,8 @@ export function Checkout({ onClose }: CheckoutProps) {
   const [feeEstimate, setFeeEstimate] = useState<FeeEstimate | null>(null);
   const [isEstimatingFees, setIsEstimatingFees] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
+  const [txStepId, setTxStepId] = useState<TransactionStepId | null>(null);
+  const [txStepError, setTxStepError] = useState(false);
 
   const validateItems = useCallback(async () => {
     if (!address) return;
@@ -130,10 +134,12 @@ export function Checkout({ onClose }: CheckoutProps) {
 
     setStep('confirming');
     setCheckingOut(true);
+    setTxStepError(false);
+    setTxStepId(null);
 
     try {
       setStep('processing');
-      
+
       const items = state.items.map((item) => ({
         promptId: item.promptId,
         priceStroops: item.priceStroops,
@@ -142,6 +148,9 @@ export function Checkout({ onClose }: CheckoutProps) {
       const bulkResult = await PromptHashClient.purchasePromptsBulk(
         items,
         address,
+        {
+          onStep: (nextStep) => setTxStepId(nextStep),
+        },
       );
 
       setResults(bulkResult.results);
@@ -154,6 +163,7 @@ export function Checkout({ onClose }: CheckoutProps) {
 
       setStep('complete');
     } catch (error) {
+      setTxStepError(true);
       setGlobalError(translateError(error instanceof Error ? error.message : 'Purchase failed'));
       setStep('error');
     } finally {
@@ -268,6 +278,15 @@ export function Checkout({ onClose }: CheckoutProps) {
           <Loader2 className="h-4 w-4 text-cyan-400 animate-spin" />
           <p className="text-sm text-cyan-300">Validating listings...</p>
         </div>
+      )}
+
+      {/* Multi-step transaction progress (#266) */}
+      {(step === 'confirming' || step === 'processing' || (step === 'error' && txStepId)) && (
+        <TransactionProgress
+          currentStepId={txStepId}
+          hasError={step === 'error' && txStepError}
+          errorMessage={step === 'error' ? globalError ?? undefined : undefined}
+        />
       )}
 
       {/* Global error */}

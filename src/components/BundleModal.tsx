@@ -434,7 +434,7 @@ export function BundleModal({
                   <Eye className="h-4 w-4 mr-2" />
                   Re-unlock all prompts
                 </Button>
-              ) : isPurchased ? (
+              ) : (isPurchased || status === "UNLOCKING") ? (
                 <Button
                   className="w-full h-10 bg-cyan-200 text-slate-950 hover:bg-cyan-100 font-bold"
                   onClick={handleUnlock}

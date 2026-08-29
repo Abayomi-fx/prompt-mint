@@ -1,6 +1,7 @@
 use crate::contract::{PromptHashContract, PromptHashContractClient};
 use crate::mock_asset::FungibleTokenContract;
-use crate::types::{Bundle, Discount, Error, ListingConfig, Split};
+use crate::storage::Storage;
+use crate::types::{Error, ListingConfig, Split};
 extern crate std;
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger},
@@ -10,6 +11,8 @@ use soroban_sdk::{
 #[derive(Clone, Debug, PartialEq)]
 struct PromptHashContext {
     admin: Address,
+    admin_two: Address,
+    admin_three: Address,
     fee_wallet: Address,
     xlm: Address,
     contract: Address,
@@ -19,19 +22,41 @@ fn setup(env: &Env) -> PromptHashContext {
     env.mock_all_auths();
 
     let admin = Address::generate(env);
+    let admin_two = Address::generate(env);
+    let admin_three = Address::generate(env);
     let fee_wallet = Address::generate(env);
     let xlm = env.register(FungibleTokenContract, (admin.clone(),));
     let contract = env.register(
         PromptHashContract,
-        (admin.clone(), fee_wallet.clone(), xlm.clone()),
+        (
+            admin.clone(),
+            admin_two.clone(),
+            admin_three.clone(),
+            fee_wallet.clone(),
+            xlm.clone(),
+        ),
     );
 
     PromptHashContext {
         admin,
+        admin_two,
+        admin_three,
         fee_wallet,
         xlm,
         contract,
     }
+}
+
+fn set_pause(client: &PromptHashContractClient<'_>, context: &PromptHashContext, paused: bool) {
+    client.set_pause_status(&paused, &context.admin, &context.admin_two);
+}
+
+fn set_fee_percentage(
+    client: &PromptHashContractClient<'_>,
+    context: &PromptHashContext,
+    fee_bps: u32,
+) {
+    client.set_fee_percentage(&fee_bps, &context.admin, &context.admin_two);
 }
 
 fn hash(env: &Env, byte: u8) -> BytesN<32> {
@@ -144,6 +169,37 @@ fn test_create_prompt_stores_encrypted_fields() {
     assert_eq!(all_prompts.get(0).unwrap().id, prompt_id);
 }
 
+/// #32 – `__constructor` must reject a second setup call against an
+/// already-initialized instance instead of silently overwriting the owner,
+/// fee wallet, fee percentage, XLM SAC address, pause status, or schema
+/// version that were established during the first (successful) setup.
+#[test]
+fn test_constructor_rejects_repeated_initialization() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+
+    // `setup` already ran `__constructor` once via `env.register(...)`.
+    // Invoke it again directly against the same, already-initialized
+    // contract instance and confirm it is rejected rather than silently
+    // re-running setup.
+    let attacker_admin = Address::generate(&env);
+    let attacker_fee_wallet = Address::generate(&env);
+    let result: Result<(), Error> = env.as_contract(&context.contract, || {
+        <PromptHashContract as crate::types::PromptHashTrait>::__constructor(
+            env.clone(),
+            attacker_admin.clone(),
+            attacker_fee_wallet.clone(),
+            context.xlm.clone(),
+        )
+    });
+
+    assert_eq!(result, Err(Error::AlreadyInitialized));
+
+    // Original setup state must remain untouched by the rejected call.
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    assert_eq!(client.get_fee_percentage(), 500);
+}
+
 #[test]
 fn test_creator_can_pause_reactivate_and_update_price() {
     let env: Env = Default::default();
@@ -167,6 +223,116 @@ fn test_creator_can_pause_reactivate_and_update_price() {
     let prompt = client.get_prompt(&prompt_id);
     assert_eq!(prompt.price_stroops, 9_000);
     assert!(prompt.active);
+}
+
+// ─── Issue #192: Price history tracking ─────────────────────────────────────
+
+#[test]
+fn test_create_prompt_records_initial_price_history() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "History Prompt",
+        5_000,
+        &context.xlm,
+    );
+
+    let history = client.get_price_history(&prompt_id);
+    assert_eq!(history.len(), 1);
+    let first = history.get(0).unwrap();
+    assert_eq!(first.previous_price, 0);
+    assert_eq!(first.new_price, 5_000);
+    assert_eq!(first.seq, 1);
+    assert!(first.changed_at > 0);
+}
+
+#[test]
+fn test_update_prompt_price_appends_history_and_emits_event() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "History Prompt",
+        5_000,
+        &context.xlm,
+    );
+
+    let before = env.events().all().len();
+    client.update_prompt_price(&creator, &prompt_id, &9_000);
+    client.update_prompt_price(&creator, &prompt_id, &7_500);
+    let after = env.events().all().len();
+    // Each update publishes a PromptPriceUpdated event.
+    assert!(
+        after >= before + 2,
+        "expected two PromptPriceUpdated events, got {} delta",
+        after - before
+    );
+
+    let history = client.get_price_history(&prompt_id);
+    assert_eq!(history.len(), 3);
+    let second = history.get(1).unwrap();
+    assert_eq!(second.previous_price, 5_000);
+    assert_eq!(second.new_price, 9_000);
+    assert_eq!(second.seq, 2);
+    let third = history.get(2).unwrap();
+    assert_eq!(third.previous_price, 9_000);
+    assert_eq!(third.new_price, 7_500);
+    assert_eq!(third.seq, 3);
+}
+
+#[test]
+fn test_price_history_is_capped() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let creator = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "History Prompt",
+        1_000,
+        &context.xlm,
+    );
+
+    // Creation records 1 entry; push well past the cap with price updates.
+    for i in 0..(Storage::MAX_PRICE_HISTORY_LEN + 5) {
+        client.update_prompt_price(&creator, &prompt_id, &((i as i128 + 2) * 1_000));
+    }
+
+    let history = client.get_price_history(&prompt_id);
+    assert_eq!(
+        history.len(),
+        Storage::MAX_PRICE_HISTORY_LEN,
+        "price history log must stay bounded at MAX_PRICE_HISTORY_LEN"
+    );
+    // Oldest entries are dropped, newest are retained.
+    assert_eq!(history.get(0).unwrap().seq, 7);
+}
+
+#[test]
+fn test_get_price_history_rejects_missing_prompt() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let result = client.try_get_price_history(&999_999);
+    match result {
+        Err(Ok(Error::PromptNotFound)) => {}
+        other => panic!("expected PromptNotFound for nonexistent prompt, got {:?}", other),
+    }
 }
 
 #[test]
@@ -783,7 +949,7 @@ fn test_buy_prompt_with_zero_fee() {
     let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
 
     // Set fee to 0
-    client.set_fee_percentage(&0);
+    set_fee_percentage(&client, &context, 0);
 
     let creator = Address::generate(&env);
     let buyer = Address::generate(&env);
@@ -815,10 +981,8 @@ fn test_buy_prompt_with_max_fee() {
     let client = PromptHashContractClient::new(&env, &context.contract);
     let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
 
-    // Set fee to the maximum allowed: 20% (2,000 BPS). #41 hard-caps
-    // set_fee_percentage at MAX_FEE_BPS (2,000); 10,000 (100%) used to be
-    // accepted here but is now correctly rejected with FeeExceedsMaximum.
-    client.set_fee_percentage(&2_000);
+    // Set fee to 100% (10,000 BPS)
+    set_fee_percentage(&client, &context, 10_000);
 
     let creator = Address::generate(&env);
     let buyer = Address::generate(&env);
@@ -860,6 +1024,50 @@ fn test_set_fee_percentage_above_max_rejected() {
     // The boundary itself must still be accepted.
     client.set_fee_percentage(&2_000);
     assert_eq!(client.get_fee_percentage(), 2_000);
+}
+
+#[test]
+fn test_sensitive_admin_functions_accept_two_distinct_configured_signers() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let replacement_wallet = Address::generate(&env);
+
+    client.set_fee_wallet(
+        &replacement_wallet,
+        &context.admin_two,
+        &context.admin_three,
+    );
+
+    assert_eq!(client.get_fee_wallet(), Some(replacement_wallet));
+}
+
+#[test]
+fn test_sensitive_admin_functions_reject_duplicate_or_unknown_approvers() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let outsider = Address::generate(&env);
+
+    let duplicate = client.try_set_pause_status(&true, &context.admin, &context.admin);
+    match duplicate {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!(
+            "expected Unauthorized for duplicate approvals, got {:?}",
+            other
+        ),
+    }
+    assert!(!client.is_paused());
+
+    let unknown = client.try_set_fee_percentage(&1_000, &context.admin, &outsider);
+    match unknown {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!(
+            "expected Unauthorized for unknown approver, got {:?}",
+            other
+        ),
+    }
+    assert_eq!(client.get_fee_percentage(), 500);
 }
 
 #[test]
@@ -954,13 +1162,56 @@ fn test_arithmetic_safety_for_massive_prices() {
 }
 
 #[test]
+fn test_reentrant_mutations_are_rejected_while_cross_contract_guard_is_held() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(
+        &env,
+        &client,
+        &creator,
+        "Reentrancy Stress",
+        5_000,
+        &context.xlm,
+    );
+
+    env.as_contract(&context.contract, || {
+        Storage::set_reentrancy_guard(&env).unwrap();
+    });
+
+    for _ in 0..32 {
+        let update = client.try_update_prompt_price(&creator, &prompt_id, &6_000);
+        match update {
+            Err(Ok(Error::ReentrancyGuard)) => {}
+            other => panic!("expected reentrant update rejection, got {:?}", other),
+        }
+
+        let purchase =
+            client.try_buy_prompt(&buyer, &prompt_id, &None::<Address>, &5_000, &None::<Bytes>);
+        match purchase {
+            Err(Ok(Error::ReentrancyGuard)) => {}
+            other => panic!("expected reentrant purchase rejection, got {:?}", other),
+        }
+    }
+
+    assert_eq!(client.get_prompt(&prompt_id).price_stroops, 5_000);
+    assert!(!client.has_access(&buyer, &prompt_id));
+
+    env.as_contract(&context.contract, || {
+        Storage::clear_reentrancy_guard(&env);
+    });
+}
+
+#[test]
 fn test_global_pause_blocks_mutations_but_not_reads() {
     let env: Env = Default::default();
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
     let creator = Address::generate(&env);
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
     assert!(client.is_paused());
 
     let create_res = client.try_create_prompt(
@@ -988,7 +1239,7 @@ fn test_global_pause_blocks_mutations_but_not_reads() {
         ),
     }
 
-    client.set_pause_status(&false);
+    set_pause(&client, &context, false);
     let prompt_id = create_prompt(
         &env,
         &client,
@@ -997,7 +1248,7 @@ fn test_global_pause_blocks_mutations_but_not_reads() {
         10_000,
         &context.xlm,
     );
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
 
     assert!(client.get_prompt(&prompt_id).id == prompt_id);
     assert!(client.has_access(&creator, &prompt_id));
@@ -1316,7 +1567,7 @@ fn test_create_prompt_blocked_when_paused() {
     let context = setup(&env);
     let client = PromptHashContractClient::new(&env, &context.contract);
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
     assert!(client.is_paused());
 
     let creator = Address::generate(&env);
@@ -1367,7 +1618,7 @@ fn test_buy_prompt_blocked_when_paused() {
 
     fund_buyer(&xlm_client, &buyer, &context.contract, price);
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
 
     let result = client.try_buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &price, &None::<Bytes>);
     match result {
@@ -1392,7 +1643,7 @@ fn test_update_prompt_price_blocked_when_paused() {
         &context.xlm,
     );
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
 
     let result = client.try_update_prompt_price(&creator, &prompt_id, &9_000i128);
     match result {
@@ -1420,7 +1671,7 @@ fn test_read_only_methods_work_when_paused() {
         &context.xlm,
     );
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
 
     // These should all succeed while paused
     let prompt = client.get_prompt(&prompt_id);
@@ -1452,8 +1703,8 @@ fn test_unpause_restores_operations() {
         &context.xlm,
     );
 
-    client.set_pause_status(&true);
-    client.set_pause_status(&false);
+    set_pause(&client, &context, true);
+    set_pause(&client, &context, false);
     assert!(!client.is_paused());
 
     fund_buyer(&xlm_client, &buyer, &context.contract, price);
@@ -1463,9 +1714,8 @@ fn test_unpause_restores_operations() {
 
 // ─── Issue #28: Emergency Pause – additional coverage ─────────────────────────
 
-/// Verifies that set_pause_status is restricted to the owner. The #[only_owner]
-/// macro enforces this at the auth level; here we confirm the happy path works
-/// and that extend_listing is also blocked while paused.
+/// Confirms the multisig pause path works and that extend_listing is blocked
+/// while the contract is paused.
 #[test]
 fn test_extend_listing_blocked_when_paused() {
     let env: Env = Default::default();
@@ -1484,7 +1734,7 @@ fn test_extend_listing_blocked_when_paused() {
         &context.xlm,
     );
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
 
     let result = client.try_extend_listing(&creator, &prompt_id, &2_000u64);
     match result {
@@ -1506,7 +1756,7 @@ fn test_bulk_purchase_blocked_when_paused() {
     let buyer = Address::generate(&env);
     let prompt_id = create_prompt(&env, &client, &creator, "Bulk Pause", 1_000, &context.xlm);
 
-    client.set_pause_status(&true);
+    set_pause(&client, &context, true);
 
     let mut ids = Vec::new(&env);
     ids.push_back(prompt_id);
@@ -2279,6 +2529,76 @@ fn test_only_creator_can_extend_listing() {
     }
 }
 
+#[test]
+fn test_prompt_expiry_warning_emits_once() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let prompt_id = client.create_prompt(
+        &creator,
+        &String::from_str(&env, "https://example.com/img.png"),
+        &String::from_str(&env, "Expiring Soon"),
+        &String::from_str(&env, "Software Development"),
+        &String::from_str(&env, "preview"),
+        &String::from_str(&env, "ciphertext"),
+        &String::from_str(&env, "iv"),
+        &String::from_str(&env, "wrapped-key"),
+        &hash(&env, 6),
+        &ListingConfig {
+            price: 5_000,
+            asset: context.xlm.clone(),
+            expires_at: 1_000 + 7 * 24 * 60 * 60,
+            splits: Vec::new(&env),
+        },
+    );
+
+    let before = env.events().all().len();
+    assert!(client.check_prompt_expiry(&prompt_id));
+    let after_first_check = env.events().all().len();
+    assert_eq!(after_first_check, before + 1);
+
+    assert!(client.check_prompt_expiry(&prompt_id));
+    assert_eq!(env.events().all().len(), after_first_check);
+}
+
+#[test]
+fn test_extend_prompt_lifetime_adds_duration_for_creator() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+
+    let creator = Address::generate(&env);
+    let prompt_id = client.create_prompt(
+        &creator,
+        &String::from_str(&env, "https://example.com/img.png"),
+        &String::from_str(&env, "Extend Lifetime"),
+        &String::from_str(&env, "Software Development"),
+        &String::from_str(&env, "preview"),
+        &String::from_str(&env, "ciphertext"),
+        &String::from_str(&env, "iv"),
+        &String::from_str(&env, "wrapped-key"),
+        &hash(&env, 8),
+        &ListingConfig {
+            price: 5_000,
+            asset: context.xlm.clone(),
+            expires_at: 2_000,
+            splits: Vec::new(&env),
+        },
+    );
+
+    assert_eq!(
+        client.extend_prompt_lifetime(&creator, &prompt_id, &3_000),
+        5_000
+    );
+    assert_eq!(client.get_prompt(&prompt_id).expires_at, 5_000);
+}
+
 // ─── Issue #50: Seller Revenue Sharing (Splits) ───────────────────────────────
 
 #[test]
@@ -2673,8 +2993,6 @@ fn test_create_bundle_stores_fields_and_is_discoverable() {
     assert_eq!(by_creator.get(0).unwrap().id, bundle_id);
 }
 
-#[test]
-fn test_buy_bundle_grants_access_routes_fees_and_snapshots_items() {
 #[test]
 fn test_referral_rules_are_snapshotted_and_settlement_is_auditable() {
     let env: Env = Default::default();
@@ -3992,6 +4310,17 @@ fn test_only_bundle_creator_can_modify_bundle() {
     match r2 {
         Err(Ok(crate::types::Error::Unauthorized)) => {}
         other => panic!("expected Unauthorized for deactivation by stranger, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_stake_records_balance_and_moves_tokens_into_custody_amounts() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    let creator = Address::generate(&env);
     let prompt_id = create_prompt(
         &env,
         &client,
@@ -5695,9 +6024,10 @@ fn test_stranger_cannot_propose_upgrade() {
     let client = PromptHashContractClient::new(&env, &context.contract);
 
     let stranger = Address::generate(&env);
+    let stranger_two = Address::generate(&env);
     let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
 
-    let result = client.try_propose_upgrade(&stranger, &wasm_hash);
+    let result = client.try_propose_upgrade(&wasm_hash, &stranger, &stranger_two);
     match result {
         Err(Ok(Error::Unauthorized)) => {}
         other => panic!("expected Unauthorized for stranger propose_upgrade, got {:?}", other),
@@ -5711,11 +6041,189 @@ fn test_stranger_cannot_confirm_upgrade() {
     let client = PromptHashContractClient::new(&env, &context.contract);
 
     let stranger = Address::generate(&env);
+    let stranger_two = Address::generate(&env);
 
-    let result = client.try_confirm_upgrade(&stranger);
+    let result = client.try_confirm_upgrade(&stranger, &stranger_two);
     match result {
         Err(Ok(Error::Unauthorized)) => {}
         other => panic!("expected Unauthorized for stranger confirm_upgrade, got {:?}", other),
+    }
+}
+
+// ─── #194: Contract upgrade safety checks ────────────────────────────────────
+
+const UPGRADE_COOLDOWN: u64 = 86_400; // UPGRADE_COOLDOWN_SECS in contract.rs
+
+#[test]
+fn test_upgrade_propose_requires_two_distinct_admins() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    // Same admin used for both approver slots must be rejected.
+    let result = client.try_propose_upgrade(&wasm_hash, &context.admin, &context.admin);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for same-admin propose_upgrade, got {:?}", other),
+    }
+    // One admin + one stranger must be rejected too.
+    let stranger = Address::generate(&env);
+    let result = client.try_propose_upgrade(&wasm_hash, &context.admin, &stranger);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for mixed-admin propose_upgrade, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_rejects_invalid_implementation() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    // A zero WASM hash is never a valid implementation.
+    let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let result = client.try_propose_upgrade(&zero_hash, &context.admin, &context.admin_two);
+    match result {
+        Err(Ok(Error::InvalidImplementation)) => {}
+        other => panic!("expected InvalidImplementation for zero wasm hash, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_propose_twice_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    client.propose_upgrade(&wasm_hash, &context.admin, &context.admin_two);
+    assert_eq!(client.get_pending_upgrade(), Some(wasm_hash));
+
+    // A second proposal while one is pending must be rejected.
+    let other_hash = BytesN::from_array(&env, &[2u8; 32]);
+    let result = client.try_propose_upgrade(&other_hash, &context.admin, &context.admin_two);
+    match result {
+        Err(Ok(Error::UpgradeAlreadyProposed)) => {}
+        other => panic!("expected UpgradeAlreadyProposed for duplicate proposal, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_confirm_without_proposal_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let result = client.try_confirm_upgrade(&context.admin, &context.admin_two);
+    match result {
+        Err(Ok(Error::UpgradeNotProposed)) => {}
+        other => panic!("expected UpgradeNotProposed when nothing is proposed, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_confirm_before_cooldown_rejected() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    client.propose_upgrade(&wasm_hash, &context.admin, &context.admin_two);
+
+    // Confirm too early, within the timelock window.
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000 + UPGRADE_COOLDOWN - 1);
+    let result = client.try_confirm_upgrade(&context.admin, &context.admin_two);
+    match result {
+        Err(Ok(Error::UpgradeCooldownNotElapsed)) => {}
+        other => panic!("expected UpgradeCooldownNotElapsed, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_cancel_clears_proposal() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    client.propose_upgrade(&wasm_hash, &context.admin, &context.admin_two);
+    assert_eq!(client.get_pending_upgrade(), Some(wasm_hash));
+
+    client.cancel_upgrade(&context.admin, &context.admin_two);
+    assert_eq!(client.get_pending_upgrade(), None);
+
+    // After cancellation, confirming must fail.
+    let result = client.try_confirm_upgrade(&context.admin, &context.admin_two);
+    match result {
+        Err(Ok(Error::UpgradeNotProposed)) => {}
+        other => panic!("expected UpgradeNotProposed after cancel, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_upgrade_propose_confirm_success() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    client.propose_upgrade(&wasm_hash, &context.admin, &context.admin_two);
+    assert_eq!(client.get_pending_upgrade(), Some(wasm_hash));
+
+    // Wait out the timelock, then confirm.
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000 + UPGRADE_COOLDOWN + 1);
+    client.confirm_upgrade(&context.admin, &context.admin_two);
+    assert_eq!(client.get_pending_upgrade(), None);
+}
+
+#[test]
+fn test_upgrade_preserves_license_holders() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+    let xlm_client = token::StellarAssetClient::new(&env, &context.xlm);
+
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000);
+    let creator = Address::generate(&env);
+    let buyer = Address::generate(&env);
+    let prompt_id = create_prompt(&env, &client, &creator, "SecuredPrompt", 10_000, &context.xlm);
+
+    // Establish an existing license holder.
+    fund_buyer(&xlm_client, &buyer, &context.contract, 100_000);
+    client.buy_prompt(&buyer, &prompt_id, &None::<Bytes>, &10_000, &None::<Bytes>);
+    assert!(client.has_access(&buyer, &prompt_id));
+
+    // Propose and confirm an upgrade after the timelock.
+    let wasm_hash = BytesN::from_array(&env, &[1u8; 32]);
+    client.propose_upgrade(&wasm_hash, &context.admin, &context.admin_two);
+    env.ledger().with_mut(|ledger| ledger.timestamp = 1_000 + UPGRADE_COOLDOWN + 1);
+    client.confirm_upgrade(&context.admin, &context.admin_two);
+
+    // The license holder keeps access and the listing data is intact.
+    assert!(client.has_access(&buyer, &prompt_id));
+    let prompt = client.get_prompt(&prompt_id);
+    assert_eq!(prompt.creator, creator);
+    assert_eq!(prompt.price_stroops, 10_000);
+    assert_eq!(prompt.sales_count, 1);
+}
+
+#[test]
+fn test_stranger_cannot_cancel_upgrade() {
+    let env: Env = Default::default();
+    let context = setup(&env);
+    let client = PromptHashContractClient::new(&env, &context.contract);
+
+    let stranger = Address::generate(&env);
+    let stranger_two = Address::generate(&env);
+
+    let result = client.try_cancel_upgrade(&stranger, &stranger_two);
+    match result {
+        Err(Ok(Error::Unauthorized)) => {}
+        other => panic!("expected Unauthorized for stranger cancel_upgrade, got {:?}", other),
     }
 }
 

@@ -1,10 +1,12 @@
 import { scValToNative } from "@stellar/stellar-sdk";
 import { Server } from "@stellar/stellar-sdk/rpc";
 import Prompt from "../models/Prompt";
+import Purchase from "../models/Purchase";
 import User from "../models/User";
 import { IndexerState } from "../models/IndexerState";
 import { scanForSimilarity } from "./similarityDetection";
 import { recordMarketplaceTransaction } from "./transactionHistoryService";
+import { invalidatePromptMetadata } from "./cacheService";
 
 const CONTRACT_ID = process.env.PUBLIC_PROMPT_HASH_CONTRACT_ID;
 const rpc = new Server(process.env.PUBLIC_STELLAR_RPC_URL!, { timeout: 15_000 });
@@ -105,54 +107,55 @@ async function processEvent(event: any) {
           console.error("[similarity] Scan error for prompt", prompt_id.toString(), err),
         );
       }
+      await invalidatePromptMetadata(String(upserted?._id ?? prompt_id));
       break;
     }
 
     case "PromptPurchased": {
-      const {
-        prompt_id,
-        buyer,
-        creator,
-        price_stroops,
-      } = data;
-      await Prompt.findOneAndUpdate(
+      const { prompt_id, buyer } = data;
+      const updatedPrompt = await Prompt.findOneAndUpdate(
         { onChainId: prompt_id.toString() },
         { $inc: { salesCount: 1 } },
+        { new: true },
       );
-
-      const promptDoc = await Prompt.findOne({ onChainId: prompt_id.toString() })
-        .select("_id title")
-        .lean();
-
-      await recordMarketplaceTransaction({
-        promptOnChainId: prompt_id.toString(),
-        promptMongoId: promptDoc?._id ? String(promptDoc._id) : "",
-        promptTitle: promptDoc?.title ?? "Prompt",
-        buyerWallet: String(buyer),
-        creatorWallet: String(creator),
-        priceStroops: Number(price_stroops),
-        txHash: event.txHash ?? "",
-        ledger: event.ledger,
-        occurredAt: new Date(),
-      });
+      if (buyer && event.txHash) {
+        await Purchase.updateOne(
+          {
+            promptId: prompt_id.toString(),
+            buyerWallet: buyer.toLowerCase(),
+          },
+          {
+            $setOnInsert: {
+              versionIndex: 1,
+              txHash: event.txHash,
+            },
+          },
+          { upsert: true },
+        );
+      }
+      await invalidatePromptMetadata(String(updatedPrompt?._id ?? prompt_id));
       break;
     }
 
     case "PromptPriceUpdated": {
       const { prompt_id, price_stroops } = data;
-      await Prompt.findOneAndUpdate(
+      const updatedPrompt = await Prompt.findOneAndUpdate(
         { onChainId: prompt_id.toString() },
         { $set: { price: Number(price_stroops) / 10_000_000 } },
+        { new: true },
       );
+      await invalidatePromptMetadata(String(updatedPrompt?._id ?? prompt_id));
       break;
     }
 
     case "PromptSaleStatusUpdated": {
       const { prompt_id, active } = data;
-      await Prompt.findOneAndUpdate(
+      const updatedPrompt = await Prompt.findOneAndUpdate(
         { onChainId: prompt_id.toString() },
         { $set: { isActive: active } },
+        { new: true },
       );
+      await invalidatePromptMetadata(String(updatedPrompt?._id ?? prompt_id));
       break;
     }
 

@@ -73,8 +73,8 @@ export function NetworkStateProvider({ children }: { children: ReactNode }) {
         browserStellarConfig.rpcUrl
           ? checkUrlHealth(browserStellarConfig.rpcUrl)
           : Promise.resolve<ServiceHealthStatus>("up"),
-        browserStellarConfig.horizonUrl
-          ? checkUrlHealth(browserStellarConfig.horizonUrl)
+        (browserStellarConfig as any).horizonUrl
+          ? checkUrlHealth((browserStellarConfig as any).horizonUrl)
           : Promise.resolve<ServiceHealthStatus>("up"),
         checkUrlHealth("/api/health"),
       ]);

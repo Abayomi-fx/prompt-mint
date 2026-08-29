@@ -102,12 +102,9 @@ export default function SellPage() {
         </div>
 
         {view === "create" ? (
-          <CreatePromptForm onCreated={() => setView("manage")} />
+          <CreatePromptForm onCreated={() => switchView("manage")} onDirtyChange={setIsCreateDirty} />
         ) : view === "bundle" ? (
-          <>
-            <CreateBundleForm onCreated={() => setView("manage")} />
-            <CreatePromptForm onCreated={() => switchView("manage")} onDirtyChange={setIsCreateDirty} />
-          </>
+          <CreateBundleForm onCreated={() => switchView("manage")} />
         ) : (
           <MyPrompts onCreateNew={() => switchView("create")} />
         )}

@@ -34,13 +34,22 @@ export const ErrorCode = {
   /** The wallet has not purchased access to this prompt. */
   ACCESS_NOT_PURCHASED: "ACCESS_NOT_PURCHASED",
 
-  // ── Rate limiting (429) ───────────────────────────────────────────────────
+  // ── Rate limiting & abuse prevention (4xx/429) ───────────────────────────
 
   /** Too many requests from this IP address. */
   RATE_LIMIT_IP: "RATE_LIMIT_IP",
 
   /** Too many requests from this wallet address. */
   RATE_LIMIT_WALLET: "RATE_LIMIT_WALLET",
+
+  /** Account is temporarily locked due to too many failed authentication attempts. */
+  ACCOUNT_LOCKED: "ACCOUNT_LOCKED",
+
+  /** CAPTCHA verification is required to complete this request. */
+  CAPTCHA_REQUIRED: "CAPTCHA_REQUIRED",
+
+  /** The provided CAPTCHA token is invalid or expired. */
+  CAPTCHA_INVALID: "CAPTCHA_INVALID",
 
   // ── Analytics errors (4xx) ────────────────────────────────────────────────
 
@@ -85,6 +94,10 @@ export interface ApiErrorResponse {
   code: ErrorCode;
   /** Unix ms timestamp of when the rate limit resets (only present on 429). */
   reset?: number;
+  /** Flag indicating CAPTCHA verification is required. */
+  captchaRequired?: boolean;
+  /** Unix ms timestamp when the account lock expires. */
+  lockedUntil?: number;
 }
 
 /**
@@ -109,21 +122,28 @@ export function apiError(
  * Import this in the frontend unlock client to map codes to UI copy.
  */
 export const ERROR_MESSAGES: Record<ErrorCode, string> = {
-  MISSING_FIELDS: "Some required fields are missing. Please check your request.",
-  METHOD_NOT_ALLOWED: "This action is not supported.",
-  INVALID_INPUT: "The provided input is not valid. Please check your request.",
-  CHALLENGE_EXPIRED: "Your session has expired. Please try again to get a new challenge.",
-  CHALLENGE_INVALID: "The challenge token is invalid. Please start the unlock flow again.",
-  INVALID_SIGNATURE: "Wallet signature verification failed. Please try signing again.",
-  ACCESS_NOT_PURCHASED: "You have not purchased access to this prompt.",
-  RATE_LIMIT_IP: "Too many requests. Please wait a moment and try again.",
-  RATE_LIMIT_WALLET: "Too many unlock attempts for this wallet. Please wait and try again.",
-  UNKNOWN_EVENT: "This event type is not recognized.",
-  INVALID_EVENT_PAYLOAD: "The event payload did not match the expected shape.",
-  CONFIGURATION_ERROR: "A server configuration error occurred. Please try again later.",
-  INTEGRITY_FAILURE: "Prompt content could not be verified. Please contact support.",
-  TEMPORARY_FAILURE: "A temporary error occurred. Please try again in a moment.",
+  MISSING_FIELDS:
+    "Some required fields are missing from your request. Please fill in all required fields and try again.",
+  METHOD_NOT_ALLOWED:
+    "This action isn't available here. Refresh the page and try again — if it keeps happening, please contact support.",
+  INVALID_INPUT: "Some of the information you entered isn't valid. Please review your entries and try again.",
+  CHALLENGE_EXPIRED: "Your unlock session has expired for your security. Please restart the unlock flow to get a new one.",
+  CHALLENGE_INVALID: "This unlock request is no longer valid. Please restart the unlock flow from the prompt page.",
+  INVALID_SIGNATURE: "We couldn't verify your wallet signature. Please try signing the request again in your wallet.",
+  ACCESS_NOT_PURCHASED: "You haven't purchased access to this prompt yet. Purchase it from the prompt page to unlock the content.",
+  RATE_LIMIT_IP: "Too many requests from your network. Please wait a minute before trying again.",
+  RATE_LIMIT_WALLET: "Too many unlock attempts for this wallet. Please wait a few minutes before trying again.",
+  ACCOUNT_LOCKED:
+    "Account is temporarily locked due to 5 consecutive failed authentication attempts. Please wait before trying again.",
+  CAPTCHA_REQUIRED: "Additional verification is required. Please complete the CAPTCHA and try again.",
+  CAPTCHA_INVALID: "CAPTCHA verification failed. Please try completing the CAPTCHA again.",
+  UNKNOWN_EVENT: "This action could not be recorded because it isn't recognized. Please refresh the page and try again.",
+  INVALID_EVENT_PAYLOAD: "This action could not be recorded due to a data mismatch. Please refresh the page and try again.",
+  CONFIGURATION_ERROR:
+    "The service is temporarily unavailable due to a server issue on our end. Please try again shortly, or contact support if it persists.",
+  INTEGRITY_FAILURE:
+    "This prompt's content could not be cryptographically verified, so it has been withheld for your protection. Please contact support and include the prompt ID.",
+  TEMPORARY_FAILURE: "A temporary server error occurred. Please try again in a moment — your data has not been lost.",
   UNSUPPORTED_VERSION:
-    "The API version you requested is not supported. Please use a supported version.",
-  // NOTE: INVALID_INPUT is used by image validation; keep it in sync with ErrorCode above.
+    "Your app version is out of date for this request. Please refresh or update the app and try again.",
 };

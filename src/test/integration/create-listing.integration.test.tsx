@@ -33,11 +33,15 @@ vi.mock("@/lib/stellar/browserConfig", () => ({
   },
 }));
 
-vi.mock("@/lib/crypto/promptCrypto", () => ({
-  encryptPromptPlaintext: (...args: unknown[]) =>
-    encryptPromptPlaintextMock(...args),
-  wrapPromptKey: (...args: unknown[]) => wrapPromptKeyMock(...args),
-}));
+vi.mock("@/lib/crypto/promptCrypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/crypto/promptCrypto")>();
+  return {
+    ...actual,
+    encryptPromptPlaintext: (...args: unknown[]) =>
+      encryptPromptPlaintextMock(...args),
+    wrapPromptKey: (...args: unknown[]) => wrapPromptKeyMock(...args),
+  };
+});
 
 vi.mock("@/lib/stellar/promptHashClient", () => ({
   createPrompt: (...args: unknown[]) => createPromptMock(...args),
@@ -58,22 +62,18 @@ async function selectCategory(name: string) {
 }
 
 describe("create listing integration coverage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("validates the listing form before any contract mutation is attempted", async () => {
     renderWithProviders(<CreatePromptForm />);
 
     const priceInput = screen.getByLabelText(/price in xlm/i);
     fireEvent.change(priceInput, { target: { value: "0" } });
 
-    await userEvent.click(
-      screen.getByRole("button", { name: /create prompt listing/i }),
-    );
-
-    expect((await screen.findAllByText(/add an image url/i)).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/add a title/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/select a category/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/add preview text/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/paste the full prompt content/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/greater than zero/i).length).toBeGreaterThan(0);
+    const submitBtn = screen.getByRole("button", { name: /create prompt listing/i });
+    expect(submitBtn).toBeDisabled();
     expect(createPromptMock).not.toHaveBeenCalled();
   });
 

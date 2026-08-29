@@ -58,7 +58,7 @@ describe("recordAuditEvent", () => {
     });
 
     expect(mockCreate).toHaveBeenCalledTimes(1);
-    expect(mockCreate).toHaveBeenCalledWith({
+    expect(mockCreate).toHaveBeenCalledWith(expect.objectContaining({
       action: "challenge_issued",
       result: "success",
       promptId: "42",
@@ -66,7 +66,9 @@ describe("recordAuditEvent", () => {
       requestId: "req-001",
       clientIp: "127.0.0.1",
       reason: null,
-    });
+      sequence: expect.any(Number),
+      hash: expect.any(String),
+    }));
   });
 
   it("persists an unlock_success event", async () => {

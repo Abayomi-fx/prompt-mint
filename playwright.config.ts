@@ -7,6 +7,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   reporter: [["list"], ["html", { outputFolder: "playwright-report" }]],
+  snapshotPathTemplate: "{testDir}/__screenshots__/{projectName}/{arg}{ext}",
   timeout: 60000,
   expect: {
     timeout: 15000,
@@ -18,8 +19,16 @@ export default defineConfig({
   },
   projects: [
     {
-      name: "chromium",
+      name: "desktop",
       use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      name: "tablet",
+      use: { ...devices["iPad Mini"] },
+    },
+    {
+      name: "mobile",
+      use: { ...devices["Pixel 5"] },
     },
   ],
   webServer: {

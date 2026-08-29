@@ -12,6 +12,7 @@ import {
   assembleTransaction,
 } from "@stellar/stellar-sdk/rpc";
 import { getCircuitBreaker } from "../observability/circuitBreaker";
+import { metrics } from "../observability/metrics";
 
 const stellarRpcBreaker = getCircuitBreaker("stellar-rpc", {
   failureThreshold: 5,
@@ -63,6 +64,18 @@ export function readSimulationResult(simulation: Api.SimulateTransactionSuccessR
   return scValToNative(simulation.result.retval);
 }
 
+async function timedRpc<T>(method: string, fn: () => Promise<T>): Promise<T> {
+  const started = Date.now();
+  try {
+    const result = await fn();
+    metrics.trackRpcCall(method, Date.now() - started, "ok");
+    return result;
+  } catch (error) {
+    metrics.trackRpcCall(method, Date.now() - started, "error");
+    throw error;
+  }
+}
+
 export async function simulateContractCall(
   config: StellarNetworkConfig,
   source: string,
@@ -71,7 +84,9 @@ export async function simulateContractCall(
   args: xdr.ScVal[] = [],
 ) {
   const server = getRpcServer(config);
-  const account = await stellarRpcBreaker.execute(() => server.getAccount(source));
+  const account = await timedRpc("getAccount", () =>
+    stellarRpcBreaker.execute(() => server.getAccount(source)),
+  );
   const transaction = new TransactionBuilder(account, {
     fee: BASE_FEE,
     networkPassphrase: config.networkPassphrase,
@@ -80,7 +95,9 @@ export async function simulateContractCall(
     .setTimeout(30)
     .build();
 
-  const simulation = await stellarRpcBreaker.execute(() => server.simulateTransaction(transaction));
+  const simulation = await timedRpc("simulateTransaction", () =>
+    stellarRpcBreaker.execute(() => server.simulateTransaction(transaction)),
+  );
   if (Api.isSimulationError(simulation)) {
     throw new Error(simulation.error);
   }
@@ -141,12 +158,18 @@ export async function readContract<TResult>(
   return readSimulationResult(simulation) as TResult;
 }
 
+/** Real lifecycle stages a submitted transaction passes through (#266). */
+export type SubmitTransactionStep = "signing" | "submitting" | "confirming" | "complete";
+
 export async function submitPreparedTransaction(
   config: StellarNetworkConfig,
   prepared: PreparedContractCall,
   signer: WalletTransactionSigner,
   source: string,
+  // eslint-disable-next-line no-unused-vars
+  onStep?: (step: SubmitTransactionStep) => void,
 ) {
+  onStep?.("signing");
   const signed = await signer.signTransaction(
     prepared.preparedTransaction.toXDR(),
     {
@@ -160,8 +183,9 @@ export async function submitPreparedTransaction(
     config.networkPassphrase,
   );
 
-  const response = await stellarRpcBreaker.execute(() =>
-    prepared.server.sendTransaction(signedTransaction),
+  onStep?.("submitting");
+  const response = await timedRpc("sendTransaction", () =>
+    stellarRpcBreaker.execute(() => prepared.server.sendTransaction(signedTransaction)),
   );
   if (response.status === "TRY_AGAIN_LATER") {
     throw new Error("The Stellar RPC asked the client to retry later.");
@@ -174,14 +198,19 @@ export async function submitPreparedTransaction(
     );
   }
 
-  const result = await stellarRpcBreaker.execute(() =>
-    prepared.server.pollTransaction(response.hash, {
-      attempts: 20,
-      sleepStrategy: () => 1_000,
-    }),
+  onStep?.("confirming");
+  const result = await timedRpc("pollTransaction", () =>
+    stellarRpcBreaker.execute(() =>
+      prepared.server.pollTransaction(response.hash, {
+        attempts: 20,
+        sleepStrategy: () => 1_000,
+      }),
+    ),
   );
 
   if (result.status === Api.GetTransactionStatus.SUCCESS) {
+    onStep?.("complete");
+    metrics.trackTransactionVolume("submit");
     return result;
   }
 
