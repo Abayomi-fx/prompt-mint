@@ -18,6 +18,7 @@ const warnMockUse = () => {
 
 export interface PromptHashConfig {
   rpcUrl: string;
+  horizonUrl?: string;
   networkPassphrase: string;
   allowHttp?: boolean;
   promptHashContractId: string;
@@ -290,6 +291,35 @@ export class PromptHashClient {
     _recipient: string,
   ): Promise<{ txHash: string }> {
     return { txHash: "mock_gift_tx_hash" };
+  }
+
+  /**
+   * Invokes the Soroban contract to gift an already-purchased prompt to a
+   * recipient (transfers ownership/access to the recipient's address).
+   */
+  static async giftPrompt(
+    _promptId: string,
+    _senderAddress: string,
+    _recipientAddress: string,
+    options?: { forceFailure?: string; delay?: number },
+  ): Promise<{ txHash: string; success: boolean; recipientAddress: string }> {
+    warnMockUse();
+    return new Promise((resolve, reject) => {
+      const delay = options?.delay ?? 2000;
+      setTimeout(() => {
+        if (options?.forceFailure) {
+          return reject(new Error(options.forceFailure));
+        }
+
+        const mockHash =
+          "tx_gift_" + Math.random().toString(16).slice(2, 14).padStart(12, "0");
+        resolve({
+          txHash: mockHash,
+          success: true,
+          recipientAddress: _recipientAddress,
+        });
+      }, delay);
+    });
   }
 
   /**
