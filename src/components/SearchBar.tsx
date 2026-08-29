@@ -48,7 +48,6 @@ export function SearchBar({
     if (trimmed) {
       setHistory(recordSearchTerm(trimmed));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedValue]);
 
   const handleClear = () => {
