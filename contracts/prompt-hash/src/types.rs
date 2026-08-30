@@ -103,6 +103,8 @@ pub enum Error {
     /// The upgrade would break existing license holders; aborted before the
     /// new implementation is installed.
     UpgradeLicenseIntegrity = 54,
+    /// set_fee_wallet was already called once; the fee wallet is immutable.
+    FeeWalletAlreadySet = 55,
 }
 
 #[contracttype]
