@@ -103,8 +103,10 @@ pub enum Error {
     /// The upgrade would break existing license holders; aborted before the
     /// new implementation is installed.
     UpgradeLicenseIntegrity = 54,
+    /// The buyer's token balance is insufficient to cover the payment.
+    InsufficientBalance = 55,
     /// set_fee_wallet was already called once; the fee wallet is immutable.
-    FeeWalletAlreadySet = 55,
+    FeeWalletAlreadySet = 56,
 }
 
 #[contracttype]
@@ -168,7 +170,6 @@ pub struct PriceHistoryEntry {
     /// Monotonic per-prompt sequence number, starting at 1 for the initial
     /// listing price. Used to keep history entries ordered and de-duplicated.
     pub seq: u64,
-    PromptExpiryWarning(u128),
 }
 
 #[contracttype]

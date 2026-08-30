@@ -17,6 +17,7 @@ import {
   ChallengeRequestBody,
   parseRequestBody,
 } from "../../src/lib/api/requestSchemas";
+import { createHmac } from "crypto";
 
 async function handler(req: any, res: any) {
   if (req.method !== "POST") {
@@ -154,6 +155,10 @@ async function handler(req: any, res: any) {
 
   const parsed = parseRequestBody(ChallengeRequestBody, req.body);
   if (!parsed.success) {
+    // Constant-time normalization: perform a dummy HMAC so the response
+    // timing is indistinguishable from a valid-address path, preventing
+    // wallet-address enumeration via timing side-channel.
+    createHmac("sha256", secret).update("padding").digest("base64url");
     res.status(400).json(
       apiError(ErrorCode.MISSING_FIELDS, "address and promptId are required.", undefined, version),
     );
