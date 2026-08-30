@@ -342,6 +342,8 @@ describe("unlock API integrity checks", () => {
     expect(statusCode).toBe(400);
     expect(responseData.code).toBe(ErrorCode.MISSING_FIELDS);
     expect(responseData.plaintext).toBeUndefined();
+  });
+
   it("returns plaintext and marks integrity unavailable when no stored hash is present", async () => {
     const { buyer, promptId, challenge, signedMessage, plaintext } =
       await setupUnlockFixture();

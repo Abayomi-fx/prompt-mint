@@ -109,6 +109,8 @@ export const CONTRACT_ERROR_CODES = {
   INVALID_PRICE: "INVALID_PRICE",
   ALREADY_PURCHASED: "ALREADY_PURCHASED",
   LISTING_EXPIRED: "LISTING_EXPIRED",
+  INSUFFICIENT_BALANCE: "INSUFFICIENT_BALANCE",
+  PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
   UNKNOWN: "UNKNOWN",
 } as const;
 
@@ -184,6 +186,32 @@ export function classifyContractError(error: unknown): ContractErrorDetails {
     return {
       code: CONTRACT_ERROR_CODES.INVALID_PRICE,
       message: "The requested price is invalid.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (
+    normalized.includes("insufficientbalance") ||
+    normalized.includes("insufficient balance") ||
+    normalized.includes("op_underfunded")
+  ) {
+    return {
+      code: CONTRACT_ERROR_CODES.INSUFFICIENT_BALANCE,
+      message: "Your wallet doesn't have enough balance to complete this purchase. Please fund your wallet and try again.",
+      isUserActionable: true,
+      raw,
+    };
+  }
+
+  if (
+    normalized.includes("payloadtoolarge") ||
+    normalized.includes("payload too large") ||
+    normalized.includes("invalidfieldlength")
+  ) {
+    return {
+      code: CONTRACT_ERROR_CODES.PAYLOAD_TOO_LARGE,
+      message: "Your prompt content is too large to store on-chain. Please shorten it to under 4,000 characters and try again.",
       isUserActionable: true,
       raw,
     };

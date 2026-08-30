@@ -48,6 +48,7 @@ export function SearchBar({
     if (trimmed) {
       setHistory(recordSearchTerm(trimmed));
     }
+    // eslint-disable-next-line
   }, [debouncedValue]);
 
   const handleClear = () => {
