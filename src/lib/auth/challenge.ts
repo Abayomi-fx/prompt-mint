@@ -2,7 +2,39 @@ import { createHmac, randomUUID, timingSafeEqual } from "crypto";
 import { Buffer } from "buffer";
 import { Keypair } from "@stellar/stellar-sdk";
 
-const DEFAULT_TTL_MS = 5 * 60 * 1000;
+export const DEFAULT_TTL_MS = 5 * 60 * 1000;
+export const MIN_TTL_MS = 5 * 1000; // 5 seconds
+export const MAX_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+/**
+ * Returns the environment-configured challenge token TTL in milliseconds.
+ * Reads process.env.CHALLENGE_TTL_MS or process.env.CHALLENGE_TOKEN_TTL_MS.
+ *
+ * Security Tradeoffs (#453):
+ * - Short TTL (e.g., 30s - 2m): Reduces replay attack window and token interception risk,
+ *   but may cause failure if user takes long to approve wallet signature prompt.
+ * - Long TTL (e.g., 5m - 15m): More resilient against network delays and user prompts,
+ *   but increases vulnerability window if challenge tokens are captured in transit.
+ */
+export function getChallengeTtlMs(overrideMs?: number): number {
+  if (typeof overrideMs === "number" && !isNaN(overrideMs)) {
+    return Math.max(MIN_TTL_MS, Math.min(MAX_TTL_MS, overrideMs));
+  }
+
+  const envVal =
+    process.env.CHALLENGE_TTL_MS ||
+    process.env.CHALLENGE_TOKEN_TTL_MS ||
+    process.env.NEXT_PUBLIC_CHALLENGE_TTL_MS;
+
+  if (envVal) {
+    const parsed = parseInt(envVal, 10);
+    if (!isNaN(parsed) && parsed > 0) {
+      return Math.max(MIN_TTL_MS, Math.min(MAX_TTL_MS, parsed));
+    }
+  }
+
+  return DEFAULT_TTL_MS;
+}
 
 export interface ChallengePayload {
   address: string;
@@ -38,7 +70,7 @@ export function createChallengeToken(
   address: string,
   promptId: string,
   now = Date.now(),
-  ttlMs = DEFAULT_TTL_MS,
+  ttlMs = getChallengeTtlMs(),
 ) {
   const payload: ChallengePayload = {
     address,
