@@ -1,10 +1,10 @@
 use super::events::Events;
 use super::storage::Storage;
 use super::types::{
-    Bundle, BundlePurchase, ClassificationOverride, DataKey, Discount, Error, ListingConfig,
-    Prompt, PromptEncryptedPayload, PromptHashTrait, Purchase, ReferralCode, Settlement, Split,
-    Stake, Subscription, SubscriptionConfig, ALL_CLASSIFICATIONS, MAX_BUNDLE_DESC_LEN,
-    MAX_BUNDLE_ITEMS, MAX_BUNDLE_TITLE_LEN, VALID_DISCLOSURE_FLAGS,
+    Bundle, BundlePurchase, ClassificationOverride, DataKey, Error, ListingConfig,
+    PriceHistoryEntry, Prompt, PromptEncryptedPayload, PromptHashTrait, Purchase, ReferralCode,
+    Settlement, Split, Stake, Subscription, SubscriptionConfig, ALL_CLASSIFICATIONS,
+    MAX_BUNDLE_DESC_LEN, MAX_BUNDLE_ITEMS, MAX_BUNDLE_TITLE_LEN, VALID_DISCLOSURE_FLAGS,
 };
 use soroban_sdk::{contract, contractimpl, token, Address, Bytes, BytesN, Env, String, Vec};
 use stellar_access::ownable::{self as ownable, Ownable};
@@ -14,6 +14,7 @@ const DEFAULT_FEE_BPS: u32 = 500;
 const MAX_FEE_BPS: u32 = 2_000; // 20% maximum platform fee safeguard (#41)
 const ROYALTY_BPS: u32 = 500;
 const MAX_BPS: u32 = 10_000;
+const MAX_SPLITS: u32 = 16;
 const MAX_TITLE_LEN: u32 = 120;
 const MAX_CATEGORY_LEN: u32 = 40;
 const MAX_PREVIEW_LEN: u32 = 280;
@@ -23,6 +24,7 @@ const MAX_IMAGE_URL_LEN: u32 = 512;
 const MAX_IV_LEN: u32 = 64;
 const LEASE_PRICE_BPS: u32 = 4_000;
 const MAX_ACCESS_EXPIRY: u64 = u64::MAX;
+const EXPIRY_WARNING_SECS: u64 = 7 * 24 * 60 * 60;
 const MAX_SUBSCRIPTION_DURATION_SECS: u64 = 31_536_000;
 const MAX_CLASSIFICATION_LEN: u32 = 20;
 const MAX_SAFETY_FLAGS_COUNT: u32 = 10;
@@ -93,6 +95,7 @@ impl PromptHashTrait for PromptHashContract {
         Storage::require_no_reentrancy(&env)?;
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
         validate_prompt_fields(
+            &env,
             &image_url,
             &title,
             &category,
@@ -116,6 +119,15 @@ impl PromptHashTrait for PromptHashContract {
 
         // #50: validate revenue splits
         validate_splits(&env, &listing.splits)?;
+
+        // Deduplicate identical content hashes to discourage spam listings.
+        let prompt_count = Storage::get_prompt_counter(&env);
+        for prompt_id in 0..prompt_count {
+            let prompt = Storage::require_prompt(&env, prompt_id)?;
+            if prompt.content_hash == content_hash {
+                return Ok(prompt.id);
+            }
+        }
 
         // #131: default classification
         let classification = String::from_str(&env, "general");
@@ -148,6 +160,18 @@ impl PromptHashTrait for PromptHashContract {
         Storage::save_prompt(&env, &prompt)?;
         Storage::set_encryption_version_counter(&env, prompt_id, 1);
         Storage::add_prompt_to_creator(&env, &creator, prompt_id);
+        // #192 – record the initial listing price as the first history entry so
+        // buyers can see the price a prompt launched at.
+        Storage::add_price_history_entry(
+            &env,
+            prompt_id,
+            &PriceHistoryEntry {
+                previous_price: 0,
+                new_price: listing.price,
+                changed_at: env.ledger().timestamp(),
+                seq: 1,
+            },
+        );
         Events::emit_prompt_created(&env, prompt_id, creator, listing.price, listing.asset);
         Ok(prompt_id)
     }
@@ -195,15 +219,49 @@ impl PromptHashTrait for PromptHashContract {
         creator.require_auth();
         Storage::require_no_reentrancy(&env)?;
         ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
-        ensure(price_stroops > 0, Error::InvalidPrice)?;
+        let min_price = Storage::get_min_price(&env).unwrap_or(0);
+        ensure(price_stroops > min_price, Error::InvalidPrice)?;
+        if let Some(max_price) = Storage::get_max_price(&env) {
+            ensure(price_stroops <= max_price, Error::InvalidPrice)?;
+        }
 
         let mut prompt = Storage::require_prompt(&env, prompt_id)?;
         ensure(prompt.creator == creator, Error::Unauthorized)?;
+        let previous_price = prompt.price_stroops;
         prompt.price_stroops = price_stroops;
 
         Storage::update_prompt(&env, &prompt);
-        Events::emit_prompt_price_updated(&env, prompt_id, price_stroops);
+        // #192 – append this change to the prompt's compact price-history log.
+        let history = Storage::get_price_history(&env, prompt_id);
+        // Derive the next sequence number from the most recent entry so it stays
+        // monotonic even once older entries are trimmed from the compact log.
+        let next_seq = if !history.is_empty() {
+            history
+                .get(history.len() - 1)
+                .unwrap()
+                .seq
+                .saturating_add(1)
+        } else {
+            1
+        };
+        Storage::add_price_history_entry(
+            &env,
+            prompt_id,
+            &PriceHistoryEntry {
+                previous_price,
+                new_price: price_stroops,
+                changed_at: env.ledger().timestamp(),
+                seq: next_seq,
+            },
+        );
+        Events::emit_prompt_price_updated(&env, prompt_id, previous_price, price_stroops);
         Ok(())
+    }
+
+    // #192 – Return the recorded price history for a prompt, oldest first.
+    fn get_price_history(env: Env, prompt_id: u128) -> Result<Vec<PriceHistoryEntry>, Error> {
+        Storage::require_prompt(&env, prompt_id)?;
+        Ok(Storage::get_price_history(&env, prompt_id))
     }
 
     fn buy_prompt(
@@ -252,6 +310,13 @@ impl PromptHashTrait for PromptHashContract {
 
         Storage::set_reentrancy_guard(&env)?;
 
+        // Atomic increment: write sales_count before any token transfers.
+        prompt.sales_count = prompt
+            .sales_count
+            .checked_add(1)
+            .ok_or(Error::ArithmeticOverflow)?;
+        Storage::update_prompt(&env, &prompt);
+
         let fee_wallet = Storage::get_fee_wallet(&env).ok_or(Error::FeeWalletNotSet)?;
         let this_contract = env.current_contract_address();
         let fee_percentage = Storage::get_fee_percentage(&env);
@@ -273,19 +338,23 @@ impl PromptHashTrait for PromptHashContract {
             .ok_or(Error::ArithmeticOverflow)?;
 
         let asset_client = token::StellarAssetClient::new(&env, &prompt.asset);
+
+        // Pre-check buyer balance to surface a clear error instead of a raw
+        // Soroban token-transfer failure when the wallet is unfunded.
+        let buyer_balance: i128 = asset_client.balance(&buyer);
+        ensure(
+            buyer_balance >= lease_price,
+            Error::InsufficientBalance,
+        )?;
+
         asset_client.transfer_from(&this_contract, &buyer, &prompt.creator, &seller_amount);
         if fee_amount > 0 {
             asset_client.transfer_from(&this_contract, &buyer, &fee_wallet, &fee_amount);
         }
 
-        prompt.sales_count = prompt
-            .sales_count
-            .checked_add(1)
-            .ok_or(Error::ArithmeticOverflow)?;
         let expires_at = now
             .checked_add(lease_duration_secs)
             .ok_or(Error::ArithmeticOverflow)?;
-        Storage::update_prompt(&env, &prompt);
         Storage::grant_purchase(
             &env,
             &prompt,
@@ -335,8 +404,48 @@ impl PromptHashTrait for PromptHashContract {
 
         prompt.expires_at = new_expires_at;
         Storage::update_prompt(&env, &prompt);
+        Storage::clear_prompt_expiry_warning(&env, prompt_id);
         Events::emit_listing_extended(&env, prompt_id, new_expires_at);
         Ok(())
+    }
+
+    fn extend_prompt_lifetime(
+        env: Env,
+        creator: Address,
+        prompt_id: u128,
+        extension_secs: u64,
+    ) -> Result<u64, Error> {
+        creator.require_auth();
+        Storage::require_no_reentrancy(&env)?;
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        ensure(prompt.creator == creator, Error::Unauthorized)?;
+        ensure(prompt.expires_at != 0 && extension_secs > 0, Error::InvalidPrice)?;
+
+        let new_expires_at = prompt
+            .expires_at
+            .checked_add(extension_secs)
+            .ok_or(Error::ArithmeticOverflow)?;
+        let mut extended_prompt = prompt;
+        extended_prompt.expires_at = new_expires_at;
+        Storage::update_prompt(&env, &extended_prompt);
+        Storage::clear_prompt_expiry_warning(&env, prompt_id);
+        Events::emit_listing_extended(&env, prompt_id, new_expires_at);
+        Ok(new_expires_at)
+    }
+
+    fn check_prompt_expiry(env: Env, prompt_id: u128) -> Result<bool, Error> {
+        let prompt = Storage::require_prompt(&env, prompt_id)?;
+        let now = env.ledger().timestamp();
+        let expiring_soon = prompt.expires_at > now
+            && prompt.expires_at - now <= EXPIRY_WARNING_SECS;
+
+        if expiring_soon && !Storage::has_prompt_expiry_warning(&env, prompt_id) {
+            Storage::set_prompt_expiry_warning(&env, prompt_id);
+            Events::emit_prompt_expiring_soon(&env, prompt_id, prompt.creator, prompt.expires_at);
+        }
+
+        Ok(expiring_soon)
     }
 
     // ─── Issue #51: Bulk Purchase ────────────────────────────────────────────
@@ -474,6 +583,10 @@ impl PromptHashTrait for PromptHashContract {
         Ok(Storage::get_prompts_by_creator(&env, &creator))
     }
 
+    fn get_prompts_by_category(env: Env, category: String) -> Result<Vec<Prompt>, Error> {
+        Ok(Storage::get_prompts_by_category(&env, &category))
+    }
+
     fn get_prompts_by_buyer(env: Env, buyer: Address) -> Result<Vec<Prompt>, Error> {
         Ok(Storage::get_prompts_by_buyer(&env, &buyer))
     }
@@ -497,7 +610,7 @@ impl PromptHashTrait for PromptHashContract {
             duration_secs > 0 && duration_secs <= MAX_SUBSCRIPTION_DURATION_SECS,
             Error::InvalidSubscriptionConfig,
         )?;
-        ensure(price > 0, Error::InvalidSubscriptionPrice)?;
+        ensure(price > 0, Error::InvalidSubscriptionConfig)?;
         validate_token_contract(&env, &asset)?;
         Storage::save_subscription_config(
             &env,
@@ -592,6 +705,10 @@ impl PromptHashTrait for PromptHashContract {
     ) -> Result<(), Error> {
         require_admin_multisig(&env, &approver_a, &approver_b)?;
         Storage::require_no_reentrancy(&env)?;
+        ensure!(
+            Storage::get_fee_wallet(&env).is_none(),
+            Error::FeeWalletAlreadySet
+        );
         Storage::set_fee_wallet(&env, &new_fee_wallet);
         Events::emit_fee_wallet_updated(&env, new_fee_wallet);
         Ok(())
@@ -607,6 +724,25 @@ impl PromptHashTrait for PromptHashContract {
 
     fn get_xlm_sac(env: Env) -> Option<Address> {
         Storage::get_xlm_address(&env)
+    }
+
+    fn set_price_bounds(
+        env: Env,
+        approver_a: Address,
+        approver_b: Address,
+        min_price: Option<i128>,
+        max_price: Option<i128>,
+    ) -> Result<(), Error> {
+        require_admin_multisig(&env, &approver_a, &approver_b)?;
+        Storage::require_no_reentrancy(&env)?;
+        Storage::set_min_price(&env, min_price);
+        Storage::set_max_price(&env, max_price);
+        Events::emit_price_bounds_set(&env, min_price, max_price);
+        Ok(())
+    }
+
+    fn get_price_bounds(env: Env) -> (Option<i128>, Option<i128>) {
+        (Storage::get_min_price(&env), Storage::get_max_price(&env))
     }
 
     fn set_pause_status(
@@ -714,25 +850,63 @@ impl PromptHashTrait for PromptHashContract {
         Ok(())
     }
 
-    fn upgrade(
+    fn propose_upgrade(
         env: Env,
         new_wasm_hash: BytesN<32>,
         approver_a: Address,
         approver_b: Address,
     ) -> Result<(), Error> {
         require_admin_multisig(&env, &approver_a, &approver_b)?;
-        Storage::require_no_reentrancy(&env)?;
-        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        ensure(!Storage::is_paused(&env), Error::ContractIsPaused)?;
+        // (1) Reject an invalid implementation: a zero hash is never a deployable
+        //     WASM, and re-proposing the currently-deployed bytecode is a no-op.
+        validate_deployable_implementation(&env, &new_wasm_hash)?;
+        ensure(
+            Storage::get_pending_upgrade(&env).is_none(),
+            Error::UpgradeAlreadyProposed,
+        )?;
+
+        let proposed_at = env.ledger().timestamp();
+        Storage::set_pending_upgrade(&env, &new_wasm_hash);
+        Storage::set_upgrade_proposer(&env, &approver_a);
+        Storage::set_upgrade_proposed_at(&env, proposed_at);
+        Events::emit_upgrade_proposed(&env, new_wasm_hash, proposed_at);
+        Ok(())
+    }
+
+    fn confirm_upgrade(env: Env, approver_a: Address, approver_b: Address) -> Result<(), Error> {
+        require_admin_multisig(&env, &approver_a, &approver_b)?;
+        let pending = Storage::get_pending_upgrade(&env).ok_or(Error::UpgradeNotProposed)?;
+        // (timelock) Enforce the cooldown before executing the upgrade.
+        let proposed_at =
+            Storage::get_upgrade_proposed_at(&env).ok_or(Error::UpgradeNotProposed)?;
+        let now = env.ledger().timestamp();
+        ensure(
+            now >= proposed_at.saturating_add(UPGRADE_COOLDOWN_SECS),
+            Error::UpgradeCooldownNotElapsed,
+        )?;
+        // (1) Re-validate the implementation is still usable at confirmation time.
+        validate_deployable_implementation(&env, &pending)?;
+        // (2) Verify storage data is intact before swapping bytecode.
+        validate_storage_integrity(&env)?;
+        // (3) Verify no existing license holders would be broken by the upgrade.
+        validate_license_integrity(&env)?;
+
+        env.deployer().update_current_contract_wasm(pending.clone());
         env.storage().instance().extend_ttl(
             super::storage::PERSISTENT_LIFETIME_THRESHOLD,
             super::storage::PERSISTENT_BUMP_AMOUNT,
         );
-        Events::emit_upgrade_confirmed(&env, wasm_hash.clone(), now);
+        let confirmed_at = env.ledger().timestamp();
+        Storage::clear_pending_upgrade(&env);
+        Storage::clear_upgrade_proposer(&env);
+        Storage::clear_upgrade_proposed_at(&env);
+        Events::emit_upgrade_confirmed(&env, pending, confirmed_at);
         Ok(())
     }
 
-    fn cancel_upgrade(env: Env) -> Result<(), Error> {
-        env.current_contract_address().require_auth();
+    fn cancel_upgrade(env: Env, approver_a: Address, approver_b: Address) -> Result<(), Error> {
+        require_admin_multisig(&env, &approver_a, &approver_b)?;
         let pending = Storage::get_pending_upgrade(&env).ok_or(Error::UpgradeNotProposed)?;
         Storage::clear_pending_upgrade(&env);
         Storage::clear_upgrade_proposer(&env);
@@ -784,8 +958,8 @@ impl PromptHashTrait for PromptHashContract {
         ensure(prompt_ids.len() > 0, Error::InvalidPrice)?;
         ensure(prompt_ids.len() <= MAX_BUNDLE_ITEMS, Error::InvalidPrice)?;
 
-        // Validate token interface
-        token::Client::new(&env, &asset).decimals();
+        // Validate token interface through the guarded external-call helper.
+        validate_token_contract(&env, &asset)?;
 
         // Validate every prompt: must exist, be active, and be owned by creator
         for i in 0..prompt_ids.len() {
@@ -962,12 +1136,6 @@ impl PromptHashTrait for PromptHashContract {
             if prompt.expires_at != 0 {
                 ensure(prompt.expires_at >= now, Error::ListingExpired)?;
             }
-            if prompt.max_supply > 0 {
-                ensure(
-                    prompt.sales_count < prompt.max_supply,
-                    Error::MaxSupplyReached,
-                )?;
-            }
             prompts.push_back(prompt);
         }
 
@@ -981,6 +1149,25 @@ impl PromptHashTrait for PromptHashContract {
 
         Storage::set_reentrancy_guard(&env)?;
 
+        // Atomic supply enforcement: check + increment + write each prompt's
+        // supply right after the guard, before any token transfers, so
+        // concurrent bundle purchases cannot overshoot max_supply.
+        for i in 0..prompts.len() {
+            let mut prompt = prompts.get(i).unwrap();
+            if prompt.max_supply > 0 {
+                ensure(
+                    prompt.sales_count < prompt.max_supply,
+                    Error::MaxSupplyReached,
+                )?;
+            }
+            prompt.sales_count = prompt
+                .sales_count
+                .checked_add(1)
+                .ok_or(Error::ArithmeticOverflow)?;
+            Storage::update_prompt(&env, &prompt);
+            prompts.set(i, prompt);
+        }
+
         let fee_wallet = Storage::get_fee_wallet(&env).ok_or(Error::FeeWalletNotSet)?;
         let fee_percentage = Storage::get_fee_percentage(&env);
         let referral_percentage = Storage::get_referral_percentage(&env);
@@ -992,6 +1179,14 @@ impl PromptHashTrait for PromptHashContract {
         let this_contract = env.current_contract_address();
         let asset_client = token::StellarAssetClient::new(&env, &bundle.asset);
         let price = bundle.price_stroops;
+
+        // Pre-check buyer balance to surface a clear error instead of a raw
+        // Soroban token-transfer failure when the wallet is unfunded.
+        let buyer_balance: i128 = asset_client.balance(&buyer);
+        ensure(
+            buyer_balance >= price,
+            Error::InsufficientBalance,
+        )?;
 
         let fee_amount = price
             .checked_mul(fee_percentage as i128)
@@ -1064,11 +1259,6 @@ impl PromptHashTrait for PromptHashContract {
             } else {
                 per_item_referral_amount
             };
-            prompt.sales_count = prompt
-                .sales_count
-                .checked_add(1)
-                .ok_or(Error::ArithmeticOverflow)?;
-            Storage::update_prompt(&env, &prompt);
             Storage::grant_purchase(
                 &env,
                 &prompt,
@@ -1501,7 +1691,9 @@ impl PromptHashTrait for PromptHashContract {
         // Move native XLM from the creator into contract custody.
         let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
         let this_contract = env.current_contract_address();
+        Storage::set_reentrancy_guard(&env)?;
         token::Client::new(&env, &xlm).transfer(&creator, &this_contract, &amount);
+        Storage::clear_reentrancy_guard(&env);
 
         let now = env.ledger().timestamp();
         let mut stake = Storage::get_stake(&env, prompt_id).unwrap_or(Stake {
@@ -1542,7 +1734,9 @@ impl PromptHashTrait for PromptHashContract {
             let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
             let fee_wallet = Storage::get_fee_wallet(&env).ok_or(Error::FeeWalletNotSet)?;
             let this_contract = env.current_contract_address();
+            Storage::set_reentrancy_guard(&env)?;
             token::Client::new(&env, &xlm).transfer(&this_contract, &fee_wallet, &slash_amount);
+            Storage::clear_reentrancy_guard(&env);
         }
 
         Storage::save_stake(&env, &stake);
@@ -1578,7 +1772,9 @@ impl PromptHashTrait for PromptHashContract {
         if withdraw > 0 {
             let xlm = Storage::get_xlm_address(&env).ok_or(Error::XlmAddressNotSet)?;
             let this_contract = env.current_contract_address();
+            Storage::set_reentrancy_guard(&env)?;
             token::Client::new(&env, &xlm).transfer(&this_contract, &creator, &withdraw);
+            Storage::clear_reentrancy_guard(&env);
         }
 
         Storage::save_stake(&env, &stake);
@@ -1714,14 +1910,6 @@ fn execute_buy(
         ensure(prompt.expires_at >= now, Error::ListingExpired)?;
     }
 
-    // Enforce max supply (0 = unlimited)
-    if prompt.max_supply > 0 {
-        ensure(
-            prompt.sales_count < prompt.max_supply,
-            Error::MaxSupplyReached,
-        )?;
-    }
-
     // Check for active promotion and use promotional price if applicable
     let (effective_price, _effective_asset, is_promotional) =
         get_effective_price_for_prompt(env, prompt_id)?;
@@ -1768,6 +1956,20 @@ fn execute_buy(
     let referrer = referral.as_ref().map(|code| code.owner.clone());
 
     Storage::set_reentrancy_guard(env)?;
+
+    // Atomic supply enforcement: check + increment + write before any token
+    // transfers so concurrent transactions cannot overshoot max_supply.
+    if prompt.max_supply > 0 {
+        ensure(
+            prompt.sales_count < prompt.max_supply,
+            Error::MaxSupplyReached,
+        )?;
+    }
+    prompt.sales_count = prompt
+        .sales_count
+        .checked_add(1)
+        .ok_or(Error::ArithmeticOverflow)?;
+    Storage::update_prompt(env, &prompt);
 
     let fee_wallet = Storage::get_fee_wallet(env).ok_or(Error::FeeWalletNotSet)?;
     let this_contract = env.current_contract_address();
@@ -1818,6 +2020,14 @@ fn execute_buy(
 
     let asset_client = token::StellarAssetClient::new(env, &prompt.asset);
 
+    // Pre-check buyer balance to surface a clear error instead of a raw
+    // Soroban token-transfer failure when the wallet is unfunded.
+    let buyer_balance: i128 = asset_client.balance(buyer);
+    ensure(
+        buyer_balance >= payment_amount_stroops,
+        Error::InsufficientBalance,
+    )?;
+
     if creator_amount > 0 {
         asset_client.transfer_from(&this_contract, buyer, &prompt.creator, &creator_amount);
     }
@@ -1851,11 +2061,6 @@ fn execute_buy(
         }
     }
 
-    prompt.sales_count = prompt
-        .sales_count
-        .checked_add(1)
-        .ok_or(Error::ArithmeticOverflow)?;
-    Storage::update_prompt(env, &prompt);
     Storage::grant_purchase(
         env,
         &prompt,
@@ -1938,6 +2143,7 @@ fn resolve_referral(
 /// MAX_BPS minus the current platform fee, ensuring the creator always
 /// receives a non-negative payout.
 fn validate_splits(env: &Env, splits: &Vec<Split>) -> Result<(), Error> {
+    ensure(splits.len() <= MAX_SPLITS, Error::InvalidSplits)?;
     let fee_percentage = Storage::get_fee_percentage(env);
     let mut total_bps: u32 = 0;
     for i in 0..splits.len() {
@@ -1957,6 +2163,7 @@ fn validate_splits(env: &Env, splits: &Vec<Split>) -> Result<(), Error> {
 
 #[allow(clippy::too_many_arguments)]
 fn validate_prompt_fields(
+    env: &Env,
     image_url: &String,
     title: &String,
     category: &String,
@@ -1966,7 +2173,11 @@ fn validate_prompt_fields(
     wrapped_key: &String,
     price_stroops: i128,
 ) -> Result<(), Error> {
-    ensure(price_stroops > 0, Error::InvalidPrice)?;
+    let min_price = Storage::get_min_price(env).unwrap_or(0);
+    ensure(price_stroops > min_price, Error::InvalidPrice)?;
+    if let Some(max_price) = Storage::get_max_price(env) {
+        ensure(price_stroops <= max_price, Error::InvalidPrice)?;
+    }
     validate_len(image_url, MAX_IMAGE_URL_LEN, Error::InvalidFieldLength)?;
     validate_len(title, MAX_TITLE_LEN, Error::InvalidFieldLength)?;
     validate_len(category, MAX_CATEGORY_LEN, Error::InvalidFieldLength)?;
@@ -1981,6 +2192,13 @@ fn validate_prompt_fields(
     Ok(())
 }
 
+/// Validates a field is non-empty and fits within `max_len`.
+///
+/// `soroban_sdk::String::len()` counts **UTF-8 bytes**, not Unicode
+/// characters. Multi-byte input (e.g. emoji) therefore consumes more than one
+/// unit of the limit. The frontend mirrors this exact byte-counting in
+/// `src/lib/validation/listing.ts` (`utf8Length`) so the client never submits
+/// a field the contract will reject (#506).
 fn validate_len(value: &String, max_len: u32, error: Error) -> Result<(), Error> {
     ensure(!value.is_empty() && value.len() <= max_len, error)
 }
@@ -2008,6 +2226,77 @@ fn require_admin_multisig(
     Ok(())
 }
 
+fn validate_classification(env: &Env, classification: &String) -> Result<(), Error> {
+    for name in ALL_CLASSIFICATIONS {
+        if classification == &String::from_str(env, name) {
+            return Ok(());
+        }
+    }
+    Err(Error::InvalidClassification)
+}
+
+fn validate_safety_flags(env: &Env, flags: &Vec<String>) -> Result<(), Error> {
+    ensure(flags.len() <= MAX_SAFETY_FLAGS_COUNT, Error::InvalidDisclosureFlags)?;
+    for i in 0..flags.len() {
+        let flag = flags.get(i).unwrap();
+        ensure(flag.len() <= MAX_FLAG_LEN, Error::InvalidDisclosureFlags)?;
+        let mut recognized = false;
+        for name in VALID_DISCLOSURE_FLAGS {
+            if flag == String::from_str(env, name) {
+                recognized = true;
+                break;
+            }
+        }
+        ensure(recognized, Error::InvalidDisclosureFlags)?;
+    }
+    Ok(())
+}
+
+fn validate_promotion_time(env: &Env, start_time: u64, end_time: u64) -> Result<(), Error> {
+    ensure(end_time > start_time, Error::InvalidPromotionTime)?;
+    ensure(
+        end_time > env.ledger().timestamp(),
+        Error::InvalidPromotionTime,
+    )?;
+    Ok(())
+}
+
+fn check_promotion_overlap(
+    env: &Env,
+    prompt_id: u128,
+    start_time: u64,
+    end_time: u64,
+) -> Result<(), Error> {
+    if let Some(existing) = Storage::get_active_promotion(env, prompt_id) {
+        let overlaps = start_time <= existing.end_time && end_time >= existing.start_time;
+        ensure(!overlaps, Error::PromotionOverlap)?;
+    }
+    Ok(())
+}
+
+fn get_effective_price_for_prompt(
+    env: &Env,
+    prompt_id: u128,
+) -> Result<(i128, Address, bool), Error> {
+    let prompt = Storage::require_prompt(env, prompt_id)?;
+    let now = env.ledger().timestamp();
+    let seq = env.ledger().sequence();
+
+    if let Some(promo) = Storage::get_active_promotion(env, prompt_id) {
+        if now >= promo.start_time && now <= promo.end_time {
+            return Ok((promo.price, promo.asset, true));
+        }
+    }
+
+    if let Some(discount) = Storage::get_discount(env, prompt_id) {
+        if seq >= discount.start_ledger && seq <= discount.end_ledger {
+            return Ok((discount.discounted_price, prompt.asset.clone(), false));
+        }
+    }
+
+    Ok((prompt.price_stroops, prompt.asset, false))
+}
+
 fn validate_token_contract(env: &Env, asset: &Address) -> Result<(), Error> {
     Storage::set_reentrancy_guard(env)?;
     token::Client::new(env, asset).decimals();
@@ -2019,4 +2308,78 @@ fn assert_no_reentrancy(env: &Env) {
     if Storage::require_no_reentrancy(env).is_err() {
         soroban_sdk::panic_with_error!(env, Error::ReentrancyGuard);
     }
+}
+
+// ─── #194: Contract upgrade safety helpers ───────────────────────────────────
+//
+// These run on-chain, immediately before `confirm_upgrade` swaps the deployed
+// bytecode. Their purpose is to fail the upgrade (returning a typed `Error`
+// instead of bricking the contract) when any of the three upgrade hazards would
+// materialise: an unusable implementation, corrupted/vanished storage, or
+// license-metadata incoherence that would break existing holders.
+
+/// Rejects a WASM implementation that cannot possibly be deployed: a zero hash
+/// (all 32 bytes zero) is never a valid uploaded WASM, so proposing/confirming
+/// it would install a broken contract.
+fn validate_deployable_implementation(env: &Env, new_wasm_hash: &BytesN<32>) -> Result<(), Error> {
+    let zero = BytesN::from_array(env, &[0u8; 32]);
+    ensure(*new_wasm_hash != zero, Error::InvalidImplementation)?;
+    Ok(())
+}
+
+/// Verifies that all persistent marketplace data required by the contract is
+/// still present and internally consistent before the implementation changes.
+/// Guards against hazard (2) — silently losing storage data on upgrade.
+fn validate_storage_integrity(env: &Env) -> Result<(), Error> {
+    // Config that every subsequent operation depends on must still exist.
+    ensure(
+        Storage::get_fee_wallet(env).is_some(),
+        Error::UpgradeStorageIntegrity,
+    )?;
+    ensure(
+        Storage::get_xlm_address(env).is_some(),
+        Error::UpgradeStorageIntegrity,
+    )?;
+    ensure(
+        Storage::get_schema_version(env) <= CONTRACT_SCHEMA_VERSION,
+        Error::VersionMismatch,
+    )?;
+
+    // Every prompt slot the counter claims to have allocated must still be
+    // readable. A missing/corrupted prompt indicates the new code (or a prior
+    // bad migration) would lose user data.
+    let prompt_count = Storage::get_prompt_counter(env);
+    for prompt_id in 0..prompt_count {
+        Storage::require_prompt(env, prompt_id).map_err(|_| Error::UpgradeStorageIntegrity)?;
+    }
+
+    // Every bundle slot must still resolve to a valid bundle.
+    let bundle_count = Storage::get_bundle_counter(env);
+    for bundle_id in 0..bundle_count {
+        Storage::require_bundle(env, bundle_id).map_err(|_| Error::UpgradeStorageIntegrity)?;
+    }
+
+    Ok(())
+}
+
+/// Verifies that license/decryption metadata remains coherent for every listing,
+/// so upgrading cannot break access for creators and existing license holders.
+/// Guards against hazard (3) — breaking existing license holders on upgrade.
+fn validate_license_integrity(env: &Env) -> Result<(), Error> {
+    let prompt_count = Storage::get_prompt_counter(env);
+    for prompt_id in 0..prompt_count {
+        let prompt =
+            Storage::require_prompt(env, prompt_id).map_err(|_| Error::UpgradeLicenseIntegrity)?;
+        // The prompt's active encryption version must match the stored
+        // per-prompt version counter; a mismatch means license decryption state
+        // is inconsistent and an upgrade could strand current holders.
+        let counter = Storage::get_encryption_version_counter(env, prompt_id);
+        if counter == 0 || counter != prompt.encryption_version {
+            return Err(Error::UpgradeLicenseIntegrity);
+        }
+        // The prompt's payment asset must still be a valid token so that
+        // license settlement and access transfers keep working after upgrade.
+        validate_token_contract(env, &prompt.asset).map_err(|_| Error::UpgradeLicenseIntegrity)?;
+    }
+    Ok(())
 }

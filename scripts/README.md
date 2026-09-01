@@ -40,13 +40,29 @@ Upgrades an existing contract instance with a new Wasm version.
 
 **Note:** Ensure `CONTRACT_ID` is set in your `.env` file or passed as an environment variable.
 
-### 3. `verify.sh`
+### 3. Security testing (`scripts/security/`)
+
+- `dast-target.mjs` — local OpenAPI-faithful HTTP API used by OWASP ZAP in `.github/workflows/security-pentest.yml`. Run with `yarn security:dast-target` (listens on `127.0.0.1:5000`).
+- `contract-analysis.sh` — Slither (when Solidity is present) plus cargo clippy, cargo-audit, and Soroban detectors. Run with `yarn security:contract-analysis`.
+
+See `docs/security/penetration-testing.md` for cadence and `docs/contract-gas-benchmarks.md` for contract resource-cost gates (`yarn test:gas`).
+
+### 4. `verify.sh`
 Performs a comprehensive check of the deployed contract's configuration (owner, fee settings, XLM SAC, etc.).
 
 **Usage:**
 ```bash
 ./scripts/verify.sh local
 ```
+
+### 4. `ci-rollback.ts`
+Automates last-known-good rollback after a failed production deploy (issue #236). Invoked by `.github/workflows/auto-rollback.yml`.
+
+```bash
+yarn ops:rollback --dry-run
+```
+
+See [Automated rollback](../docs/operations/auto-rollback.md).
 
 ## Environment Consistency
 

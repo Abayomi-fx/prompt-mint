@@ -1,6 +1,9 @@
 import "dotenv/config";
+import "./instrumentation";
 import express from "express";
 import cors from "cors";
+import { buildCorsOptions } from "./config/cors";
+import { securityHeaders } from "./middleware/securityHeaders";
 import { TestPromptProxy } from "./controllers/controllers";
 import { proxyrouter } from "./routes/proxyRoutes";
 import { promptRouter } from "./routes/promptRoutes";
@@ -14,17 +17,23 @@ import { robotsRouter } from "./routes/robotsRoutes";
 import { licenseTermsRouter } from "./routes/licenseTermsRoutes";
 import { runBackup, getBackupHealth } from "./services/backupService";
 import { runRestoreDrill } from "./services/restoreService";
+import { blobRouter } from "./routes/blobRoutes";
 import { IndexerState } from "./models/IndexerState"; 
 import creatorReputationHandler from "./controllers/creatorReputationController";
 import cron from "node-cron";
 import { JSON_BODY_LIMIT, jsonBodyTooLargeHandler } from "./middleware/bodySizeLimit";
+import { docsRouter } from "./routes/docsRoutes";
+import { metricsRouter } from "./routes/metricsRoutes";
+import { metricsMiddleware } from "./middleware/metricsMiddleware";
 import { idempotency } from "./middleware/idempotency";
+import { versionNegotiation } from "./middleware/versioning";
 import type { Server } from "node:http";
 import type { Socket } from "node:net";
 import { closeDb } from "./db/connectDb";
 import { closeRedis } from "./lib/redisConnection";
 import { flushPendingWebhooks } from "./services/webhookDispatcher";
 import { closeCache } from "./services/cacheService";
+import { shutdownTelemetry } from "./instrumentation";
 
 const app = express();
 
@@ -37,7 +46,20 @@ app.use((req, res, next) => {
 
 const port = 5000;
 
-app.use(cors());
+// Hardened CORS — only allowlisted origins receive CORS headers
+app.use(cors(buildCorsOptions()));
+
+// CORS error handler: return clean 403 JSON instead of Express default
+app.use((err: any, req: any, res: any, next: any) => {
+  if (err && typeof err.message === "string" && err.message.startsWith("CORS:")) {
+    res.status(403).json({ error: "Forbidden", code: "CORS_FORBIDDEN" });
+    return;
+  }
+  next(err);
+});
+
+// Hardened security headers: CSP, HSTS, X-Frame-Options, etc.
+app.use(securityHeaders);
 
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
@@ -50,7 +72,18 @@ app.use(jsonBodyTooLargeHandler);
 // request, so this is safe to apply ahead of all routers. (Issue #89)
 app.use(idempotency());
 
+// API version negotiation: resolves version from URL path, header, or query param.
+// Sets X-API-Version and Deprecation headers. (#209)
+app.use(versionNegotiation);
+
 app.use(robotsRouter);
+
+// #448 - Prometheus/Grafana metrics collection and export
+app.use(metricsMiddleware);
+
+app.use("/api/docs", docsRouter);
+app.use("/api/metrics", metricsRouter);
+app.use("/metrics", metricsRouter);
 
 app.use("/api/improve-proxy", proxyrouter);
 
@@ -62,6 +95,7 @@ app.use("/api/chat", chatRouter);
 app.use("/api/webhooks", webhookRouter);
 app.use("/api/versions", versioningRouter);
 app.use("/api/governance", governanceRouter); // Issue #113
+app.use("/api/blobs", blobRouter);
 app.get("/api/creators/reputation", creatorReputationHandler);
 
 app.post("/api/test-prompt", TestPromptProxy);
@@ -102,16 +136,17 @@ export const server = app.listen(port, () => {
     triggerBackup();
     setInterval(triggerBackup, TWENTY_FOUR_HOURS);
     console.log("[backup] Daily backup scheduler started.");
-    // DAILY RESTORE DRILL — optional, controlled via ENABLE_RESTORE_DRILL env var
-    if (process.env.ENABLE_RESTORE_DRILL) {
-      const schedule = process.env.RESTORE_DRILL_CRON || '0 3 * * *'; // default 03:00 UTC daily
-      cron.schedule(schedule, () => {
-        runRestoreDrill().catch((err: any) => {
-          console.error('[restore] Scheduled drill failed:', err?.message ?? err);
-        });
+  }
+
+  // Run the restore verification independently of backup export configuration.
+  if (process.env.ENABLE_RESTORE_DRILL === "true") {
+    const schedule = process.env.RESTORE_DRILL_CRON || "0 3 * * *";
+    cron.schedule(schedule, () => {
+      runRestoreDrill().catch((err: unknown) => {
+        console.error("[restore] Scheduled drill failed:", err instanceof Error ? err.message : err);
       });
-      console.log('[restore] Restore drill scheduler started.');
-    }
+    });
+    console.log(`[restore] Restore drill scheduler started (${schedule}).`);
   }
 });
 
@@ -151,7 +186,7 @@ export function gracefulShutdown(timeoutMs = 30_000): Promise<void> {
       console.warn("[shutdown] Drain deadline reached; closing remaining sockets.");
       for (const socket of sockets) socket.destroy();
     }
-    await Promise.allSettled([closeDb(), closeRedis(), closeCache()]);
+    await Promise.allSettled([closeDb(), closeRedis(), closeCache(), shutdownTelemetry()]);
     console.log("[shutdown] Database and Redis connections closed.");
   })();
   return shutdownPromise;

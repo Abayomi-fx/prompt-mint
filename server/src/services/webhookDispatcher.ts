@@ -5,9 +5,9 @@ import WebhookDeadLetter from "../models/WebhookDeadLetter";
 import { WEBHOOK_SCHEMA_VERSION } from "../../../src/lib/api/payloadVersion";
 import { recordAuditEvent } from "./auditTrail";
 
-const MAX_RETRIES = 3;
-const BASE_RETRY_DELAY_MS = 2_000;
-const MAX_RETRY_DELAY_MS = 30_000;
+const MAX_RETRIES = 5;
+const BASE_RETRY_DELAY_MS = 3_000;
+const MAX_RETRY_DELAY_MS = 243_000;
 const MAX_FAILURES_BEFORE_DISABLE = 10;
 const pendingDeliveries = new Set<Promise<void>>();
 
@@ -56,9 +56,9 @@ export function verifyWebhookSignature(secret: string, body: string, signature: 
   return expected.length === received.length && timingSafeEqual(expected, received);
 }
 
-/** Bounded exponential backoff: 2s, 4s, 8s, ... capped at MAX_RETRY_DELAY_MS. */
+/** Bounded exponential backoff: 3s, 9s, 27s, 81s, 243s — capped at MAX_RETRY_DELAY_MS. (#210) */
 function retryDelayMs(attempt: number): number {
-  return Math.min(BASE_RETRY_DELAY_MS * 2 ** attempt, MAX_RETRY_DELAY_MS);
+  return Math.min(BASE_RETRY_DELAY_MS * 3 ** attempt, MAX_RETRY_DELAY_MS);
 }
 
 async function deliverOnce(url: string, secret: string, payload: WebhookPayload): Promise<void> {

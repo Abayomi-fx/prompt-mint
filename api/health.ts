@@ -25,68 +25,81 @@ async function checkDependency(name: string, checkFn: () => Promise<void>) {
   };
 }
 
+function verifyContractIdConfig(): { valid: boolean; contractId?: string; error?: string } {
+  const contractId = process.env.PUBLIC_PROMPT_HASH_CONTRACT_ID?.trim();
+  if (!contractId) {
+    return { valid: false, error: "PUBLIC_PROMPT_HASH_CONTRACT_ID is missing or unconfigured" };
+  }
+  if (!/^C[A-Z0-9]{55}$/.test(contractId)) {
+    return { valid: false, contractId, error: "PUBLIC_PROMPT_HASH_CONTRACT_ID format is invalid" };
+  }
+  return { valid: true, contractId };
+}
+
+async function verifyRpcReachability(timeoutMs = 5000): Promise<{ reachable: boolean; error?: string }> {
+  const rpcUrl = process.env.PUBLIC_STELLAR_RPC_URL ?? "https://soroban-testnet.stellar.org";
+  try {
+    const res = await fetch(rpcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "getHealth", params: [] }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) {
+      return { reachable: false, error: `RPC responded with HTTP ${res.status}` };
+    }
+    const json = (await res.json()) as { result?: { status?: string } };
+    if (json?.result?.status === "healthy") {
+      return { reachable: true };
+    }
+    return {
+      reachable: false,
+      error: json?.result?.status ? `RPC status is ${json.result.status}` : "RPC returned invalid health response",
+    };
+  } catch (err) {
+    return { reachable: false, error: err instanceof Error ? err.message : "RPC ping failed" };
+  }
+}
+
 async function handler(_req: any, res: any) {
   const version = negotiateVersion(_req, res);
   if (!version) return;
 
-  await connectDb();
-  
-  const [dbState, redisState, stellarRpcState, contractState] = await Promise.all([
-    checkDependency("mongodb", async () => {
-      if (mongoose.connection.readyState !== 1) throw new Error("MongoDB not connected");
-      if (mongoose.connection.db) {
-        await mongoose.connection.db.admin().ping();
-      }
-    }),
-    checkDependency("redis", async () => {
-      const client = await getRedisClient();
-      if (!client) {
-        if (process.env.REDIS_URL) {
-            throw new Error("Redis client not initialized");
-        }
-      } else {
-        await client.ping();
-      }
-    }),
-    checkDependency("stellar_rpc", async () => {
-      const server = new Server(rpcUrl, { allowHttp: true });
-      const health = await server.getHealth();
-      if (health.status !== "healthy") {
-        throw new Error("Stellar RPC is not healthy");
-      }
-    }),
-    checkDependency("contract", async () => {
-      if (!promptHashContractId) throw new Error("Contract ID not configured");
-      const server = new Server(rpcUrl, { allowHttp: true });
-      const contract = new Contract(promptHashContractId);
-      const ledgerKey = xdr.LedgerKey.contractData(new xdr.LedgerKeyContractData({
-        contract: contract.address().toScAddress(),
-        key: xdr.ScVal.scvLedgerKeyContractInstance(),
-        durability: xdr.ContractDataDurability.persistent(),
-      }));
-      const entries = await server.getLedgerEntries([ledgerKey]);
-      if (!entries || !entries.entries || entries.entries.length === 0) {
-        throw new Error("Contract not found on network");
-      }
-    })
-  ]);
+  try {
+    await connectDb();
+  } catch {
+    // Ignore DB connection errors if indexer state is optional in standalone mode
+  }
 
-  const state = await IndexerState.findOne({ key: "prompt_hash_contract" });
+  let state: any = null;
+  try {
+    state = await IndexerState.findOne({ key: "prompt_hash_contract" });
+  } catch {
+    // Graceful fallback if DB is not connected
+  }
 
-  res.status(200).json(
+  const contractCheck = verifyContractIdConfig();
+  const rpcCheck = await verifyRpcReachability();
+
+  const isHealthy = contractCheck.valid && rpcCheck.reachable;
+  const statusCode = isHealthy ? 200 : 503;
+
+  res.status(statusCode).json(
     withVersion(
       {
-        status: [dbState, redisState, stellarRpcState, contractState].every(d => d.status === "up") ? "ok" : "degraded",
+        status: isHealthy ? "ok" : "degraded",
         timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        dependencies: {
-          mongodb: dbState,
-          redis: redisState,
-          stellarRpc: stellarRpcState,
-          contract: contractState,
-        },
+        uptime: typeof process.uptime === "function" ? process.uptime() : 0,
         indexer: {
           lastProcessedLedger: state?.lastIndexedLedger || 0,
+        },
+        rpc: {
+          status: rpcCheck.reachable ? "up" : "down",
+          ...(rpcCheck.error ? { error: rpcCheck.error } : {}),
+        },
+        contractConfig: {
+          configured: contractCheck.valid,
+          ...(contractCheck.error ? { error: contractCheck.error } : {}),
         },
       },
       version,

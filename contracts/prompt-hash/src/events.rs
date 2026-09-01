@@ -20,7 +20,16 @@ struct PromptSaleStatusUpdated {
 struct PromptPriceUpdated {
     #[topic]
     pub prompt_id: u128,
+    /// Price in stroops before the change.
+    pub previous_price: i128,
+    /// Price in stroops after the change.
     pub price_stroops: i128,
+}
+
+#[contractevent]
+struct PriceBoundsSet {
+    pub min_price: Option<i128>,
+    pub max_price: Option<i128>,
 }
 
 #[contractevent]
@@ -119,6 +128,14 @@ struct ListingExtended {
 }
 
 #[contractevent]
+struct PromptExpiringSoon {
+    #[topic]
+    pub prompt_id: u128,
+    pub creator: Address,
+    pub expires_at: u64,
+}
+
+#[contractevent]
 struct SubscriptionConfigured {
     #[topic]
     pub creator: Address,
@@ -168,10 +185,24 @@ impl Events {
         PromptSaleStatusUpdated { prompt_id, active }.publish(env);
     }
 
-    pub fn emit_prompt_price_updated(env: &Env, prompt_id: u128, price_stroops: i128) {
+    pub fn emit_prompt_price_updated(
+        env: &Env,
+        prompt_id: u128,
+        previous_price: i128,
+        price_stroops: i128,
+    ) {
         PromptPriceUpdated {
             prompt_id,
+            previous_price,
             price_stroops,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_price_bounds_set(env: &Env, min_price: Option<i128>, max_price: Option<i128>) {
+        PriceBoundsSet {
+            min_price,
+            max_price,
         }
         .publish(env);
     }
@@ -306,6 +337,20 @@ impl Events {
         ListingExtended {
             prompt_id,
             new_expires_at,
+        }
+        .publish(env);
+    }
+
+    pub fn emit_prompt_expiring_soon(
+        env: &Env,
+        prompt_id: u128,
+        creator: Address,
+        expires_at: u64,
+    ) {
+        PromptExpiringSoon {
+            prompt_id,
+            creator,
+            expires_at,
         }
         .publish(env);
     }
