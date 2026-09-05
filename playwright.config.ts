@@ -1,28 +1,17 @@
-import { defineConfig, devices, chromium } from "@playwright/test";
-import AxeBuilder from "@axe-core/playwright";
-
-async function globalSetup() {
-  const browser = await chromium.launch();
-  const page = await browser.newPage();
-  await page.goto("http://localhost:5173", { waitUntil: "networkidle" });
-  const results = await new AxeBuilder({ page }).analyze();
-  await browser.close();
-  if (results.violations.length > 0) {
-    console.error("Accessibility violations found:");
-    console.error(JSON.stringify(results.violations, null, 2));
-    process.exit(1);
-  }
-}
+import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
-  globalSetup,
+  globalSetup: "./src/test/global-setup.ts",
   testDir: "./src/test/e2e",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   workers: 1,
-  reporter: [["list"], {"html", { outputFolder: "playwright-report" }}],
-  snapshotPathTemplate: "{testDir}/__screenshots__{projectName}/{arg{x}",
+  reporter: [
+    ["list"],
+    ["html", { outputFolder: "playwright-report" }],
+  ],
+  snapshotPathTemplate: "{testDir}/__screenshots__{projectName}/{arg}",
   timeout: 60000,
   expect: {
     timeout: 15000,
