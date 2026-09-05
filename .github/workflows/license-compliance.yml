@@ -1,7 +1,5 @@
 name: License Compliance
 
-name: License Compliance
-
 on:
   pull_request:
     branches: ["main"]
@@ -12,7 +10,7 @@ on:
       - "Cargo.lock"
       - "license-policy.json"
       - "deny.toml"
-      - ".github/workflows/license-compliance.yaml"
+      - ".github/workflows/license-compliance.yml"
   push:
     branches: ["main"]
     paths:
@@ -22,7 +20,7 @@ on:
       - "Cargo.lock"
       - "license-policy.json"
       - "deny.toml"
-      - ".github/workflows/license-compliance.yaml"
+      - ".github/workflows/license-compliance.yml"
 
 permissions:
   contents: read
@@ -33,29 +31,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Enable Corepack
-        run: corepack enable
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "yarn"
 
+      - name: Install Yarn
+        run: npm install -g yarn@4.9.2
+
       - name: Install dependencies
-        run: yarn install -immutable
+        run: yarn install --immutable
 
       - name: Run license audit
         run: node scripts/license-audit.mjs
-
+ 
   cargo-license-check:
     name: "cargo: license audit"
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: Set up Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -76,19 +74,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
-
-      - name: Enable Corepack
-        run: corepack enable
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v1
+        uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: "yarn"
 
+      - name: Install Yarn
+        run: npm install -g yarn@4.9.2
+
       - name: Install dependencies
-        run: yarn install -immutable
+        run: yarn install --immutable
 
       - name: Run accessibility audit
         run: node scripts/accessibility-audit.mjs
