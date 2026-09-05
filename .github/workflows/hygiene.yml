@@ -18,3 +18,10 @@ jobs:
           else
             echo "No merge conflict markers found."
           fi
+
+  accessibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run accessibility audit
+        run: npx pa11y-ci
