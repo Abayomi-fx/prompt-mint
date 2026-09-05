@@ -1,8 +1,9 @@
 name: CI
-on: push:
-  branches: ["main"]
+on:
+  push:
+    branches: ["main"]
   pull_request:
-  branches: ["main"]
+    branches: ["main"]
 
 permissions:
   contents: read
@@ -28,7 +29,7 @@ jobs:
       - name: Run Lint
         run: yarn lint
 
-  a12y:
+  a11y:
     name: Accessibility Audit
     runs-on: ubuntu-latest
     steps:
