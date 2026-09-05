@@ -1,5 +1,7 @@
 name: License Compliance
 
+name: License Compliance
+
 on:
   pull_request:
     branches: ["main"]
@@ -10,7 +12,7 @@ on:
       - "Cargo.lock"
       - "license-policy.json"
       - "deny.toml"
-      - ".github/workflows/license-compliance.yml"
+      - ".github/workflows/license-compliance.yaml"
   push:
     branches: ["main"]
     paths:
@@ -20,7 +22,7 @@ on:
       - "Cargo.lock"
       - "license-policy.json"
       - "deny.toml"
-      - ".github/workflows/license-compliance.yml"
+      - ".github/workflows/license-compliance.yaml"
 
 permissions:
   contents: read
@@ -29,7 +31,6 @@ jobs:
   npm-license-check:
     name: "npm: license audit"
     runs-on: ubuntu-latest
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -44,7 +45,7 @@ jobs:
           cache: "yarn"
 
       - name: Install dependencies
-        run: yarn install --immutable
+        run: yarn install -immutable
 
       - name: Run license audit
         run: node scripts/license-audit.mjs
@@ -52,7 +53,6 @@ jobs:
   cargo-license-check:
     name: "cargo: license audit"
     runs-on: ubuntu-latest
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -70,3 +70,25 @@ jobs:
 
       - name: Run cargo-deny license check
         run: cargo deny check licenses
+
+  accessibility-audit:
+    name: "accessibility: audit"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v1
+        with:
+          node-version: "22"
+          cache: "yarn"
+
+      - name: Install dependencies
+        run: yarn install -immutable
+
+      - name: Run accessibility audit
+        run: node scripts/accessibility-audit.mjs
