@@ -63,7 +63,7 @@ jobs:
           node-version: 22
 
       - name: Install Yarn
-        run: npm install -g yarn@4.9.2
+        run: npm install -g yarn@4.9.1
 
       - name: Install dependencies
         run: yarn install --immutable
@@ -112,7 +112,7 @@ jobs:
           node-version: 22
 
       - name: Install Yarn
-        run: npm install -g yarn@4.9.2
+        run: npm install -g yarn@4.9.1
 
       - name: Install dependencies
         run: yarn install --immutable
