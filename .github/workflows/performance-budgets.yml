@@ -23,11 +23,11 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install Yarn
-        run: npm install -g yarn@4.9.2
+      - name: Enable Corepack
+        run: corepack enable
 
       - name: Install dependencies
-        run: yarn install -immutable
+        run: yarn install --immutable
 
       - name: Build production bundle
         run: yarn build
