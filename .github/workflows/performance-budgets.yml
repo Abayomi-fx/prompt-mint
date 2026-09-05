@@ -3,7 +3,7 @@ name: Performance Budgets
 on:
   pull_request:
     branches: ["main"]
-    paths:
+    paths: 
       - "src/**"
       - "package.json"
 
@@ -14,7 +14,6 @@ jobs:
   check-budgets:
     name: Evaluate performance budgets
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -29,10 +28,13 @@ jobs:
         run: npm install -g yarn@4.9.2
 
       - name: Install dependencies
-        run: yarn install --immutable
+        run: yarn install -immutable
 
       - name: Build production bundle
         run: yarn build
+
+      - name: Run accessibility audit
+        run: npx tsx scripts/check-a11y.ts mobile
 
       - name: Run budget evaluation
         id: budgets
