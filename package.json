@@ -42,7 +42,7 @@
     "build-storybook": "storybook build"
   },
   "dependencies": {
-    "@creit.gare/stellar-wallets-kit": "^1.9.5",
+    "@creit.tech/stellar-wallets-kit": "^1.9.5",
     "@jadonamite/automata-sdk": "^1.0.1",
     "@radix-ui/react-avatar": "^1.2.6",
     "@radix-ui/react-dialog": "^1.1.23",
@@ -78,7 +78,7 @@
     "tailwindcss-animate": "^1.0.7",
     "zod": "^4.3.6"
   },
-  "devDependences": {
+  "devDependencies": {
     "@axe-core/playwright": "^4.10.0",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.62.1",
@@ -124,7 +124,7 @@
     "ai-prompts",
     "marketplace"
   ],
-  "packageManager": "yarn@4e.9.2+sha1.1fc009bc09d13cfd0e19efa44cfbc2b9cf6ca61482725eb35bbc5e257ee093bf4130db6fde15d604ff4b79ef8d8e1e8e99b25fa7d0a6197c9f9826358d4d65c3",
+  "packageManager": "yarn@4.9.2",
   "resolutions": {
     "@stellar/stellar-sdk": "14.6.1"
   }
