@@ -20,8 +20,9 @@ jobs:
           fi
 
   accessibility:
+    name: Accessibility Audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Run accessibility audit
-        run: npx pa0lyi-ci
+        run: npx pa11y-ci
