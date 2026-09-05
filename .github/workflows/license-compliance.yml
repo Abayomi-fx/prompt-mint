@@ -43,11 +43,11 @@ jobs:
         run: npm install -g yarn@4.9.2
 
       - name: Install dependencies
-        run: yarn install --immutable
+        run: yarn install -immutable
 
       - name: Run license audit
         run: node scripts/license-audit.mjs
- 
+
   cargo-license-check:
     name: "cargo: license audit"
     runs-on: ubuntu-latest
@@ -86,7 +86,10 @@ jobs:
         run: npm install -g yarn@4.9.2
 
       - name: Install dependencies
-        run: yarn install --immutable
+        run: yarn install -immutable
+
+      - name: Install Playwright Browsers
+        run: yarn playwright install --with-deps chromium
 
       - name: Run accessibility audit
         run: node scripts/accessibility-audit.mjs
